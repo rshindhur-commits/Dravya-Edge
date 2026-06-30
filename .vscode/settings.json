@@ -1,0 +1,6 @@
+{
+  "python.terminal.useEnvFile": true,
+  "CodeGPT.apiKey": "OpenAI",
+  "chat.utilityModel": "openai/gpt-5.5",
+  "chat.utilitySmallModel": "openai/gpt-5.5"
+}

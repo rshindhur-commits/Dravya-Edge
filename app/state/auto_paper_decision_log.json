@@ -1,0 +1,16 @@
+[
+    {
+        "timestamp": "2026-06-25 21:16:56",
+        "symbol": "SYSTEM",
+        "decision": "SKIPPED",
+        "reason": "auto paper disabled; no current candidates",
+        "top_candidate": null,
+        "setup_percent": null,
+        "rr": null,
+        "action_status": null,
+        "blocked_by": null,
+        "option_quality_score": null,
+        "option_quote_freshness": null,
+        "expiration_bucket": null
+    }
+]

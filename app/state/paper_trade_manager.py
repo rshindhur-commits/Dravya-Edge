@@ -1,0 +1,415 @@
+from datetime import datetime
+from pathlib import Path
+from uuid import uuid4
+
+from app.utils.json_store import (
+    load_json_file,
+    save_json_file
+)
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+PAPER_TRADE_STATE_FILE = str(
+    ROOT_DIR / "app" / "state" / "paper_trade_state.json"
+)
+
+PAPER_TELEMETRY_REQUIRED_FIELDS = [
+    "paper_trade",
+    "symbol",
+    "setup_grade",
+    "setup_percent",
+    "planned_rr",
+    "rs_vs_qqq",
+    "market_regime",
+    "option_quality_score",
+    "pnl_pct",
+    "r_multiple",
+    "exit_reason",
+    "opened_at",
+    "closed_at"
+]
+
+
+def load_paper_trades():
+
+    return load_json_file(
+        PAPER_TRADE_STATE_FILE,
+        {}
+    )
+
+
+def save_paper_trades(state):
+
+    save_json_file(
+        PAPER_TRADE_STATE_FILE,
+        state
+    )
+
+
+def _safe_float(value):
+
+    try:
+
+        if value is None:
+
+            return None
+
+        return float(value)
+
+    except Exception:
+
+        return None
+
+
+def _paper_trade_result(trade, close_price):
+
+    entry_price = _safe_float(
+        trade.get("entry_price")
+    )
+    stop_loss = _safe_float(
+        trade.get("stop_loss")
+    )
+    take_profit = _safe_float(
+        trade.get("take_profit")
+    )
+    close_price = _safe_float(close_price)
+
+    if entry_price is None or close_price is None:
+
+        return {
+            "pnl_pct": None,
+            "r_multiple": None,
+            "outcome": "UNKNOWN"
+        }
+
+    direction = str(
+        trade.get("direction")
+        or ""
+    ).upper()
+
+    is_short = direction == "PUT"
+
+    if is_short:
+
+        pnl = entry_price - close_price
+        risk = (
+            stop_loss - entry_price
+            if stop_loss is not None
+            else None
+        )
+
+    else:
+
+        pnl = close_price - entry_price
+        risk = (
+            entry_price - stop_loss
+            if stop_loss is not None
+            else None
+        )
+
+    pnl_pct = round(
+        (pnl / entry_price) * 100,
+        2
+    )
+
+    r_multiple = None
+
+    if risk and risk > 0:
+
+        r_multiple = round(
+            pnl / risk,
+            2
+        )
+
+    if take_profit is not None:
+
+        if (
+            is_short
+            and close_price <= take_profit
+        ) or (
+            not is_short
+            and close_price >= take_profit
+        ):
+
+            outcome = "TARGET_HIT"
+
+        elif r_multiple is not None and r_multiple > 0:
+
+            outcome = "WIN"
+
+        elif r_multiple is not None and r_multiple < 0:
+
+            outcome = "LOSS"
+
+        else:
+
+            outcome = "FLAT"
+
+    else:
+
+        if pnl > 0:
+
+            outcome = "WIN"
+
+        elif pnl < 0:
+
+            outcome = "LOSS"
+
+        else:
+
+            outcome = "FLAT"
+
+    return {
+        "pnl_pct": pnl_pct,
+        "r_multiple": r_multiple,
+        "outcome": outcome
+    }
+
+
+def _save_paper_trade_telemetry(trade):
+
+    try:
+
+        from app.analytics.trade_telemetry import save_trade_telemetry
+
+        scanner_context = (
+            trade.get("scanner_context")
+            or trade.get("close_scanner_context")
+            or {}
+        )
+        scanner_context_source = (
+            "entry"
+            if trade.get("scanner_context")
+            else "close"
+            if trade.get("close_scanner_context")
+            else None
+        )
+
+        telemetry_payload = {
+            "run_type": "paper_trade",
+            "symbol": trade.get("symbol"),
+            "final_signal": trade.get("direction"),
+            "entry": trade.get("entry_type"),
+            "setup_category": trade.get("entry_type"),
+            "setup_grade": scanner_context.get("Setup Grade"),
+            "setup_percent": scanner_context.get("Setup %"),
+            "scanner_final_signal": scanner_context.get("Final Signal"),
+            "scanner_context_source": scanner_context_source,
+            "scanner_score_15m": scanner_context.get("15m Score"),
+            "alignment_score": scanner_context.get("Alignment Score"),
+            "entry_price": trade.get("entry_price"),
+            "stop_price": trade.get("stop_loss"),
+            "target_price": trade.get("take_profit"),
+            "close_price": trade.get("close_price"),
+            "planned_rr": trade.get("planned_rr"),
+            "rs_rank_score": scanner_context.get("RS Rank Score"),
+            "rs_vs_qqq": scanner_context.get("RS vs QQQ"),
+            "rs_vs_spy": scanner_context.get("RS vs SPY"),
+            "relative_volume": scanner_context.get("Relative Volume"),
+            "atr_pct": scanner_context.get("ATR %"),
+            "market_regime": scanner_context.get("Market Regime"),
+            "reference_regime": scanner_context.get("Reference Regime"),
+            "regime_blocked": scanner_context.get("Regime Blocked"),
+            "regime_block_reason": scanner_context.get("Regime Block Reason"),
+            "sector_group": scanner_context.get("Sector Group"),
+            "sector_reference": scanner_context.get("Sector Reference"),
+            "sector_rs": scanner_context.get("Sector RS"),
+            "sector_strength": scanner_context.get("Sector Strength"),
+            "strength_rank": scanner_context.get("Strength Rank"),
+            "weakness_rank": scanner_context.get("Weakness Rank"),
+            "top_5_strongest": scanner_context.get("Top 5 Strongest"),
+            "top_5_weakest": scanner_context.get("Top 5 Weakest"),
+            "watchlist_advancers": scanner_context.get("Watchlist Advancers"),
+            "watchlist_decliners": scanner_context.get("Watchlist Decliners"),
+            "watchlist_breadth_score": scanner_context.get("Watchlist Breadth Score"),
+            "above_vwap_pct": scanner_context.get("Above VWAP %"),
+            "above_ema20_pct": scanner_context.get("Above EMA20 %"),
+            "market_data_delay_minutes": scanner_context.get("Market Data Delay Minutes"),
+            "realtime_confirmation_needed": scanner_context.get("Realtime Confirmation Needed"),
+            "tradingview_check_status": scanner_context.get("TradingView Check Status"),
+            "option_ticker": trade.get("option_ticker"),
+            "option_bid": trade.get("option_bid"),
+            "option_ask": trade.get("option_ask"),
+            "option_mid": trade.get("option_mid"),
+            "option_strike": scanner_context.get("Option Strike"),
+            "option_expiration": scanner_context.get("Option Expiration"),
+            "option_spread_pct": scanner_context.get("Option Spread %"),
+            "option_volume": scanner_context.get("Option Volume"),
+            "option_open_interest": scanner_context.get("Option Open Interest"),
+            "option_delta": scanner_context.get("Option Delta"),
+            "option_theta": scanner_context.get("Option Theta"),
+            "option_iv": scanner_context.get("Option IV"),
+            "option_gamma": scanner_context.get("Option Gamma"),
+            "expiration_bucket": scanner_context.get("Expiration Bucket"),
+            "expiration_risk": scanner_context.get("Expiration Risk"),
+            "option_quality_score": scanner_context.get("Option Quality Score"),
+            "option_liquidity_grade": scanner_context.get("Option Liquidity Grade"),
+            "option_quality_reasons": scanner_context.get("Option Quality Reasons"),
+            "option_quote_freshness": scanner_context.get("Option Quote Freshness"),
+            "option_quote_age_minutes": scanner_context.get("Option Quote Age Minutes"),
+            "event_blocked": scanner_context.get("Event Blocked"),
+            "event_block_reason": scanner_context.get("Event Block Reason"),
+            "action_status": scanner_context.get("Action Status"),
+            "blocked_by": scanner_context.get("Blocked By"),
+            "action_reason": scanner_context.get("Action Reason"),
+            "next_condition": scanner_context.get("Next Condition"),
+            "paper_trade": True,
+            "live_confirmed": trade.get("live_confirmed"),
+            "opened_at": trade.get("opened_at"),
+            "closed_at": trade.get("closed_at"),
+            "exit_reason": trade.get("exit_reason"),
+            "replay_outcome": trade.get("outcome"),
+            "pnl_pct": trade.get("pnl_pct"),
+            "r_multiple": trade.get("r_multiple"),
+            "reasons": trade.get("notes")
+        }
+
+        missing_fields = [
+            field for field in PAPER_TELEMETRY_REQUIRED_FIELDS
+            if field not in telemetry_payload
+        ]
+
+        empty_context_fields = [
+            field for field in [
+                "setup_grade",
+                "setup_percent",
+                "planned_rr",
+                "rs_vs_qqq",
+                "market_regime",
+                "option_quality_score"
+            ]
+            if telemetry_payload.get(field) in [None, ""]
+        ]
+
+        if missing_fields or empty_context_fields:
+
+            print(
+                "[PAPER TELEMETRY WARNING] "
+                f"missing={missing_fields} "
+                f"empty_context={empty_context_fields}"
+            )
+
+        save_trade_telemetry(telemetry_payload)
+
+    except Exception as e:
+
+        print(
+            f"[PAPER TELEMETRY ERROR] {e}"
+        )
+
+
+def open_paper_trade(
+    symbol,
+    direction,
+    entry_price,
+    stop_loss,
+    take_profit,
+    entry_type,
+    option_ticker=None,
+    option_bid=None,
+    option_ask=None,
+    notes=None,
+    scanner_context=None
+):
+
+    state = load_paper_trades()
+
+    existing = state.get(symbol)
+
+    if existing and existing.get("status") == "OPEN":
+
+        return existing
+
+    option_mid = None
+
+    try:
+
+        if option_bid and option_ask:
+
+            option_mid = (
+                float(option_bid)
+                + float(option_ask)
+            ) / 2
+
+    except Exception:
+
+        option_mid = None
+
+    trade = {
+        "trade_id": str(uuid4()),
+        "symbol": symbol,
+        "status": "OPEN",
+        "direction": direction,
+        "entry_type": entry_type,
+        "entry_price": entry_price,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "option_ticker": option_ticker,
+        "option_bid": option_bid,
+        "option_ask": option_ask,
+        "option_mid": option_mid,
+        "scanner_context": scanner_context or {},
+        "planned_rr": (
+            scanner_context or {}
+        ).get("Candidate RR"),
+        "opened_at": datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
+        "closed_at": None,
+        "close_price": None,
+        "exit_reason": None,
+        "rr_progress": 0,
+        "bars_in_trade": 0,
+        "live_confirmed": True,
+        "notes": notes or "Paper trade from live-confirmed dashboard candidate"
+    }
+
+    state[symbol] = trade
+    save_paper_trades(state)
+
+    return trade
+
+
+def close_paper_trade(
+    symbol,
+    close_price=None,
+    exit_reason="Manual paper exit",
+    scanner_context=None
+):
+
+    state = load_paper_trades()
+
+    trade = state.get(symbol)
+
+    if not trade:
+
+        return None
+
+    if trade.get("status") != "OPEN":
+
+        return trade
+
+    result = _paper_trade_result(
+        trade,
+        close_price
+    )
+
+    if scanner_context and not trade.get("scanner_context"):
+
+        trade["close_scanner_context"] = scanner_context
+
+    trade["status"] = "CLOSED"
+    trade["closed_at"] = datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    trade["close_price"] = close_price
+    trade["exit_reason"] = exit_reason
+    trade["pnl_pct"] = result["pnl_pct"]
+    trade["r_multiple"] = result["r_multiple"]
+    trade["outcome"] = result["outcome"]
+
+    state[symbol] = trade
+    save_paper_trades(state)
+    _save_paper_trade_telemetry(trade)
+
+    return trade
