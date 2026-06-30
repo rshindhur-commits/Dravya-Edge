@@ -177,6 +177,65 @@ def _calculate_premarket_gap_pct(df):
         return None
 
 
+def get_market_session(current_et=None):
+
+    current_et = current_et or datetime.now(
+        ZoneInfo("America/New_York")
+    )
+
+    market_minutes = (
+        current_et.hour * 60
+    ) + current_et.minute
+
+    if market_minutes < 4 * 60:
+
+        return "CLOSED"
+
+    if market_minutes < 9 * 60 + 30:
+
+        return "PREMARKET"
+
+    if market_minutes < 9 * 60 + 45:
+
+        return "OPENING_RANGE"
+
+    if market_minutes < 16 * 60:
+
+        return "REGULAR"
+
+    if market_minutes < 20 * 60:
+
+        return "AFTERHOURS"
+
+    return "CLOSED"
+
+
+def infer_aggregate_interval_minutes(df):
+
+    if df is None or df.empty or len(df.index) < 2:
+
+        return 0
+
+    try:
+
+        deltas = pd.Series(df.index).diff().dropna()
+
+        if deltas.empty:
+
+            return 0
+
+        interval_minutes = deltas.median().total_seconds() / 60
+
+        return max(
+            0,
+            round(interval_minutes, 2)
+        )
+
+    except Exception:
+
+        return 0
+
+
 def _classify_explicit_regime(df):
 
     try:
@@ -803,15 +862,22 @@ def get_market_data_status(df):
         ZoneInfo("America/New_York")
     )
 
+    market_session = get_market_session(
+        current_et
+    )
+
     if df is None or df.empty:
 
         return {
             "data_timestamp_et": None,
             "current_et": current_et,
             "delay_minutes": None,
+            "raw_delay_minutes": None,
+            "aggregate_interval_minutes": None,
+            "stock_data_freshness": "NO_DATA",
+            "market_session": market_session,
             "market_closed": (
-                current_et.hour >= 20
-                or current_et.hour < 4
+                market_session == "CLOSED"
             )
         }
 
@@ -827,22 +893,33 @@ def get_market_data_status(df):
         "America/New_York"
     )
 
-    delay_minutes = (
+    raw_delay_minutes = (
         current_et - data_timestamp_et
     ).total_seconds() / 60
+
+    aggregate_interval_minutes = infer_aggregate_interval_minutes(
+        df
+    )
+
+    delay_minutes = max(
+        0,
+        raw_delay_minutes - aggregate_interval_minutes
+    )
 
     return {
         "data_timestamp_et": data_timestamp_et,
         "current_et": current_et,
         "delay_minutes": round(delay_minutes, 2),
+        "raw_delay_minutes": round(raw_delay_minutes, 2),
+        "aggregate_interval_minutes": aggregate_interval_minutes,
         "stock_data_freshness": (
             "LIVE"
             if delay_minutes <= settings.max_stock_data_delay_minutes
             else "STALE"
         ),
+        "market_session": market_session,
         "market_closed": (
-            current_et.hour >= 20
-            or current_et.hour < 4
+            market_session == "CLOSED"
         )
     }
 
@@ -989,6 +1066,10 @@ def build_action_decision(
         "delay_minutes"
     )
 
+    market_session = market_data_status.get(
+        "market_session"
+    )
+
     realtime_confirmation_needed = (
         delay_minutes is not None
         and delay_minutes >= 10
@@ -1059,6 +1140,28 @@ def build_action_decision(
             "action_reason": reason,
             "realtime_confirmation_needed": realtime_confirmation_needed,
             "tradingview_check_status": tradingview_check_status
+        }
+
+    if market_session == "PREMARKET":
+
+        return {
+            "action_status": "PREMARKET_WATCH",
+            "action_reason": (
+                "Premarket candidate; wait for regular-market confirmation"
+            ),
+            "realtime_confirmation_needed": False,
+            "tradingview_check_status": "NOT_REQUIRED"
+        }
+
+    if market_session == "OPENING_RANGE":
+
+        return {
+            "action_status": "OPENING_RANGE_CONFIRMATION",
+            "action_reason": (
+                "Opening range forming; wait until after 9:45 ET"
+            ),
+            "realtime_confirmation_needed": True,
+            "tradingview_check_status": "REQUIRED"
         }
 
     if realtime_confirmation_needed:

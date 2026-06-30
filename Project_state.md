@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-06-15
+Last updated: 2026-06-30
 
 ## Project Purpose
 
@@ -52,16 +52,17 @@ At a high level, each scan does this per symbol:
 4. Scores each timeframe through the momentum strategy.
 5. Detects entry setups when no active trade exists.
 6. Calculates risk, stop loss, take profit, and risk/reward.
-7. Checks option quote freshness, bid/ask spread, volume, open interest, quality score, expiration bucket, and event risk.
-8. Opens, updates, or closes trade state.
-9. Builds a multi-timeframe final signal.
-10. Recommends/ranks an option contract and blocks stale/delayed or low-quality option quotes from execution-ready status.
-11. Projects target, stop, probability, expected option gain, and grade.
-12. Replays the projection over recent candles when possible.
-13. Adds explicit market regime, sector-reference strength, watchlist breadth, relative strength rankings versus QQQ and SPY, relative volume, ATR %, premarket gap %, top 5 strongest/weakest leaderboards, and top 3 bullish/bearish candidate tags.
-14. Optionally calls OpenAI for a trade summary on strong setups.
-15. Saves actionable scan telemetry and paper-trade outcome/context telemetry to CSV.
-16. Exports a scanner report to `scanner_output.xlsx`; stale/no-data/error symbols now still write dashboard-readable rows.
+7. Applies market-session action gating: premarket candidates are watch-only, 9:30-9:45 ET waits for opening-range confirmation, and paper entry is only allowed after 9:45 ET when all gates pass.
+8. Checks option quote freshness, bid/ask spread, volume, open interest, quality score, expiration bucket, and event risk.
+9. Opens, updates, or closes trade state.
+10. Builds a multi-timeframe final signal.
+11. Recommends/ranks an option contract and blocks stale/delayed or low-quality option quotes from execution-ready status.
+12. Projects target, stop, probability, expected option gain, and grade.
+13. Replays the projection over recent candles when possible.
+14. Adds explicit market regime, sector-reference strength, watchlist breadth, relative strength rankings versus QQQ and SPY, relative volume, ATR %, premarket gap %, top 5 strongest/weakest leaderboards, and top 3 bullish/bearish candidate tags.
+15. Optionally calls OpenAI for a trade summary on strong setups.
+16. Saves actionable scan telemetry and paper-trade outcome/context telemetry to CSV.
+17. Exports a scanner report to `scanner_output.xlsx`; stale/no-data/error symbols now still write dashboard-readable rows.
 
 ## Main Components
 
@@ -75,7 +76,15 @@ At a high level, each scan does this per symbol:
 - `app/indicators/technical_indicators.py` owns `get_polygon_data()` and `compute_indicators()`.
 - `app/utils/polygon_client.py` owns low-level Polygon HTTP aggregate calls, retry/backoff handling, a token-bucket rate limiter, rate-limit header tracking, metrics, and a short TTL cache that is currently disabled in `get_aggs_cached()`.
 - `app/mock/load_mock_aggs.py` loads fallback aggregate data from `app/mock/*.json`.
-- Runtime market data mode is controlled by `USE_MOCK_MARKET_DATA` in environment/settings. Current intended operating mode is live Polygon aggregate data with the user's existing delayed subscription.
+- Runtime market data mode is controlled by `USE_MOCK_MARKET_DATA` in environment/settings. Current intended operating mode is live Polygon/Massive aggregate data with the user's full real-time subscription.
+- Stock aggregate freshness is session-aware in `app/main.py`. Polygon aggregate timestamps represent candle bucket starts, so freshness subtracts the inferred aggregate interval before comparing against `MAX_STOCK_DATA_DELAY_MINUTES`. This prevents a current 5-minute candle from being mislabeled `STALE_STOCK_DATA` solely because its timestamp is the candle start.
+
+### Market Session Entry Gating
+
+- Premarket, 4:00-9:30 ET: strong call/put candidates can surface as `PREMARKET_WATCH`, but `Realtime Ready` remains false and auto paper entry is not allowed.
+- Opening range, 9:30-9:45 ET: candidates use `OPENING_RANGE_CONFIRMATION`; the scanner waits for regular-market confirmation before entry.
+- Regular session after 9:45 ET: `ENTER` or `ENTER_PAPER` is allowed only if stock freshness, risk, timing, option quality, quote freshness, event, regime, and dashboard auto-entry gates pass.
+- Regular session auto paper entries remain constrained to the dashboard's 9:45-15:30 ET entry window.
 
 ### Timeframes And Indicators
 
@@ -202,12 +211,13 @@ Known environment variables used by the code:
 
 ## Current Operating Mode
 
-- Intended Monday mode is `USE_MOCK_MARKET_DATA=false` and `USE_MOCK_OPTIONS=false`, using the user's current delayed Polygon subscription.
+- Intended Monday mode is `USE_MOCK_MARKET_DATA=false` and `USE_MOCK_OPTIONS=false`, using the user's current full Polygon/Massive real-time subscription.
 - Real-time mode is available with `REALTIME_MARKET_DATA_REQUIRED=true`, `REALTIME_OPTIONS_REQUIRED=true`, `OPTION_REQUIRE_BID_ASK=true`, `OPTION_REQUIRE_FRESH_QUOTE=true`, and `MAX_STOCK_DATA_DELAY_MINUTES=2` after Polygon/Massive entitlement upgrade.
 - Intended market-hours AI mode is `ENABLE_AI_SUMMARY=false` and `SCANNER_AI_SUMMARY_ENABLED=false`; use dashboard rules only.
 - Runtime settings load `.env` with override enabled so local config changes, including `ENABLE_AI_SUMMARY=false`, win over stale process variables after restart.
 - Streamlit Cloud must be configured through Streamlit Secrets; local `.env` is not automatically available in deployed Streamlit. The dashboard syncs Streamlit Secrets into env before scanner imports and shows non-sensitive sidebar key status.
-- Delayed-data mode is acceptable for scanning and paper trading with manual confirmation. Real-time mode blocks stale stock aggregates and missing/stale/delayed option quotes.
+- Premarket real-time mode surfaces strong candidates as `PREMARKET_WATCH` but does not mark them execution-ready. The scanner waits for opening-range confirmation from 9:30-9:45 ET and only allows `ENTER`/`ENTER_PAPER` after 9:45 ET when all gates pass.
+- Delayed-data mode remains acceptable for scanning and paper trading with manual confirmation. Real-time mode blocks truly stale stock aggregates and missing/stale/delayed option quotes.
 - Current option gate defaults: minimum volume 100, minimum open interest 500, max spread 10%, minimum option quality score 65, delayed quote threshold 10 minutes, stale quote threshold 30 minutes, 0DTE disabled, 1DTE disabled.
 - Current DTE preference defaults: minimum 10 DTE, preferred 14-30 DTE, max fallback 45 DTE. The ranker heavily penalizes 2-6 DTE, allows 7-13 DTE as lower-priority short swing/fallback, favors 14-30 DTE, treats 31-45 DTE as acceptable fallback, and de-prioritizes 46+ DTE unless otherwise justified.
 - Event blocker is configurable and enabled by default through environment settings.
@@ -315,7 +325,7 @@ Current status:
 - Replay engine: stable
 - Telemetry analytics: stable
 - Expectancy calibration: early-stage
-- Automated testing: minimal
+- Automated testing: minimal but now includes focused market-session scanner decision tests
 - Live-trading readiness: experimental
 - Delayed-data paper-trading readiness: improved for supervised use
 - Paper-trade EOD review readiness: improved with context-rich close telemetry
@@ -335,7 +345,7 @@ Current status:
 
 ## Important Risks And Gaps
 
-1. The `tests/` folder only contains `__init__.py`; there is no meaningful automated test coverage yet.
+1. Automated test coverage is still sparse; current coverage includes focused market-session scanner decision tests in `tests/test_market_session_decisions.py`.
 2. Some modules contain heavy debug printing, including request windows, system time, redacted Polygon URLs, and market data details.
 3. Live/mocked behavior is now mostly settings-driven, but some module-level settings are still loaded at import time and should be restarted after `.env` edits.
 4. Telemetry is still CSV-based and may need schema/version handling as fields evolve.
@@ -382,13 +392,14 @@ Use this workflow while keeping the current delayed Polygon subscription:
 
 1. Before market open, confirm `.env` has `USE_MOCK_MARKET_DATA=false`, `USE_MOCK_OPTIONS=false`, `ENABLE_AI_SUMMARY=false` unless summaries are explicitly wanted, and conservative option gates.
 2. Add known macro/earnings/Fed/OPEX dates to `EVENT_BLOCKER_DATES` using `SYMBOL:YYYY-MM-DD:Label` or `*:YYYY-MM-DD:Label`.
-3. Run `python -m app.main` after the market has enough 5m candles. Expect Polygon stock and option data to be delayed; this is scanner context, not direct execution data.
+3. Run `python -m app.main` after the market has enough 5m candles. With real-time entitlements, current 5-minute aggregate buckets should report `Stock Data Freshness=LIVE`; stale labels now account for Polygon bucket-start timestamps.
 4. Open the dashboard and review only the top candidates: `BULLISH_TOP_1` through `BULLISH_TOP_3` and `BEARISH_TOP_1` through `BEARISH_TOP_3`.
 5. For each candidate, check `RS vs QQQ`, `RS vs SPY`, `Relative Volume`, `ATR %`, `Risk Reward`, `Option Quality Score`, `Option Liquidity Grade`, `Option Quote Freshness`, `Expiration Bucket`, and `Event Blocked`.
-6. If `Action Status` is `REVIEW_TV_CHART`, `DELAYED_QUOTE`, `STALE_QUOTE`, or any option rejection code, do not treat the scanner as execution-ready. Confirm the live chart and broker option premium manually.
-7. Paper trade first. For small real trades, use broker live bid/ask and limit orders only; avoid market orders, 0DTE, 1DTE, wide spreads, stale quotes, and event-risk windows.
-8. After the session, review paper/real outcomes and telemetry before changing thresholds. Paper closes now preserve setup grade, RS, regime, sector, option-quality, blocker, and realized R context for model tuning.
-9. Download/export scanner output, telemetry, paper trade state, and trade state from the dashboard sidebar before restarts or end-of-day review.
+6. Before 9:30 ET, use `PREMARKET_WATCH` rows as a watchlist only. From 9:30-9:45 ET, use `OPENING_RANGE_CONFIRMATION` rows as candidates waiting for confirmation. Do not paper-enter until after 9:45 ET.
+7. If `Action Status` is `REVIEW_TV_CHART`, `DELAYED_QUOTE`, `STALE_QUOTE`, or any option rejection code, do not treat the scanner as execution-ready. Confirm the live chart and broker option premium manually.
+8. Paper trade first. For small real trades, use broker live bid/ask and limit orders only; avoid market orders, 0DTE, 1DTE, wide spreads, stale quotes, and event-risk windows.
+9. After the session, review paper/real outcomes and telemetry before changing thresholds. Paper closes now preserve setup grade, RS, regime, sector, option-quality, blocker, and realized R context for model tuning.
+10. Download/export scanner output, telemetry, paper trade state, and trade state from the dashboard sidebar before restarts or end-of-day review.
 
 ## Suggested Next Priorities
 
@@ -472,6 +483,12 @@ When starting a fresh GPT session:
 4. Avoid uploading the full workspace unless necessary
 
 ## Recent Major Changes
+
+2026-06-30
+- Added session-aware scanner action gating: premarket candidates surface as `PREMARKET_WATCH`, 9:30-9:45 ET candidates wait as `OPENING_RANGE_CONFIRMATION`, and `ENTER`/`ENTER_PAPER` is only allowed after 9:45 ET when all gates pass.
+- Fixed stock aggregate freshness so Polygon/Massive aggregate bucket-start timestamps do not incorrectly trigger `STALE_STOCK_DATA` for current 5-minute candles.
+- Added `market_session`, `raw_delay_minutes`, and `aggregate_interval_minutes` to stock data status calculations for clearer diagnostics.
+- Added focused regression tests in `tests/test_market_session_decisions.py` covering premarket freshness, watch-only premarket labels, opening-range hold, and post-9:45 entry eligibility.
 
 2026-06-15
 - Added real-time data validation mode: stock aggregate freshness gates, option bid/ask and quote freshness gates, quote source/timeframe/timestamp fields, `ENTER_PAPER` status for real-time-ready paper candidates, and `tools/diag_realtime_entitlements.py`.
