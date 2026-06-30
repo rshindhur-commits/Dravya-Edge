@@ -1719,6 +1719,33 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     return True, "eligible"
 
 
+def _decision_log_rows(df):
+
+    if df.empty:
+
+        return pd.DataFrame()
+
+    rows = _last_seen_candidates(df)
+
+    if not rows.empty:
+
+        return rows
+
+    if "Symbol" not in df.columns:
+
+        return pd.DataFrame()
+
+    output = df[
+        df["Symbol"].notna()
+    ].copy()
+
+    if output.empty:
+
+        return pd.DataFrame()
+
+    return output
+
+
 def _run_auto_paper_entries(df, controls):
     try:
 
@@ -1733,6 +1760,8 @@ def _run_auto_paper_entries(df, controls):
     candidates = _paper_trade_candidates(df)
 
     if candidates.empty:
+
+        log_rows = _decision_log_rows(df)
 
         if controls["auto_paper_enabled"]:
 
@@ -1758,19 +1787,38 @@ def _run_auto_paper_entries(df, controls):
 
             if not market_closed_rows.empty:
 
-                _record_auto_paper_decision(
-                    "SYSTEM",
-                    "SKIPPED",
-                    "auto paper enabled; market closed"
+                market_log_rows = _decision_log_rows(
+                    market_closed_rows
                 )
+
+                if market_log_rows.empty:
+
+                    market_log_rows = log_rows
+
+                if not market_log_rows.empty:
+
+                    for _, row in market_log_rows.iterrows():
+
+                        _record_auto_paper_decision(
+                            row.get("Symbol"),
+                            "SKIPPED",
+                            "market closed",
+                            row
+                        )
+
+                else:
+
+                    _record_auto_paper_decision(
+                        "SYSTEM",
+                        "SKIPPED",
+                        "auto paper enabled; market closed but no symbol rows found"
+                    )
 
                 return []
 
-            blocked_rows = _last_seen_candidates(df)
+            if not log_rows.empty:
 
-            if not blocked_rows.empty:
-
-                for _, row in blocked_rows.iterrows():
+                for _, row in log_rows.iterrows():
 
                     _record_auto_paper_decision(
                         row.get("Symbol"),
@@ -1786,16 +1834,14 @@ def _run_auto_paper_entries(df, controls):
             _record_auto_paper_decision(
                 "SYSTEM",
                 "SKIPPED",
-                "auto paper enabled; no eligible entry candidates"
+                "auto paper enabled; no eligible entry candidates and no symbol rows found"
             )
 
             return []
 
-        last_seen = _last_seen_candidates(df)
+        if not log_rows.empty:
 
-        if not last_seen.empty:
-
-            for _, row in last_seen.iterrows():
+            for _, row in log_rows.iterrows():
 
                 _record_auto_paper_decision(
                     row.get("Symbol"),
@@ -1809,7 +1855,7 @@ def _run_auto_paper_entries(df, controls):
         _record_auto_paper_decision(
             "SYSTEM",
             "SKIPPED",
-            "auto paper disabled; no current candidates"
+            "auto paper disabled; no current candidates and no symbol rows found"
         )
 
         return []
