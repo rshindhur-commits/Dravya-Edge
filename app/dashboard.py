@@ -237,7 +237,7 @@ def _compute_setup_percent(row):
     rr_points = min(rr / 2.5, 1) * 25
     entry_points = 15 if _entry_is_valid(entry) else 0
 
-    if action == "ENTER":
+    if action in ["ENTER", "ENTER_PAPER"]:
 
         action_points = 20
 
@@ -1614,12 +1614,25 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
         return False, "RR below threshold"
 
-    if str(row.get("Action Status")) not in [
+    if str(row.get("Action Status")).strip().upper() not in [
         "REVIEW_TV_CHART",
-        "ENTER"
+        "ENTER",
+        "ENTER_PAPER"
     ]:
 
         return False, "action status not allowed"
+
+    if str(row.get("Realtime Ready")).strip().lower() not in [
+        "true",
+        "1",
+        "yes"
+    ]:
+
+        return False, row.get("Realtime Block Reason") or "realtime not ready"
+
+    if _safe_float(row.get("Option Bid"), 0) <= 0 or _safe_float(row.get("Option Ask"), 0) <= 0:
+
+        return False, "missing option bid/ask"
 
     if bool(row.get("Event Blocked")):
 
@@ -1721,18 +1734,50 @@ def _run_auto_paper_entries(df, controls):
 
     if candidates.empty:
 
-        if not controls["auto_paper_enabled"]:
+        if controls["auto_paper_enabled"]:
 
-            last_seen = _last_seen_candidates(df)
+            if df.empty:
 
-            if not last_seen.empty:
+                _record_auto_paper_decision(
+                    "SYSTEM",
+                    "SKIPPED",
+                    "auto paper enabled; scanner output empty"
+                )
 
-                for _, row in last_seen.iterrows():
+                return []
+
+            market_closed_rows = pd.DataFrame()
+            if "Action Status" in df.columns:
+
+                market_closed_rows = df[
+                    df["Action Status"].isin([
+                        "NO_TRADE_MARKET_CLOSED",
+                        "OPTION_MARKET_CLOSED"
+                    ])
+                ]
+
+            if not market_closed_rows.empty:
+
+                _record_auto_paper_decision(
+                    "SYSTEM",
+                    "SKIPPED",
+                    "auto paper enabled; market closed"
+                )
+
+                return []
+
+            blocked_rows = _last_seen_candidates(df)
+
+            if not blocked_rows.empty:
+
+                for _, row in blocked_rows.iterrows():
 
                     _record_auto_paper_decision(
                         row.get("Symbol"),
                         "SKIPPED",
-                        "auto paper disabled",
+                        row.get("Blocked By")
+                        or row.get("Action Status")
+                        or "auto paper enabled; no eligible entry candidate",
                         row
                     )
 
@@ -1741,8 +1786,31 @@ def _run_auto_paper_entries(df, controls):
             _record_auto_paper_decision(
                 "SYSTEM",
                 "SKIPPED",
-                "auto paper disabled; no current candidates"
+                "auto paper enabled; no eligible entry candidates"
             )
+
+            return []
+
+        last_seen = _last_seen_candidates(df)
+
+        if not last_seen.empty:
+
+            for _, row in last_seen.iterrows():
+
+                _record_auto_paper_decision(
+                    row.get("Symbol"),
+                    "SKIPPED",
+                    "auto paper disabled",
+                    row
+                )
+
+            return []
+
+        _record_auto_paper_decision(
+            "SYSTEM",
+            "SKIPPED",
+            "auto paper disabled; no current candidates"
+        )
 
         return []
 
@@ -2199,7 +2267,7 @@ def _style_trade_rows(row):
     if (
         setup_pct >= 80
         and rr >= 2
-        and action in ["WATCH", "ENTER", "REVIEW_TV_CHART"]
+        and action in ["WATCH", "ENTER", "ENTER_PAPER", "REVIEW_TV_CHART"]
     ):
 
         color = "background-color: #14532d; color: white"
@@ -2579,7 +2647,7 @@ def _paper_trade_candidates(df):
     candidates = df[
         (df["Setup Valid"] == True)
         & (df["Candidate Direction"].isin(["CALL", "PUT"]))
-        & (df["Action Status"].isin(["REVIEW_TV_CHART", "ENTER"]))
+        & (df["Action Status"].isin(["REVIEW_TV_CHART", "ENTER", "ENTER_PAPER"]))
     ].copy()
 
     age_minutes = _scanner_output_age_minutes()
@@ -2703,7 +2771,7 @@ def _render_paper_trade_controls(df):
         st.info("No paper-trade candidates requiring live confirmation right now.")
         return
 
-    st.caption("Only paper-enter after confirming the live TradingView checklist manually.")
+    st.caption("Paper-enter only when Action Status is ENTER_PAPER, ENTER, or REVIEW_TV_CHART and all real-time/option gates are clean.")
 
     age_minutes = _scanner_output_age_minutes()
 
