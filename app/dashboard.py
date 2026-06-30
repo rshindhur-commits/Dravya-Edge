@@ -752,6 +752,9 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None):
         "rr": row.get("RR") if row is not None else None,
         "action_status": row.get("Action Status") if row is not None else None,
         "blocked_by": row.get("Blocked By") if row is not None else None,
+        "action_reason": row.get("Action Reason") if row is not None else None,
+        "option_rejection_reason": row.get("Option Rejection Reason") if row is not None else None,
+        "realtime_block_reason": row.get("Realtime Block Reason") if row is not None else None,
         "option_quality_score": row.get("Option Quality Score") if row is not None else None,
         "option_spread_pct": row.get("Option Spread %") if row is not None else None,
         "option_quote_freshness": row.get("Option Quote Freshness") if row is not None else None,
@@ -1602,19 +1605,67 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
         return False, "outside auto-entry window"
 
-    if row.get("Top Candidate") not in AUTO_PAPER_TOP_CANDIDATES:
+    action_status = str(
+        row.get("Action Status")
+    ).strip().upper()
+
+    realtime_ready = str(
+        row.get("Realtime Ready")
+    ).strip().lower() in [
+        "true",
+        "1",
+        "yes"
+    ]
+
+    execution_ready = (
+        action_status in ["ENTER", "ENTER_PAPER"]
+        and realtime_ready
+    )
+
+    if (
+        row.get("Top Candidate") not in AUTO_PAPER_TOP_CANDIDATES
+        and not execution_ready
+    ):
 
         return False, "not top candidate"
 
-    if _safe_float(row.get("Setup %"), 0) < controls["min_setup"]:
+    setup_percent = _safe_float(
+        row.get("Setup %"),
+        None
+    )
+
+    if setup_percent is None:
+
+        setup_percent = _compute_setup_percent(row)
+
+    if setup_percent < controls["min_setup"]:
 
         return False, "setup below threshold"
 
-    if _safe_float(row.get("RR"), 0) < controls["min_rr"]:
+    rr = _safe_float(
+        row.get("RR"),
+        None
+    )
+
+    if rr is None:
+
+        rr = _safe_float(
+            row.get("Risk Reward"),
+            None
+        )
+
+    if rr is None:
+
+        rr = _safe_float(
+            row.get("Candidate RR"),
+            0
+        )
+
+    if rr < controls["min_rr"]:
 
         return False, "RR below threshold"
 
-    if str(row.get("Action Status")).strip().upper() not in [
+    if action_status not in [
         "REVIEW_TV_CHART",
         "ENTER",
         "ENTER_PAPER"
@@ -1622,11 +1673,7 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
         return False, "action status not allowed"
 
-    if str(row.get("Realtime Ready")).strip().lower() not in [
-        "true",
-        "1",
-        "yes"
-    ]:
+    if not realtime_ready:
 
         return False, row.get("Realtime Block Reason") or "realtime not ready"
 
@@ -1717,6 +1764,31 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         return False, "daily auto paper limit reached"
 
     return True, "eligible"
+
+
+def _scanner_block_reason(row):
+
+    for column in [
+        "Option Rejection Reason",
+        "Realtime Block Reason",
+        "Action Reason",
+        "Regime Block Reason",
+        "Event Block Reason",
+        "Blocked By",
+        "Action Status"
+    ]:
+
+        value = row.get(column)
+
+        if value is not None and str(value).strip() not in [
+            "",
+            "nan",
+            "None"
+        ]:
+
+            return str(value)
+
+    return "auto paper enabled; no eligible entry candidate"
 
 
 def _decision_log_rows(df):
@@ -1823,9 +1895,7 @@ def _run_auto_paper_entries(df, controls):
                     _record_auto_paper_decision(
                         row.get("Symbol"),
                         "SKIPPED",
-                        row.get("Blocked By")
-                        or row.get("Action Status")
-                        or "auto paper enabled; no eligible entry candidate",
+                        _scanner_block_reason(row),
                         row
                     )
 
