@@ -442,7 +442,28 @@ def _load_scanner_output():
 
         return pd.DataFrame()
 
-    df = pd.read_excel(SCANNER_FILE)
+    try:
+
+        df = pd.read_excel(SCANNER_FILE)
+
+    except Exception as exc:
+
+        bad_file = SCANNER_FILE.with_suffix(".bad.xlsx")
+
+        try:
+
+            SCANNER_FILE.replace(bad_file)
+
+        except Exception:
+
+            pass
+
+        st.error(
+            f"scanner_output.xlsx is corrupted or was partially written. "
+            f"Moved it aside if possible. Run scanner again. Error: {exc}"
+        )
+
+        return pd.DataFrame()
 
     if df.empty:
 
