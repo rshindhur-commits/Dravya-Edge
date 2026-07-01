@@ -4,6 +4,7 @@ import sys
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import json
+from io import BytesIO
 
 import pandas as pd
 import streamlit as st
@@ -148,6 +149,24 @@ TRADE_COLUMNS = [
     "Option Bid",
     "Option Ask",
     "Option Midpoint",
+    "Option Mid Price",
+    "Option Spread %",
+    "Option Delta",
+    "Option Contract Cost",
+    "Option Risk At Stop",
+    "Current Capital",
+    "Max Allowed Contract Cost",
+    "Preferred Max Contract Cost",
+    "Affordability Status",
+    "Affordable",
+    "Preferred Affordable",
+    "Affordability Mode",
+    "Capital Profile",
+    "Best Quality Option Ticker",
+    "Best Quality Contract Cost",
+    "Best Quality Affordability Status",
+    "Affordable Option Ticker",
+    "Affordable Option Contract Cost",
     "Option Quote Timestamp",
     "Option Quote Timeframe",
     "Option Quote Source",
@@ -883,6 +902,42 @@ def _read_download_file(file_path):
         return None
 
 
+def _dataframe_to_xlsx_bytes(df):
+
+    try:
+
+        buffer = BytesIO()
+
+        with pd.ExcelWriter(
+            buffer,
+            engine="openpyxl"
+        ) as writer:
+
+            df.to_excel(
+                writer,
+                index=False
+            )
+
+        return buffer.getvalue()
+
+    except Exception:
+
+        return None
+
+
+def _scanner_output_download_bytes():
+
+    df = _load_scanner_output()
+
+    if df.empty:
+
+        return _read_download_file(SCANNER_FILE)
+
+    data = _dataframe_to_xlsx_bytes(df)
+
+    return data or _read_download_file(SCANNER_FILE)
+
+
 def _load_auto_paper_decision_log():
 
     return load_json_file(
@@ -1153,9 +1208,15 @@ def _render_download_exports():
 
     for export in exports:
 
-        data = _read_download_file(
-            export["path"]
-        )
+        if export["path"] == SCANNER_FILE:
+
+            data = _scanner_output_download_bytes()
+
+        else:
+
+            data = _read_download_file(
+                export["path"]
+            )
 
         if data is None:
 
