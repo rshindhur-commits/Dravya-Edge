@@ -245,6 +245,10 @@ def _compute_setup_percent(row):
 
         action_points = 15
 
+    elif action == "QUALITY_BUT_TOO_EXPENSIVE":
+
+        action_points = 10
+
     elif action == "WAIT":
 
         action_points = 5
@@ -529,6 +533,7 @@ def _candidate_rows_for_suggestions(df):
         (df["Setup Valid"] == True)
         & (df["Candidate Direction"].isin(["CALL", "PUT"]))
         & (df["Action Status"].isin(["REVIEW_TV_CHART", "ENTER", "ENTER_PAPER"]))
+        & (df.get("Affordable", True) == True)
     ]
 
     return [row for _, row in rows.iterrows()]
@@ -1502,6 +1507,21 @@ def _scanner_context_from_row(row):
         "Option Quality Reasons",
         "Option Quote Freshness",
         "Option Quote Age Minutes",
+        "Option Contract Cost",
+        "Option Risk At Stop",
+        "Current Capital",
+        "Max Allowed Contract Cost",
+        "Preferred Max Contract Cost",
+        "Affordability Status",
+        "Affordable",
+        "Preferred Affordable",
+        "Affordability Mode",
+        "Capital Profile",
+        "Best Quality Option Ticker",
+        "Best Quality Contract Cost",
+        "Best Quality Affordability Status",
+        "Affordable Option Ticker",
+        "Affordable Option Contract Cost",
         "Event Blocked",
         "Event Block Reason",
         "Action Status",
@@ -1693,6 +1713,10 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     ]:
 
         return False, "action status not allowed"
+
+    if "Affordable" in row.index and row.get("Affordable") != True:
+
+        return False, row.get("Affordability Status") or "option not affordable"
 
     if not realtime_ready:
 
@@ -2256,6 +2280,11 @@ def _new_calls_puts(df):
         "Option Bid",
         "Option Ask",
         "Option Spread %",
+        "Option Contract Cost",
+        "Option Risk At Stop",
+        "Max Allowed Contract Cost",
+        "Affordability Status",
+        "Affordable",
         "Option Quote Age Minutes",
         "Realtime Ready",
         "Action Status"
@@ -2785,6 +2814,7 @@ def _paper_trade_candidates(df):
         (df["Setup Valid"] == True)
         & (df["Candidate Direction"].isin(["CALL", "PUT"]))
         & (df["Action Status"].isin(["REVIEW_TV_CHART", "ENTER", "ENTER_PAPER"]))
+        & (df.get("Affordable", True) == True)
     ].copy()
 
     age_minutes = _scanner_output_age_minutes()

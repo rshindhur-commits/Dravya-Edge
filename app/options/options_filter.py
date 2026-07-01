@@ -1,5 +1,7 @@
 from app.options.option_metrics import calculate_spread_pct
 from app.config.settings import settings
+from app.options.affordability_config import get_affordability_config
+from app.options.option_affordability import add_affordability_metrics
 
 
 def evaluate_option_liquidity(option_data):
@@ -9,6 +11,12 @@ def evaluate_option_liquidity(option_data):
     """
 
     try:
+
+        affordability_config = get_affordability_config()
+        add_affordability_metrics(
+            option_data,
+            config=affordability_config
+        )
 
         open_interest = option_data.get(
             "open_interest",
@@ -314,6 +322,39 @@ def evaluate_option_liquidity(option_data):
 
                 "liquidity_grade": option_data.get(
                     "option_liquidity_grade"
+                )
+            }
+
+        if (
+            affordability_config.get("mode") == "HARD"
+            and not option_data.get("affordable", False)
+        ):
+
+            return {
+
+                "liquid": False,
+
+                "code": option_data.get(
+                    "affordability_status",
+                    "OPTION_TOO_EXPENSIVE"
+                ),
+
+                "reason": "Option contract cost exceeds capital profile",
+
+                "spread_pct": spread_pct,
+
+                "quality_score": option_quality_score,
+
+                "liquidity_grade": option_data.get(
+                    "option_liquidity_grade"
+                ),
+
+                "contract_cost": option_data.get("contract_cost"),
+
+                "risk_at_stop": option_data.get("risk_at_stop"),
+
+                "max_allowed_contract_cost": option_data.get(
+                    "max_allowed_contract_cost"
                 )
             }
 

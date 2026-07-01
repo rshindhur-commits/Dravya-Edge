@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-06-30
+Last updated: 2026-07-01
 
 ## Project Purpose
 
@@ -63,7 +63,7 @@ At a high level, each scan does this per symbol:
 5. Detects entry setups when no active trade exists.
 6. Calculates risk, stop loss, take profit, and risk/reward.
 7. Applies market-session action gating: premarket candidates are watch-only, 9:30-9:45 ET waits for opening-range confirmation, and paper entry is only allowed after 9:45 ET when all gates pass.
-8. Checks option quote freshness, bid/ask spread, volume, open interest, quality score, expiration bucket, and event risk.
+8. Checks option quote freshness, bid/ask spread, volume, open interest, quality score, expiration bucket, affordability/capital profile, and event risk.
 9. Opens, updates, or closes trade state.
 10. Builds a multi-timeframe final signal.
 11. Recommends/ranks an option contract and blocks stale/delayed or low-quality option quotes from execution-ready status.
@@ -93,7 +93,7 @@ At a high level, each scan does this per symbol:
 
 - Premarket, 4:00-9:30 ET: strong call/put candidates can surface as `PREMARKET_WATCH`, but `Realtime Ready` remains false and auto paper entry is not allowed.
 - Opening range, 9:30-9:45 ET: candidates use `OPENING_RANGE_CONFIRMATION`; the scanner waits for regular-market confirmation before entry.
-- Regular session after 9:45 ET: `ENTER` or `ENTER_PAPER` is allowed only if stock freshness, risk, timing, option quality, quote freshness, event, regime, and dashboard auto-entry gates pass.
+- Regular session after 9:45 ET: `ENTER` or `ENTER_PAPER` is allowed only if stock freshness, risk, timing, option quality, option affordability, quote freshness, event, regime, and dashboard auto-entry gates pass.
 - Regular session auto paper entries remain constrained to the dashboard's 9:45-15:30 ET entry window.
 
 ### Timeframes And Indicators
@@ -120,9 +120,15 @@ At a high level, each scan does this per symbol:
 - `app/options/live_options_chain.py` fetches Polygon options snapshots when mock mode is disabled.
 - Runtime options mode is controlled by `USE_MOCK_OPTIONS` in environment/settings. Current intended operating mode is live Polygon option snapshots with delayed-quote safety gates.
 - `app/options/option_metrics.py` computes option mid-price, spread %, DTE, expiration bucket, expiration risk, quote age/freshness, option quality score, liquidity grade, quality reasons, and option P/L.
+- `app/config/capital_profiles.py` defines account-size presets for option affordability: `SMALL_ACCOUNT`, `GROWTH_ACCOUNT`, and `BEST_QUALITY`.
+- `app/options/affordability_config.py` loads the active affordability mode/profile from env or Streamlit Secrets.
+- `app/options/option_affordability.py` computes `contract_cost`, `risk_at_stop`, current capital, max allowed contract cost, preferred affordability, affordability status, and affordability booleans.
 - `app/options/contract_ranker.py` scores contracts by direction, DTE/expiration bucket, volume, open interest, strike proximity, delta, IV, gamma, theta, spread readiness, and option quality score.
-- `app/options/options_filter.py` hard-rejects unavailable bid/ask, crossed markets, stale/delayed quotes, low open interest, low volume, wide spread, disabled 0DTE/1DTE contracts, and low option quality score.
-- `app/options/options_recommender.py` includes both a simple recommendation function and a live/mock chain ranking path.
+- `app/options/contract_ranker.py` preserves the technical `ranking_score` and adds affordability metadata plus an `affordability_adjusted_score` for affordable alternate selection.
+- `app/options/options_filter.py` hard-rejects unavailable bid/ask, crossed markets, stale/delayed quotes, low open interest, low volume, wide spread, disabled 0DTE/1DTE contracts, low option quality score, and unaffordable contracts when `OPTION_AFFORDABILITY_MODE=HARD`.
+- `app/options/options_recommender.py` returns a best-quality `primary` contract, a best affordable `affordable` contract when available, and an actionable `active` contract. `active` uses the affordable contract in `SOFT`/`HARD` modes when one exists; otherwise it falls back to the best-quality primary.
+- `app/main.py` marks high-quality unaffordable setups as `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER`. Cheap contracts that fail the minimum cost/delta affordability rules can surface as `NO_TRADE_LOW_OPTION_QUALITY`.
+- Dashboard paper-trade and suggested-trade candidate lists require `Affordable=True` when affordability fields are present, while still showing best-quality contract information for read-only review.
 
 ### Market References, Regime, And Breadth
 
@@ -218,6 +224,21 @@ Known environment variables used by the code:
 - `OPTION_PREFERRED_MIN_DTE`
 - `OPTION_PREFERRED_MAX_DTE`
 - `OPTION_MAX_DTE`
+- `OPTION_AFFORDABILITY_MODE`
+- `OPTION_CAPITAL_PROFILE`
+- `DAILY_START_CAPITAL`
+- `CAPITAL_GROWTH_MODE`
+- `MAX_ACTIVE_PAPER_TRADES`
+- `MAX_DAILY_ENTRIES`
+- `OPTION_STOP_LOSS_PCT`
+- `OPTION_MAX_RISK_PER_TRADE_PCT`
+- `OPTION_MIN_CONTRACT_COST`
+- `OPTION_PREFERRED_MAX_CONTRACT_COST`
+- `OPTION_MAX_CONTRACT_COST`
+- `OPTION_AGGRESSIVE_MAX_CONTRACT_COST`
+- `OPTION_MIN_AFFORDABLE_DELTA`
+- `OPTION_SHOW_BEST_QUALITY_CONTRACT`
+- `OPTION_SHOW_AFFORDABLE_ALTERNATE`
 
 ## Current Operating Mode
 
@@ -229,6 +250,9 @@ Known environment variables used by the code:
 - Premarket real-time mode surfaces strong candidates as `PREMARKET_WATCH` but does not mark them execution-ready. The scanner waits for opening-range confirmation from 9:30-9:45 ET and only allows `ENTER`/`ENTER_PAPER` after 9:45 ET when all gates pass.
 - Delayed-data mode remains acceptable for scanning and paper trading with manual confirmation. Real-time mode blocks truly stale stock aggregates and missing/stale/delayed option quotes.
 - Current option gate defaults: minimum volume 100, minimum open interest 500, max spread 10%, minimum option quality score 65, delayed quote threshold 10 minutes, stale quote threshold 30 minutes, 0DTE disabled, 1DTE disabled.
+- Current affordability defaults: `OPTION_AFFORDABILITY_MODE=HARD`, `OPTION_CAPITAL_PROFILE=SMALL_ACCOUNT`, `DAILY_START_CAPITAL=1000`, `OPTION_STOP_LOSS_PCT=0.20`, `OPTION_MAX_RISK_PER_TRADE_PCT=0.12`, `OPTION_MIN_CONTRACT_COST=100`, `OPTION_PREFERRED_MAX_CONTRACT_COST=500`, `OPTION_MAX_CONTRACT_COST=650`, and `OPTION_MIN_AFFORDABLE_DELTA=0.25`.
+- Affordability modes: `OFF` preserves original best-quality-only behavior, `SOFT` keeps best-quality review visible while dashboard paper/suggested-trade gates still require affordability, and `HARD` also blocks unaffordable contracts from actionable scanner statuses.
+- Capital profiles: `SMALL_ACCOUNT` is the current $1,000/day profile, `GROWTH_ACCOUNT` widens contract-cost limits for larger buying power, and `BEST_QUALITY` effectively removes affordability limits while keeping metadata visible.
 - Current DTE preference defaults: minimum 10 DTE, preferred 14-30 DTE, max fallback 45 DTE. The ranker heavily penalizes 2-6 DTE, allows 7-13 DTE as lower-priority short swing/fallback, favors 14-30 DTE, treats 31-45 DTE as acceptable fallback, and de-prioritizes 46+ DTE unless otherwise justified.
 - Event blocker is configurable and enabled by default through environment settings.
 - Polygon aggregate cache lookup and cache set are currently commented out in `app/utils/polygon_client.py`.
@@ -274,6 +298,20 @@ Current telemetry fields include:
 - option_liquidity_grade
 - option_quote_freshness
 - option_quote_age_minutes
+- option_contract_cost
+- option_risk_at_stop
+- current_capital
+- max_allowed_contract_cost
+- affordability_status
+- affordable
+- preferred_affordable
+- affordability_mode
+- capital_profile
+- best_quality_option_ticker
+- best_quality_contract_cost
+- best_quality_affordability_status
+- affordable_option_ticker
+- affordable_option_contract_cost
 - event_blocked
 - event_block_reason
 - market_regime
@@ -350,6 +388,9 @@ Current status:
 | `trade_projection.py` | Projection generation |
 | `contract_ranker.py` | Option scoring |
 | `option_metrics.py` | Option quote, expiration, quality, and P/L metrics |
+| `option_affordability.py` | Option contract cost, risk-at-stop, affordability, and profile metrics |
+| `affordability_config.py` | Option affordability mode/profile env and Streamlit Secrets loading |
+| `capital_profiles.py` | Preset capital profiles for small, growth, and best-quality option modes |
 | `options_filter.py` | Option liquidity/quality hard gates |
 | `event_blocker.py` | Manual event-risk entry blocker |
 
@@ -404,9 +445,9 @@ Use this workflow while keeping the current delayed Polygon subscription:
 2. Add known macro/earnings/Fed/OPEX dates to `EVENT_BLOCKER_DATES` using `SYMBOL:YYYY-MM-DD:Label` or `*:YYYY-MM-DD:Label`.
 3. Run `python -m app.main` after the market has enough 5m candles. With real-time entitlements, current 5-minute aggregate buckets should report `Stock Data Freshness=LIVE`; stale labels now account for Polygon bucket-start timestamps.
 4. Open the dashboard and review only the top candidates: `BULLISH_TOP_1` through `BULLISH_TOP_3` and `BEARISH_TOP_1` through `BEARISH_TOP_3`.
-5. For each candidate, check `RS vs QQQ`, `RS vs SPY`, `Relative Volume`, `ATR %`, `Risk Reward`, `Option Quality Score`, `Option Liquidity Grade`, `Option Quote Freshness`, `Expiration Bucket`, and `Event Blocked`.
+5. For each candidate, check `RS vs QQQ`, `RS vs SPY`, `Relative Volume`, `ATR %`, `Risk Reward`, `Option Quality Score`, `Option Liquidity Grade`, `Option Quote Freshness`, `Expiration Bucket`, `Option Contract Cost`, `Affordability Status`, `Affordable`, and `Event Blocked`.
 6. Before 9:30 ET, use `PREMARKET_WATCH` rows as a watchlist only. From 9:30-9:45 ET, use `OPENING_RANGE_CONFIRMATION` rows as candidates waiting for confirmation. Do not paper-enter until after 9:45 ET.
-7. If `Action Status` is `REVIEW_TV_CHART`, `DELAYED_QUOTE`, `STALE_QUOTE`, or any option rejection code, do not treat the scanner as execution-ready. Confirm the live chart and broker option premium manually.
+7. If `Action Status` is `REVIEW_TV_CHART`, `QUALITY_BUT_TOO_EXPENSIVE`, `DELAYED_QUOTE`, `STALE_QUOTE`, or any option rejection code, do not treat the scanner as execution-ready. Confirm the live chart and broker option premium manually.
 8. Paper trade first. For small real trades, use broker live bid/ask and limit orders only; avoid market orders, 0DTE, 1DTE, wide spreads, stale quotes, and event-risk windows.
 9. After the session, review paper/real outcomes and telemetry before changing thresholds. Paper closes now preserve setup grade, RS, regime, sector, option-quality, blocker, and realized R context for model tuning.
 10. Download/export scanner output, telemetry, paper trade state, and trade state from the dashboard sidebar before restarts or end-of-day review.
@@ -493,6 +534,14 @@ When starting a fresh GPT session:
 4. Avoid uploading the full workspace unless necessary
 
 ## Recent Major Changes
+
+2026-07-01
+- Added profile-driven option affordability controls with `OPTION_AFFORDABILITY_MODE` and `OPTION_CAPITAL_PROFILE`.
+- Added `SMALL_ACCOUNT`, `GROWTH_ACCOUNT`, and `BEST_QUALITY` capital presets.
+- Scanner now keeps the best-quality option contract visible while selecting an affordable `active` contract when available.
+- Added contract cost, risk-at-stop, current capital, max allowed contract cost, affordability status, and best-quality/affordable alternate fields to scanner output and dashboard context.
+- `HARD` affordability mode blocks expensive contracts from actionable statuses and marks high-quality expensive setups as `QUALITY_BUT_TOO_EXPENSIVE`.
+- Dashboard suggested-trade sync, Paper Trade Setup, and auto-paper entry gates now require `Affordable=True` when affordability fields are present.
 
 2026-06-30
 - Added session-aware scanner action gating: premarket candidates surface as `PREMARKET_WATCH`, 9:30-9:45 ET candidates wait as `OPENING_RANGE_CONFIRMATION`, and `ENTER`/`ENTER_PAPER` is only allowed after 9:45 ET when all gates pass.
