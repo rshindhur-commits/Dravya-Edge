@@ -1072,6 +1072,13 @@ def build_action_decision(
         "QUOTE_UNAVAILABLE"
     ]
 
+    affordability_blocking_statuses = [
+        "OPTION_TOO_EXPENSIVE",
+        "TOO_CHEAP_LOW_QUALITY_RISK",
+        "DELTA_TOO_LOW_FOR_AFFORDABLE_TRADE",
+        "NO_OPTION_PRICE"
+    ]
+
     delay_minutes = market_data_status.get(
         "delay_minutes"
     )
@@ -1192,6 +1199,30 @@ def build_action_decision(
             "action_reason": (
                 option_rejection_reason
                 or "Risk passed, option quote unavailable"
+            ),
+            "realtime_confirmation_needed": realtime_confirmation_needed,
+            "tradingview_check_status": tradingview_check_status
+        }
+
+    if option_quote_status in affordability_blocking_statuses:
+
+        if option_quote_status == "OPTION_TOO_EXPENSIVE":
+
+            return {
+                "action_status": "QUALITY_BUT_TOO_EXPENSIVE",
+                "action_reason": (
+                    option_rejection_reason
+                    or "High-quality option exceeds capital profile"
+                ),
+                "realtime_confirmation_needed": realtime_confirmation_needed,
+                "tradingview_check_status": tradingview_check_status
+            }
+
+        return {
+            "action_status": "NO_TRADE_LOW_OPTION_QUALITY",
+            "action_reason": (
+                option_rejection_reason
+                or "No affordable option passed quality and delta gates"
             ),
             "realtime_confirmation_needed": realtime_confirmation_needed,
             "tradingview_check_status": tradingview_check_status
@@ -2512,6 +2543,8 @@ def run_scanner():
                 latest_price = "-"
 
             option_recommendation = None
+            best_quality_option = None
+            affordable_option = None
             option_liquidity = None
             option_rejection_reason = None
             option_quote_status = None
@@ -2580,9 +2613,17 @@ def run_scanner():
                     )
                 )
 
-                option_recommendation = option_bundle.get(
+                best_quality_option = option_bundle.get(
                     "primary"
                 ) if option_bundle else None
+                affordable_option = option_bundle.get(
+                    "affordable"
+                ) if option_bundle else None
+                option_recommendation = (
+                    option_bundle.get("active")
+                    if option_bundle
+                    else None
+                ) or best_quality_option
                 short_dte_option = option_bundle.get(
                     "short_dte"
                 ) if option_bundle else None
@@ -3451,6 +3492,96 @@ def run_scanner():
                 "Option Quote Age Minutes": (
                     option_recommendation.get("quote_age_minutes")
                     if option_recommendation
+                    else None
+                ),
+
+                "Option Contract Cost": (
+                    option_recommendation.get("contract_cost")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Option Risk At Stop": (
+                    option_recommendation.get("risk_at_stop")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Current Capital": (
+                    option_recommendation.get("current_capital")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Max Allowed Contract Cost": (
+                    option_recommendation.get("max_allowed_contract_cost")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Preferred Max Contract Cost": (
+                    option_recommendation.get("preferred_max_contract_cost")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Affordability Status": (
+                    option_recommendation.get("affordability_status")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Affordable": (
+                    option_recommendation.get("affordable")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Preferred Affordable": (
+                    option_recommendation.get("preferred_affordable")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Affordability Mode": (
+                    option_recommendation.get("affordability_mode")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Capital Profile": (
+                    option_recommendation.get("capital_profile")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Best Quality Option Ticker": (
+                    best_quality_option.get("ticker")
+                    if best_quality_option
+                    else None
+                ),
+
+                "Best Quality Contract Cost": (
+                    best_quality_option.get("contract_cost")
+                    if best_quality_option
+                    else None
+                ),
+
+                "Best Quality Affordability Status": (
+                    best_quality_option.get("affordability_status")
+                    if best_quality_option
+                    else None
+                ),
+
+                "Affordable Option Ticker": (
+                    affordable_option.get("ticker")
+                    if affordable_option
+                    else None
+                ),
+
+                "Affordable Option Contract Cost": (
+                    affordable_option.get("contract_cost")
+                    if affordable_option
                     else None
                 ),
 

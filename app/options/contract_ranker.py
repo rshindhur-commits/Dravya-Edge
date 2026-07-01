@@ -5,6 +5,8 @@ from datetime import (
 
 from app.utils.runtime_logging import debug_print
 from app.config.settings import settings
+from app.options.affordability_config import get_affordability_config
+from app.options.option_affordability import add_affordability_metrics
 
 def rank_option_contracts(
 
@@ -26,6 +28,7 @@ def rank_option_contracts(
     try:
 
         ranked = []
+        affordability_config = get_affordability_config()
 
         for c in contracts:
 
@@ -414,6 +417,27 @@ def rank_option_contracts(
                 option_quality_score / 10
             )
 
+            c = add_affordability_metrics(
+                c,
+                config=affordability_config
+            )
+
+            affordability_adjusted_score = score
+
+            if affordability_config.get("mode") != "OFF":
+
+                if c.get("preferred_affordable"):
+
+                    affordability_adjusted_score += 10
+
+                elif c.get("affordable"):
+
+                    affordability_adjusted_score += 5
+
+                else:
+
+                    affordability_adjusted_score -= 1000
+
             if expiration_bucket == "0DTE":
 
                 score -= 50
@@ -445,10 +469,16 @@ def rank_option_contracts(
                 2
             )
 
+            c["affordability_adjusted_score"] = round(
+                affordability_adjusted_score,
+                2
+            )
+
             debug_print(
                 f"[RANKED] "
                 f"{c['ticker']} "
                 f"SCORE={round(score,2)} "
+                f"AFFORD={c.get('affordability_status')} "
                 f"DELTA={c['delta']} "
                 f"GAMMA={gamma} "
                 f"THETA={theta} "

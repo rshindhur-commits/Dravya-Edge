@@ -20,6 +20,31 @@ Run from the workspace root so package imports resolve correctly.
 
 Polygon/Massive aggregate freshness accounts for candle bucket-start timestamps, so a current 5-minute aggregate is not marked stale solely because the timestamp is at the start of the candle.
 
+## Option Affordability
+
+The scanner keeps two option concepts separate:
+
+- Best quality contract: the strongest technical/liquidity contract, even if it is too expensive for the active account profile.
+- Active affordable contract: the best contract that still passes quality gates and fits the configured capital profile.
+
+In `OPTION_AFFORDABILITY_MODE=HARD`, a high-quality but expensive option is marked `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER`. The dashboard still shows the best-quality contract for review, but Paper Trade Setup and suggested-trade sync require `Affordable=True`.
+
+Small-account defaults are documented in [.env.example](.env.example) and [.streamlit/secrets.toml.example](.streamlit/secrets.toml.example):
+
+```env
+OPTION_AFFORDABILITY_MODE=HARD
+OPTION_CAPITAL_PROFILE=SMALL_ACCOUNT
+DAILY_START_CAPITAL=1000
+OPTION_STOP_LOSS_PCT=0.20
+OPTION_MAX_RISK_PER_TRADE_PCT=0.12
+OPTION_MIN_CONTRACT_COST=100
+OPTION_PREFERRED_MAX_CONTRACT_COST=500
+OPTION_MAX_CONTRACT_COST=650
+OPTION_MIN_AFFORDABLE_DELTA=0.25
+```
+
+Use `OPTION_CAPITAL_PROFILE=GROWTH_ACCOUNT` as buying power grows, or `OPTION_AFFORDABILITY_MODE=OFF` with `OPTION_CAPITAL_PROFILE=BEST_QUALITY` to return to the original best-quality-only behavior.
+
 ## Validate
 
 ```powershell
