@@ -315,7 +315,17 @@ def _sector_group(symbol):
         "TSLA": "CONSUMER_TECH",
         "QQQ": "MARKET",
         "SPY": "MARKET",
-        "SPCX": "CONSUMER_TECH"
+        "SPCX": "CONSUMER_TECH",
+        "SMH": "SEMIS",
+        "ARM": "SEMIS",
+        "TSM": "SEMIS",
+        "INTC": "SEMIS",
+        "AMAT": "SEMIS",
+        "LRCX": "SEMIS",
+        "MRVL": "SEMIS",
+        "ORCL": "SOFTWARE",
+        "PANW": "SOFTWARE",
+        "SOXL": "SEMIS"
     }
 
     return sector_map.get(

@@ -24,6 +24,16 @@ The current v2 intraday options watchlist is defined in `app/config/watchlist.py
 - CRWD
 - SMCI
 - SPCX
+- SMH
+- ARM
+- TSM
+- INTC
+- AMAT
+- LRCX
+- MRVL
+- ORCL
+- PANW
+- SOXL
 
 Non-trade market reference symbols are also defined in `app/config/watchlist.py`:
 
@@ -523,7 +533,7 @@ When starting a fresh GPT session:
 - Scanner output and dashboard now include alternate option contracts when available: Short DTE alternate from 2-13 DTE and Longer DTE alternate from 31-45 DTE, while preserving 14-30 DTE as the primary recommendation.
 
 2026-06-13
-- Expanded active watchlist to 16 liquid option names: QQQ, SPY, NVDA, AAPL, MSFT, AMZN, META, TSLA, AMD, AVGO, MU, PLTR, NFLX, CRWD, SMCI, SPCX.
+- Expanded active watchlist to 16 liquid option names: QQQ, SPY, NVDA, AAPL, MSFT, AMZN, META, TSLA, AMD, AVGO, MU, PLTR, NFLX, CRWD, SMCI, SPCX, SMH, ARM, TSM, INTC, AMAT, LRCX, MRVL, ORCL, PANW, SOXL.
 - Added relative strength ranking fields: `Symbol Move %`, `RS vs QQQ`, `RS vs SPY`, `RS Rank Score`, `Premarket Gap %`, `Relative Volume`, `ATR %`, `Bullish Rank`, `Bearish Rank`, and `Top Candidate`.
 - Added non-trade references SMH, SOXX, XLK, and VIX/VIXY proxy for regime, sector, breadth, and volatility context.
 - Added explicit regime labels and setup-family regime blockers.

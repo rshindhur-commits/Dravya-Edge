@@ -14,7 +14,17 @@ WATCHLIST = [
     "NFLX",
     "CRWD",
     "SMCI",
-    "SPCX"
+    "SPCX",
+    "SMH",
+    "ARM",
+    "TSM",
+    "INTC",
+    "AMAT",
+    "LRCX",
+    "MRVL",
+    "ORCL",
+    "PANW",
+    "SOXL"
 ]
 
 
