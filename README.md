@@ -64,13 +64,14 @@ TELEGRAM_MAX_SPREAD_PCT = "10"
 TELEGRAM_MAX_MORNING_ENTRY_ALERTS = "2"
 TELEGRAM_MAX_MIDDAY_ENTRY_ALERTS = "1"
 TELEGRAM_MAX_AFTERNOON_ENTRY_ALERTS = "1"
+TELEGRAM_EXIT_PRICE_MISMATCH_PCT = "0.05"
 
 [telegram]
 bot_token = "YOUR_BOT_TOKEN_FROM_BOTFATHER"
 chat_id = "YOUR_TELEGRAM_CHAT_ID"
 ```
 
-The scanner sends entry alerts only for high-conviction `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART` option setups that are not marked unaffordable and are within the configured top-candidate limit. Entry alerts are scored after the full scan is ranked, then attempted strongest-first in the same scan; the system does not wait for a later time bucket to compare future candidates. The default entry buckets are max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 A+ style alert from 13:30-14:45 ET, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect the daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and no-late-entry cutoff. Exit alerts send when scanner-managed trades close on stop, target, trailing/invalidation logic, or when paper trades are closed manually/automatically from the dashboard. Partial-profit scanner events send a one-time `PARTIAL EXIT ALERT`. Sent alert keys are stored in `app/state/telegram_alert_state.json`, which is ignored by Git.
+The scanner sends entry alerts only for high-conviction `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART` option setups that are not marked unaffordable and are within the configured top-candidate limit. Entry alerts are scored after the full scan is ranked, then attempted strongest-first in the same scan; the system does not wait for a later time bucket to compare future candidates. The default entry buckets are max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 A+ style alert from 13:30-14:45 ET, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect the daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and no-late-entry cutoff. Exit alerts send when scanner-managed trades close on stop, target, trailing/invalidation logic, or when paper trades are closed manually/automatically from the dashboard. Exit alerts are blocked if the supplied current underlying price differs from the same-symbol expected close by more than `TELEGRAM_EXIT_PRICE_MISMATCH_PCT`. Partial-profit scanner events send a one-time `PARTIAL EXIT ALERT`. Sent alert keys are stored in `app/state/telegram_alert_state.json`, which is ignored by Git.
 
 ## Validate
 

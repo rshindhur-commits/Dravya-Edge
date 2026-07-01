@@ -62,6 +62,14 @@ def _float_setting(name, default):
         return default
 
 
+def _exit_price_mismatch_limit():
+
+    return _float_setting(
+        "TELEGRAM_EXIT_PRICE_MISMATCH_PCT",
+        0.05
+    )
+
+
 def _float_value(value, default=0.0):
 
     try:
@@ -572,7 +580,9 @@ def build_trade_exit_alert_message(
     pnl_pct=None,
     r_multiple=None,
     outcome=None,
-    event_type="EXIT"
+    event_type="EXIT",
+    expected_underlying_price=None,
+    price_source=None
 ):
 
     option_ticker = _fmt(
@@ -593,6 +603,8 @@ def build_trade_exit_alert_message(
         f"Contract: {option_ticker}",
         f"Entry: {entry_price}",
         f"Current: {_fmt(current_price)}",
+        f"Expected Same-Symbol Close: {_fmt(expected_underlying_price)}",
+        f"Price Source: {_fmt(price_source)}",
         f"Option Entry Mid: {option_entry_mid}",
         f"Option Current Mid: {_fmt(option_current_mid)}",
         f"P/L %: {_fmt(pnl_pct)}",
@@ -613,7 +625,10 @@ def maybe_send_trade_exit_alert(
     r_multiple=None,
     outcome=None,
     event_type="EXIT",
-    event_timestamp=None
+    event_timestamp=None,
+    expected_underlying_price=None,
+    price_source=None,
+    scanner_row_symbol=None
 ):
 
     if not telegram_alerts_enabled():
@@ -629,6 +644,43 @@ def maybe_send_trade_exit_alert(
         or trade.get("ticker")
         or "NO_CONTRACT"
     )
+
+    trade_symbol = trade.get("symbol") or symbol
+
+    if scanner_row_symbol and str(scanner_row_symbol) != str(symbol):
+
+        return {
+            "sent": False,
+            "reason": "SCANNER_ROW_SYMBOL_MISMATCH",
+            "trade_symbol": trade_symbol,
+            "scanner_row_symbol": scanner_row_symbol
+        }
+
+    expected_price = _float_value(
+        expected_underlying_price,
+        None
+    )
+    observed_price = _float_value(
+        current_price,
+        None
+    )
+
+    if expected_price and observed_price:
+
+        mismatch_pct = abs(observed_price - expected_price) / expected_price
+
+        if mismatch_pct > _exit_price_mismatch_limit():
+
+            return {
+                "sent": False,
+                "reason": "UNDERLYING_PRICE_MISMATCH",
+                "symbol": symbol,
+                "current_price": observed_price,
+                "expected_underlying_price": expected_price,
+                "mismatch_pct": round(mismatch_pct, 4),
+                "price_source": price_source
+            }
+
     event_key_part = event_timestamp or exit_reason or event_type
     alert_key = "_".join([
         str(symbol),
@@ -654,7 +706,9 @@ def maybe_send_trade_exit_alert(
         pnl_pct=pnl_pct,
         r_multiple=r_multiple,
         outcome=outcome,
-        event_type=event_type
+        event_type=event_type,
+        expected_underlying_price=expected_underlying_price,
+        price_source=price_source
     )
 
     send_telegram_alert(message)
@@ -672,7 +726,11 @@ def maybe_send_trade_exit_alert(
             "option_ticker": option_ticker,
             "event_type": event_type,
             "exit_reason": exit_reason,
-            "outcome": outcome
+            "outcome": outcome,
+            "current_price": current_price,
+            "expected_underlying_price": expected_underlying_price,
+            "price_source": price_source,
+            "scanner_row_symbol": scanner_row_symbol
         }
     )
 
