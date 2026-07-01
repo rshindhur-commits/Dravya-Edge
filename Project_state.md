@@ -239,6 +239,22 @@ Known environment variables used by the code:
 - `OPTION_MIN_AFFORDABLE_DELTA`
 - `OPTION_SHOW_BEST_QUALITY_CONTRACT`
 - `OPTION_SHOW_AFFORDABLE_ALTERNATE`
+- `TELEGRAM_ALERTS_ENABLED`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `TELEGRAM_MAX_ENTRY_ALERTS_PER_DAY`
+- `TELEGRAM_MAX_ACTIVE_ALERTED_TRADES`
+- `TELEGRAM_ENTRY_COOLDOWN_MINUTES`
+- `TELEGRAM_TOP_CANDIDATE_LIMIT`
+- `TELEGRAM_MIN_ENTRY_ALERT_SCORE`
+- `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE`
+- `TELEGRAM_AFTERNOON_MIN_ENTRY_ALERT_SCORE`
+- `TELEGRAM_MIN_OPTION_QUALITY_SCORE`
+- `TELEGRAM_MIN_RR`
+- `TELEGRAM_MAX_SPREAD_PCT`
+- `TELEGRAM_MAX_MORNING_ENTRY_ALERTS`
+- `TELEGRAM_MAX_MIDDAY_ENTRY_ALERTS`
+- `TELEGRAM_MAX_AFTERNOON_ENTRY_ALERTS`
 
 ## Current Operating Mode
 
@@ -247,6 +263,10 @@ Known environment variables used by the code:
 - Intended market-hours AI mode is `ENABLE_AI_SUMMARY=false` and `SCANNER_AI_SUMMARY_ENABLED=false`; use dashboard rules only.
 - Runtime settings load `.env` with override enabled so local config changes, including `ENABLE_AI_SUMMARY=false`, win over stale process variables after restart.
 - Streamlit Cloud must be configured through Streamlit Secrets; local `.env` is not automatically available in deployed Streamlit. The dashboard syncs Streamlit Secrets into env before scanner imports and shows non-sensitive sidebar key status.
+- Telegram alerts are opt-in with `TELEGRAM_ALERTS_ENABLED=true`. Bot credentials should be stored in Streamlit Secrets under `[telegram]` as `bot_token` and `chat_id`, or in local ignored env vars for development. Real bot tokens must not be committed.
+- Telegram sends entry alerts for high-conviction actionable/reviewable option setups, full exit alerts for scanner-managed and paper-trade closes, and one-time partial-profit alerts when scanner trade management reaches the partial threshold.
+- Telegram entry alerts are intentionally tight: defaults are max 3 entry alerts per day, max 3 active alerted trades, 60-minute same-symbol/setup cooldown, and only top 1-3 bullish/bearish candidates. Entry alerts are dispatched after the full scanner dataframe is ranked, sorted by alert score, and attempted immediately in that scan. Time buckets are caps, not delays: max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 from 13:30-14:45 ET with a higher score threshold, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and the no-late-entry cutoff. Watchlist-only rows, premarket/opening-range rows, no-trade reasons, stale/delayed quotes, expensive contracts, and trailing-stop updates remain dashboard/logging only.
+- Telegram duplicate protection stores sent alert keys in `app/state/telegram_alert_state.json`, which is ignored by Git.
 - Premarket real-time mode surfaces strong candidates as `PREMARKET_WATCH` but does not mark them execution-ready. The scanner waits for opening-range confirmation from 9:30-9:45 ET and only allows `ENTER`/`ENTER_PAPER` after 9:45 ET when all gates pass.
 - Delayed-data mode remains acceptable for scanning and paper trading with manual confirmation. Real-time mode blocks truly stale stock aggregates and missing/stale/delayed option quotes.
 - Current option gate defaults: minimum volume 100, minimum open interest 500, max spread 10%, minimum option quality score 65, delayed quote threshold 10 minutes, stale quote threshold 30 minutes, 0DTE disabled, 1DTE disabled.
@@ -542,6 +562,7 @@ When starting a fresh GPT session:
 - Added contract cost, risk-at-stop, current capital, max allowed contract cost, affordability status, and best-quality/affordable alternate fields to scanner output and dashboard context.
 - `HARD` affordability mode blocks expensive contracts from actionable statuses and marks high-quality expensive setups as `QUALITY_BUT_TOO_EXPENSIVE`.
 - Dashboard suggested-trade sync, Paper Trade Setup, and auto-paper entry gates now require `Affordable=True` when affordability fields are present.
+- Added opt-in Telegram entry, exit, and partial-profit alerts for high-conviction actionable/reviewable option setups and managed trade exits, with Streamlit Secrets/env credential loading and JSON duplicate protection.
 
 2026-06-30
 - Added session-aware scanner action gating: premarket candidates surface as `PREMARKET_WATCH`, 9:30-9:45 ET candidates wait as `OPENING_RANGE_CONFIRMATION`, and `ENTER`/`ENTER_PAPER` is only allowed after 9:45 ET when all gates pass.

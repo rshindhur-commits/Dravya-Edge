@@ -90,6 +90,11 @@ from app.analytics.performance_summary import (
 from app.analytics.replay_engine import (
     replay_trade_projection
 )
+from app.alerts.telegram_alerts import (
+    calculate_entry_alert_score,
+    maybe_send_scanner_entry_alert,
+    maybe_send_trade_exit_alert
+)
 from app.utils.runtime_logging import debug_print
 
 console = Console(width=120)
@@ -1657,6 +1662,144 @@ def build_candidate_trade_plan(
     }
 
 
+def _row_bool(value):
+
+    if value is None:
+
+        return False
+
+    if isinstance(value, bool):
+
+        return value
+
+    return str(value).strip().lower() in [
+        "true",
+        "1",
+        "yes"
+    ]
+
+
+def _row_float(row, column, default=0):
+
+    try:
+
+        value = row.get(column)
+
+        if pd.isna(value):
+
+            return default
+
+        return float(value)
+
+    except Exception:
+
+        return default
+
+
+def _dispatch_telegram_entry_alerts(df_results):
+
+    if df_results.empty:
+
+        return
+
+    rows = []
+
+    for _, row in df_results.iterrows():
+
+        option_quality_score = _row_float(
+            row,
+            "Option Quality Score"
+        )
+        option_spread_pct = _row_float(
+            row,
+            "Option Spread %",
+            None
+        )
+        risk_reward = _row_float(
+            row,
+            "Risk Reward"
+        )
+        alert_score = calculate_entry_alert_score(
+            setup_score=_row_float(row, "15m Score"),
+            alignment_score=_row_float(row, "Alignment Score"),
+            rs_rank_score=_row_float(row, "RS Rank Score"),
+            option_quality_score=option_quality_score,
+            risk_reward=risk_reward,
+            relative_volume=_row_float(row, "Relative Volume"),
+            option_spread_pct=option_spread_pct
+        )
+        rows.append(
+            (
+                alert_score,
+                row
+            )
+        )
+
+    for alert_score, row in sorted(
+        rows,
+        key=lambda item: item[0],
+        reverse=True
+    ):
+
+        option_contract = {
+            "ticker": row.get("Option Ticker"),
+            "type": row.get("Candidate Direction"),
+            "contract_cost": row.get("Option Contract Cost"),
+            "risk_at_stop": row.get("Option Risk At Stop"),
+            "affordability_status": row.get("Affordability Status"),
+            "affordable": row.get("Affordable"),
+            "spread_pct": row.get("Option Spread %"),
+            "option_quality_score": row.get("Option Quality Score"),
+            "quote_freshness": row.get("Option Quote Freshness")
+        }
+
+        try:
+
+            telegram_result = maybe_send_scanner_entry_alert(
+                symbol=row.get("Symbol"),
+                final_signal=row.get("Final Signal"),
+                action_decision={
+                    "action_status": row.get("Action Status")
+                },
+                entry_setup={
+                    "entry_type": row.get("Entry")
+                },
+                risk_setup={
+                    "risk_reward": row.get("Risk Reward")
+                },
+                option_contract=option_contract,
+                latest_price=row.get("Price"),
+                bar_timestamp=(
+                    row.get("Data Timestamp ET")
+                    or row.get("Current ET")
+                ),
+                next_condition=row.get("Next Condition"),
+                top_candidate=row.get("Top Candidate"),
+                option_quote_freshness=row.get("Option Quote Freshness"),
+                option_quality_score=row.get("Option Quality Score"),
+                option_spread_pct=row.get("Option Spread %"),
+                event_blocked=_row_bool(row.get("Event Blocked")),
+                regime_blocked=_row_bool(row.get("Regime Blocked")),
+                setup_score=row.get("15m Score"),
+                alignment_score=row.get("Alignment Score"),
+                rs_rank_score=row.get("RS Rank Score"),
+                relative_volume=row.get("Relative Volume")
+            )
+            debug_print(
+                f"[TELEGRAM ENTRY ALERT] {row.get('Symbol')} "
+                f"score={alert_score} "
+                f"sent={telegram_result.get('sent')} "
+                f"reason={telegram_result.get('reason')}"
+            )
+
+        except Exception as e:
+
+            print(
+                f"[TELEGRAM ENTRY ALERT ERROR] "
+                f"{row.get('Symbol')}: {e}"
+            )
+
+
 def run_scanner():   
 
     validate_runtime_settings()
@@ -2269,6 +2412,40 @@ def run_scanner():
                     and exit_setup["exit_signal"]
                 ):
 
+                    try:
+
+                        telegram_exit_result = maybe_send_trade_exit_alert(
+                            symbol=symbol,
+                            trade=active_trade,
+                            exit_reason=exit_setup.get("exit_reason"),
+                            current_price=latest_price,
+                            option_current_mid=(
+                                active_option_snapshot.get("mid_price")
+                                if active_option_snapshot
+                                else active_trade.get("option_current_mid")
+                            ),
+                            pnl_pct=active_option_pl.get("option_pl_pct"),
+                            r_multiple=exit_setup.get("rr_progress"),
+                            outcome="EXIT_SIGNAL",
+                            event_type="EXIT",
+                            event_timestamp=(
+                                df_15m.index[-1].isoformat()
+                                if df_15m is not None and not df_15m.empty
+                                else None
+                            )
+                        )
+                        debug_print(
+                            f"[TELEGRAM EXIT ALERT] {symbol} "
+                            f"sent={telegram_exit_result.get('sent')} "
+                            f"reason={telegram_exit_result.get('reason')}"
+                        )
+
+                    except Exception as e:
+
+                        print(
+                            f"[TELEGRAM EXIT ALERT ERROR] {symbol}: {e}"
+                        )
+
                     close_trade(symbol)
 
                     trade_management["trade_action"] = "EXIT"
@@ -2278,6 +2455,40 @@ def run_scanner():
                 # =====================================
 
                 else:
+
+                    if exit_setup.get("trade_action") == "PARTIAL_PROFIT":
+
+                        try:
+
+                            telegram_partial_result = maybe_send_trade_exit_alert(
+                                symbol=symbol,
+                                trade=active_trade,
+                                exit_reason=exit_setup.get(
+                                    "adjustment_reason",
+                                    "Partial profit threshold reached"
+                                ),
+                                current_price=latest_price,
+                                option_current_mid=(
+                                    active_option_snapshot.get("mid_price")
+                                    if active_option_snapshot
+                                    else active_trade.get("option_current_mid")
+                                ),
+                                pnl_pct=active_option_pl.get("option_pl_pct"),
+                                r_multiple=exit_setup.get("rr_progress"),
+                                outcome="PARTIAL_PROFIT",
+                                event_type="PARTIAL_EXIT"
+                            )
+                            debug_print(
+                                f"[TELEGRAM PARTIAL ALERT] {symbol} "
+                                f"sent={telegram_partial_result.get('sent')} "
+                                f"reason={telegram_partial_result.get('reason')}"
+                            )
+
+                        except Exception as e:
+
+                            print(
+                                f"[TELEGRAM PARTIAL ALERT ERROR] {symbol}: {e}"
+                            )
 
                     update_trade(
 
@@ -4217,6 +4428,10 @@ def run_scanner():
 
     df_results = pd.DataFrame(results)
     df_results = _add_relative_strength_rankings(
+        df_results
+    )
+
+    _dispatch_telegram_entry_alerts(
         df_results
     )
 

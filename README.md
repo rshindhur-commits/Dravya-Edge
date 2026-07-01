@@ -45,6 +45,33 @@ OPTION_MIN_AFFORDABLE_DELTA=0.25
 
 Use `OPTION_CAPITAL_PROFILE=GROWTH_ACCOUNT` as buying power grows, or `OPTION_AFFORDABILITY_MODE=OFF` with `OPTION_CAPITAL_PROFILE=BEST_QUALITY` to return to the original best-quality-only behavior.
 
+## Telegram Alerts
+
+Telegram entry and exit alerts are opt-in and use duplicate protection so dashboard/scanner refreshes do not resend the same signal. Keep real bot tokens in local `.streamlit/secrets.toml` or Streamlit Cloud Secrets; do not commit them.
+
+```toml
+TELEGRAM_ALERTS_ENABLED = "true"
+TELEGRAM_MAX_ENTRY_ALERTS_PER_DAY = "3"
+TELEGRAM_MAX_ACTIVE_ALERTED_TRADES = "3"
+TELEGRAM_ENTRY_COOLDOWN_MINUTES = "60"
+TELEGRAM_TOP_CANDIDATE_LIMIT = "3"
+TELEGRAM_MIN_ENTRY_ALERT_SCORE = "80"
+TELEGRAM_INSTANT_ENTRY_ALERT_SCORE = "88"
+TELEGRAM_AFTERNOON_MIN_ENTRY_ALERT_SCORE = "90"
+TELEGRAM_MIN_OPTION_QUALITY_SCORE = "65"
+TELEGRAM_MIN_RR = "1.8"
+TELEGRAM_MAX_SPREAD_PCT = "10"
+TELEGRAM_MAX_MORNING_ENTRY_ALERTS = "2"
+TELEGRAM_MAX_MIDDAY_ENTRY_ALERTS = "1"
+TELEGRAM_MAX_AFTERNOON_ENTRY_ALERTS = "1"
+
+[telegram]
+bot_token = "YOUR_BOT_TOKEN_FROM_BOTFATHER"
+chat_id = "YOUR_TELEGRAM_CHAT_ID"
+```
+
+The scanner sends entry alerts only for high-conviction `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART` option setups that are not marked unaffordable and are within the configured top-candidate limit. Entry alerts are scored after the full scan is ranked, then attempted strongest-first in the same scan; the system does not wait for a later time bucket to compare future candidates. The default entry buckets are max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 A+ style alert from 13:30-14:45 ET, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect the daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and no-late-entry cutoff. Exit alerts send when scanner-managed trades close on stop, target, trailing/invalidation logic, or when paper trades are closed manually/automatically from the dashboard. Partial-profit scanner events send a one-time `PARTIAL EXIT ALERT`. Sent alert keys are stored in `app/state/telegram_alert_state.json`, which is ignored by Git.
+
 ## Validate
 
 ```powershell
