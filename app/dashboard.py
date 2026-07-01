@@ -1543,10 +1543,19 @@ def _scanner_context_from_row(row):
 def _open_paper_trade_from_row(row):
 
     from app.state.paper_trade_manager import open_paper_trade
+    from app.alerts.telegram_alerts import maybe_send_paper_entry_alert
+
+    try:
+
+        from app.state.suggested_trade_manager import promote_suggestion_to_paper_trade
+
+    except Exception:
+
+        promote_suggestion_to_paper_trade = None
 
     scanner_context = _scanner_context_from_row(row)
 
-    open_paper_trade(
+    opened_trade = open_paper_trade(
         symbol=row.get("Symbol"),
         direction=row.get("Candidate Direction"),
         entry_price=row.get("Candidate Entry Price"),
@@ -1557,6 +1566,16 @@ def _open_paper_trade_from_row(row):
         option_bid=row.get("Option Bid"),
         option_ask=row.get("Option Ask"),
         scanner_context=scanner_context
+    )
+
+    if promote_suggestion_to_paper_trade:
+
+        promote_suggestion_to_paper_trade(row.get("Symbol"))
+
+    maybe_send_paper_entry_alert(
+        opened_trade,
+        scanner_context,
+        reason="Manual dashboard paper entry"
     )
 
 
@@ -2010,6 +2029,15 @@ def _run_auto_paper_entries(df, controls):
             continue
 
         from app.state.paper_trade_manager import open_paper_trade
+        from app.alerts.telegram_alerts import maybe_send_paper_entry_alert
+
+        try:
+
+            from app.state.suggested_trade_manager import promote_suggestion_to_paper_trade
+
+        except Exception:
+
+            promote_suggestion_to_paper_trade = None
 
         scanner_context = _scanner_context_from_row(row)
         spread_note = (
@@ -2032,6 +2060,23 @@ def _run_auto_paper_entries(df, controls):
         )
         paper_trades[row.get("Symbol")] = opened_trade
         opened.append(row.get("Symbol"))
+
+        if promote_suggestion_to_paper_trade:
+
+            promote_suggestion_to_paper_trade(row.get("Symbol"))
+
+        telegram_entry_result = maybe_send_paper_entry_alert(
+            opened_trade,
+            scanner_context,
+            reason=f"Auto paper entry: {reason}"
+        )
+
+        _record_auto_paper_decision(
+            row.get("Symbol"),
+            "TELEGRAM_ENTRY_ALERT",
+            telegram_entry_result.get("reason"),
+            row
+        )
 
         _record_auto_paper_decision(
             row.get("Symbol"),

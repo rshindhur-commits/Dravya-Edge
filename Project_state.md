@@ -240,6 +240,8 @@ Known environment variables used by the code:
 - `OPTION_SHOW_BEST_QUALITY_CONTRACT`
 - `OPTION_SHOW_AFFORDABLE_ALTERNATE`
 - `TELEGRAM_ALERTS_ENABLED`
+- `TELEGRAM_ENTRY_ALERTS_ENABLED`
+- `TELEGRAM_EXIT_ALERTS_ENABLED`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - `TELEGRAM_MAX_ENTRY_ALERTS_PER_DAY`
@@ -252,6 +254,7 @@ Known environment variables used by the code:
 - `TELEGRAM_MIN_OPTION_QUALITY_SCORE`
 - `TELEGRAM_MIN_RR`
 - `TELEGRAM_MAX_SPREAD_PCT`
+- `TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE`
 - `TELEGRAM_MAX_MORNING_ENTRY_ALERTS`
 - `TELEGRAM_MAX_MIDDAY_ENTRY_ALERTS`
 - `TELEGRAM_MAX_AFTERNOON_ENTRY_ALERTS`
@@ -265,8 +268,9 @@ Known environment variables used by the code:
 - Runtime settings load `.env` with override enabled so local config changes, including `ENABLE_AI_SUMMARY=false`, win over stale process variables after restart.
 - Streamlit Cloud must be configured through Streamlit Secrets; local `.env` is not automatically available in deployed Streamlit. The dashboard syncs Streamlit Secrets into env before scanner imports and shows non-sensitive sidebar key status.
 - Telegram alerts are opt-in with `TELEGRAM_ALERTS_ENABLED=true`. Bot credentials should be stored in Streamlit Secrets under `[telegram]` as `bot_token` and `chat_id`, or in local ignored env vars for development. Real bot tokens must not be committed.
-- Telegram sends entry alerts for high-conviction actionable/reviewable option setups, full exit alerts for scanner-managed and paper-trade closes, and one-time partial-profit alerts when scanner trade management reaches the partial threshold.
-- Telegram exit alerts validate the current underlying price against the same-symbol expected close before sending. If the mismatch exceeds `TELEGRAM_EXIT_PRICE_MISMATCH_PCT` default 5%, the alert is blocked as `UNDERLYING_PRICE_MISMATCH`.
+- Telegram sends entry alerts for high-conviction actionable/reviewable scanner setups, dashboard paper-entry opens, full exit alerts for scanner-managed and paper-trade closes, and one-time partial-profit alerts when scanner trade management reaches the partial threshold.
+- Dashboard paper-entry alerts fire at the moment `open_paper_trade()` succeeds in the dashboard auto/manual paper-entry path. These alerts do not require `Top Candidate`; they require realtime-ready status, affordable contract, setup >= `TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE`, RR >= `TELEGRAM_MIN_RR`, fresh quote, option quality >= `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, acceptable spread, and no event/regime block.
+- Telegram exit alerts resolve the current underlying price from the freshest available same-symbol source in priority order: `latest_quote`, `df_5m_latest_close`, then `df_15m_latest_close`. They validate that resolved price against the same-symbol expected close before sending. If the mismatch exceeds `TELEGRAM_EXIT_PRICE_MISMATCH_PCT` default 3%, the alert is blocked as `UNDERLYING_PRICE_MISMATCH`.
 - Telegram entry alerts are intentionally tight: defaults are max 3 entry alerts per day, max 3 active alerted trades, 60-minute same-symbol/setup cooldown, and only top 1-3 bullish/bearish candidates. Entry alerts are dispatched after the full scanner dataframe is ranked, sorted by alert score, and attempted immediately in that scan. Time buckets are caps, not delays: max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 from 13:30-14:45 ET with a higher score threshold, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and the no-late-entry cutoff. Watchlist-only rows, premarket/opening-range rows, no-trade reasons, stale/delayed quotes, expensive contracts, and trailing-stop updates remain dashboard/logging only.
 - Telegram duplicate protection stores sent alert keys in `app/state/telegram_alert_state.json`, which is ignored by Git.
 - Premarket real-time mode surfaces strong candidates as `PREMARKET_WATCH` but does not mark them execution-ready. The scanner waits for opening-range confirmation from 9:30-9:45 ET and only allows `ENTER`/`ENTER_PAPER` after 9:45 ET when all gates pass.

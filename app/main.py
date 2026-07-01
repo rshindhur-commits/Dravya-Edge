@@ -2322,10 +2322,18 @@ def run_scanner():
             }
 
             current_symbol_close = None
+            current_symbol_price_source = "df_15m_latest_close"
 
             try:
 
-                if df_15m is not None and not df_15m.empty:
+                if df_5m is not None and not df_5m.empty:
+
+                    current_symbol_close = float(
+                        df_5m["Close"].iloc[-1]
+                    )
+                    current_symbol_price_source = "df_5m_latest_close"
+
+                elif df_15m is not None and not df_15m.empty:
 
                     current_symbol_close = float(
                         df_15m["Close"].iloc[-1]
@@ -2448,8 +2456,20 @@ def run_scanner():
                                 else None
                             ),
                             expected_underlying_price=current_symbol_close,
-                            price_source="df_15m_latest_close",
-                            scanner_row_symbol=symbol
+                            price_source=current_symbol_price_source,
+                            scanner_row_symbol=symbol,
+                            candidate_prices={
+                                "df_5m_latest_close": (
+                                    float(df_5m["Close"].iloc[-1])
+                                    if df_5m is not None and not df_5m.empty
+                                    else None
+                                ),
+                                "df_15m_latest_close": (
+                                    float(df_15m["Close"].iloc[-1])
+                                    if df_15m is not None and not df_15m.empty
+                                    else None
+                                )
+                            }
                         )
                         debug_print(
                             f"[TELEGRAM EXIT ALERT] {symbol} "
@@ -2495,8 +2515,20 @@ def run_scanner():
                                 outcome="PARTIAL_PROFIT",
                                 event_type="PARTIAL_EXIT",
                                 expected_underlying_price=current_symbol_close,
-                                price_source="df_15m_latest_close",
-                                scanner_row_symbol=symbol
+                                price_source=current_symbol_price_source,
+                                scanner_row_symbol=symbol,
+                                candidate_prices={
+                                    "df_5m_latest_close": (
+                                        float(df_5m["Close"].iloc[-1])
+                                        if df_5m is not None and not df_5m.empty
+                                        else None
+                                    ),
+                                    "df_15m_latest_close": (
+                                        float(df_15m["Close"].iloc[-1])
+                                        if df_15m is not None and not df_15m.empty
+                                        else None
+                                    )
+                                }
                             )
                             debug_print(
                                 f"[TELEGRAM PARTIAL ALERT] {symbol} "
