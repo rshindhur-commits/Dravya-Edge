@@ -66,8 +66,55 @@ def _exit_price_mismatch_limit():
 
     return _float_setting(
         "TELEGRAM_EXIT_PRICE_MISMATCH_PCT",
-        0.05
+        0.03
     )
+
+
+def resolve_exit_price_context(
+    candidate_prices=None,
+    fallback_current_price=None,
+    fallback_price_source=None
+):
+
+    candidate_prices = candidate_prices or {}
+
+    for source_name in (
+        "latest_quote",
+        "df_5m_latest_close",
+        "df_15m_latest_close"
+    ):
+
+        price_value = _float_value(
+            candidate_prices.get(source_name),
+            None
+        )
+
+        if price_value is not None:
+
+            return {
+                "current_price": price_value,
+                "price_source": source_name,
+                "expected_underlying_price": price_value
+            }
+
+    fallback_price = _float_value(
+        fallback_current_price,
+        None
+    )
+
+    if fallback_price is not None:
+
+        return {
+            "current_price": fallback_price,
+            "price_source": fallback_price_source or "provided_current_price",
+            "expected_underlying_price": fallback_price
+        }
+
+    return {
+        "current_price": None,
+        "price_source": fallback_price_source or "unknown",
+        "expected_underlying_price": None
+    }
 
 
 def _float_value(value, default=0.0):
@@ -175,6 +222,37 @@ def telegram_alerts_enabled():
                 )
             )
         )
+    )
+
+
+def _telegram_alert_type_enabled(name):
+
+    return telegram_alerts_enabled() and _bool_value(
+        os.getenv(
+            name,
+            _streamlit_secret(
+                [name],
+                _streamlit_secret(
+                    ["telegram", name.lower()],
+                    True
+                )
+            )
+        ),
+        True
+    )
+
+
+def telegram_entry_alerts_enabled():
+
+    return _telegram_alert_type_enabled(
+        "TELEGRAM_ENTRY_ALERTS_ENABLED"
+    )
+
+
+def telegram_exit_alerts_enabled():
+
+    return _telegram_alert_type_enabled(
+        "TELEGRAM_EXIT_ALERTS_ENABLED"
     )
 
 
@@ -571,6 +649,199 @@ def build_scanner_entry_alert_message(
     ])
 
 
+def build_paper_entry_alert_message(trade, scanner_context, reason=None):
+
+    scanner_context = scanner_context or {}
+    symbol = trade.get("symbol") or scanner_context.get("Symbol")
+    direction = trade.get("direction") or scanner_context.get("Candidate Direction")
+    option_ticker = trade.get("option_ticker") or scanner_context.get("Option Ticker")
+    option_mid = (
+        trade.get("option_mid")
+        or scanner_context.get("Option Mid Price")
+        or scanner_context.get("Option Midpoint")
+    )
+
+    return "\n".join([
+        "<b>ENTRY ALERT</b>",
+        f"Ticker: {_fmt(symbol)}",
+        f"Direction: {_fmt(direction)}",
+        f"Contract: {_fmt(option_ticker)}",
+        f"Entry: {_fmt(trade.get('entry_price'))}",
+        f"Stop: {_fmt(trade.get('stop_loss'))}",
+        f"Target: {_fmt(trade.get('take_profit'))}",
+        f"Setup: {_fmt(scanner_context.get('Setup Grade'))} / {_fmt(scanner_context.get('Setup %'))}",
+        f"RR: {_fmt(trade.get('planned_rr') or scanner_context.get('Candidate RR') or scanner_context.get('RR'))}",
+        f"Option Mid: {_fmt(option_mid)}",
+        f"Contract Cost: ${_fmt(scanner_context.get('Option Contract Cost'))}",
+        f"Quote: {_fmt(scanner_context.get('Option Quote Freshness'))}",
+        f"Action: {_fmt(scanner_context.get('Action Status'))}",
+        f"Reason: {_fmt(reason or scanner_context.get('Action Reason'))}",
+        "Skip if broker bid/ask, spread, or chart confirmation disagrees."
+    ])
+
+
+def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
+
+    if not telegram_entry_alerts_enabled():
+
+        return {
+            "sent": False,
+            "reason": "TELEGRAM_ENTRY_ALERTS_DISABLED"
+        }
+
+    trade = trade or {}
+    scanner_context = scanner_context or trade.get("scanner_context") or {}
+    symbol = trade.get("symbol") or scanner_context.get("Symbol")
+    direction = trade.get("direction") or scanner_context.get("Candidate Direction")
+    option_ticker = trade.get("option_ticker") or scanner_context.get("Option Ticker") or "NO_CONTRACT"
+    action_status = str(scanner_context.get("Action Status") or "").upper()
+
+    if action_status not in [
+        "ENTER",
+        "ENTER_PAPER",
+        "REVIEW_TV_CHART"
+    ]:
+
+        return {
+            "sent": False,
+            "reason": "ACTION_NOT_ALERTABLE"
+        }
+
+    if not _bool_value(scanner_context.get("Realtime Ready")):
+
+        return {
+            "sent": False,
+            "reason": "REALTIME_NOT_READY"
+        }
+
+    if "Affordable" in scanner_context and not _bool_value(
+        scanner_context.get("Affordable")
+    ):
+
+        return {
+            "sent": False,
+            "reason": scanner_context.get(
+                "Affordability Status",
+                "OPTION_NOT_AFFORDABLE"
+            )
+        }
+
+    policy = _entry_alert_policy()
+    setup_percent = _float_value(scanner_context.get("Setup %"))
+    min_setup = _float_setting(
+        "TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE",
+        70.0
+    )
+
+    if setup_percent < min_setup:
+
+        return {
+            "sent": False,
+            "reason": "SETUP_BELOW_ENTRY_ALERT_MIN"
+        }
+
+    risk_reward = _float_value(
+        scanner_context.get("Candidate RR"),
+        _float_value(scanner_context.get("RR"))
+    )
+
+    if risk_reward < policy["min_rr"]:
+
+        return {
+            "sent": False,
+            "reason": "RR_BELOW_ALERT_MIN"
+        }
+
+    if scanner_context.get("Option Quote Freshness") != "LIVE_QUOTE":
+
+        return {
+            "sent": False,
+            "reason": "OPTION_QUOTE_NOT_FRESH"
+        }
+
+    if _float_value(scanner_context.get("Option Quality Score")) < policy["min_option_quality"]:
+
+        return {
+            "sent": False,
+            "reason": "OPTION_QUALITY_BELOW_ALERT_MIN"
+        }
+
+    spread_pct = _float_value(
+        scanner_context.get("Option Spread %"),
+        None
+    )
+
+    if spread_pct is not None and spread_pct > policy["max_spread_pct"]:
+
+        return {
+            "sent": False,
+            "reason": "SPREAD_ABOVE_ALERT_MAX"
+        }
+
+    if _bool_value(scanner_context.get("Event Blocked")):
+
+        return {
+            "sent": False,
+            "reason": "EVENT_BLOCKED"
+        }
+
+    if _bool_value(scanner_context.get("Regime Blocked")):
+
+        return {
+            "sent": False,
+            "reason": "REGIME_BLOCKED"
+        }
+
+    opened_at = trade.get("opened_at") or datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    opened_date = str(opened_at).split(" ")[0]
+    alert_key = "_".join([
+        str(symbol),
+        str(direction),
+        str(option_ticker),
+        "PAPER_ENTRY",
+        opened_date
+    ])
+
+    if alert_was_sent(alert_key):
+
+        return {
+            "sent": False,
+            "reason": "DUPLICATE_ALERT",
+            "alert_key": alert_key
+        }
+
+    message = build_paper_entry_alert_message(
+        trade,
+        scanner_context,
+        reason=reason
+    )
+    send_telegram_alert(message)
+    mark_alert_sent(
+        alert_key,
+        {
+            "symbol": symbol,
+            "option_ticker": option_ticker,
+            "event_type": ENTRY_EVENT_TYPE,
+            "source": "paper_entry",
+            "action_status": action_status,
+            "setup_key": "_".join([
+                str(symbol),
+                str(direction),
+                str(trade.get("entry_type"))
+            ]),
+            "closed": False
+        }
+    )
+
+    return {
+        "sent": True,
+        "reason": "SENT",
+        "alert_key": alert_key
+    }
+
+
 def build_trade_exit_alert_message(
     symbol,
     trade,
@@ -628,14 +899,15 @@ def maybe_send_trade_exit_alert(
     event_timestamp=None,
     expected_underlying_price=None,
     price_source=None,
-    scanner_row_symbol=None
+    scanner_row_symbol=None,
+    candidate_prices=None
 ):
 
-    if not telegram_alerts_enabled():
+    if not telegram_exit_alerts_enabled():
 
         return {
             "sent": False,
-            "reason": "TELEGRAM_ALERTS_DISABLED"
+            "reason": "TELEGRAM_EXIT_ALERTS_DISABLED"
         }
 
     trade = trade or {}
@@ -656,14 +928,27 @@ def maybe_send_trade_exit_alert(
             "scanner_row_symbol": scanner_row_symbol
         }
 
+    resolved_price_context = resolve_exit_price_context(
+        candidate_prices=candidate_prices,
+        fallback_current_price=current_price,
+        fallback_price_source=price_source
+    )
+
+    observed_price = _float_value(
+        resolved_price_context.get("current_price"),
+        None
+    )
     expected_price = _float_value(
         expected_underlying_price,
         None
     )
-    observed_price = _float_value(
-        current_price,
-        None
-    )
+    if expected_price is None and observed_price is not None:
+
+        expected_price = observed_price
+
+    price_source = resolved_price_context.get("price_source") or price_source
+    current_price = observed_price
+    expected_underlying_price = expected_price
 
     if expected_price and observed_price:
 
@@ -764,11 +1049,11 @@ def maybe_send_scanner_entry_alert(
     relative_volume=0
 ):
 
-    if not telegram_alerts_enabled():
+    if not telegram_entry_alerts_enabled():
 
         return {
             "sent": False,
-            "reason": "TELEGRAM_ALERTS_DISABLED"
+            "reason": "TELEGRAM_ENTRY_ALERTS_DISABLED"
         }
 
     action_status = action_decision.get("action_status")
