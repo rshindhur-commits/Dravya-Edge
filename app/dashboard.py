@@ -4,6 +4,7 @@ import sys
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 import json
+from io import BytesIO
 
 import pandas as pd
 import streamlit as st
@@ -147,6 +148,24 @@ TRADE_COLUMNS = [
     "Option Bid",
     "Option Ask",
     "Option Midpoint",
+    "Option Mid Price",
+    "Option Spread %",
+    "Option Delta",
+    "Option Contract Cost",
+    "Option Risk At Stop",
+    "Current Capital",
+    "Max Allowed Contract Cost",
+    "Preferred Max Contract Cost",
+    "Affordability Status",
+    "Affordable",
+    "Preferred Affordable",
+    "Affordability Mode",
+    "Capital Profile",
+    "Best Quality Option Ticker",
+    "Best Quality Contract Cost",
+    "Best Quality Affordability Status",
+    "Affordable Option Ticker",
+    "Affordable Option Contract Cost",
     "Option Quote Timestamp",
     "Option Quote Timeframe",
     "Option Quote Source",
@@ -450,6 +469,128 @@ def _alternate_option_label(row, prefix):
     return " ".join(parts)
 
 
+def _has_value(value):
+
+    try:
+
+        return not pd.isna(value)
+
+    except Exception:
+
+        return value is not None
+
+
+def _affordability_contract_from_row(row):
+
+    mid = row.get("Option Mid Price")
+
+    if not _has_value(mid):
+
+        mid = row.get("Option Midpoint")
+
+    if not _has_value(mid):
+
+        mid = row.get("Option Mid")
+
+    bid = row.get("Option Bid")
+    ask = row.get("Option Ask")
+
+    if not any(_has_value(value) for value in [mid, bid, ask]):
+
+        return None
+
+    return add_affordability_metrics(
+        {
+            "mid_price": mid,
+            "quote_midpoint": row.get("Option Midpoint"),
+            "bid": bid,
+            "ask": ask,
+            "delta": row.get("Option Delta")
+        }
+    )
+
+
+def _backfill_affordability_columns(df):
+
+    affordability_columns = {
+        "Option Contract Cost": "contract_cost",
+        "Option Risk At Stop": "risk_at_stop",
+        "Current Capital": "current_capital",
+        "Max Allowed Contract Cost": "max_allowed_contract_cost",
+        "Preferred Max Contract Cost": "preferred_max_contract_cost",
+        "Affordability Status": "affordability_status",
+        "Affordable": "affordable",
+        "Preferred Affordable": "preferred_affordable",
+        "Affordability Mode": "affordability_mode",
+        "Capital Profile": "capital_profile"
+    }
+
+    for column in affordability_columns:
+
+        if column not in df.columns:
+
+            df[column] = None
+
+    if "Option Ticker" not in df.columns:
+
+        df["Option Ticker"] = None
+
+    for column in [
+        "Best Quality Option Ticker",
+        "Best Quality Contract Cost",
+        "Best Quality Affordability Status",
+        "Affordable Option Ticker",
+        "Affordable Option Contract Cost"
+    ]:
+
+        if column not in df.columns:
+
+            df[column] = None
+
+    for index, row in df.iterrows():
+
+        contract = _affordability_contract_from_row(row)
+
+        if not contract:
+
+            continue
+
+        for column, key in affordability_columns.items():
+
+            if _has_value(row.get(column)):
+
+                continue
+
+            df.at[index, column] = contract.get(key)
+
+        if not _has_value(row.get("Best Quality Option Ticker")):
+
+            df.at[index, "Best Quality Option Ticker"] = row.get("Option Ticker")
+
+        if not _has_value(row.get("Best Quality Contract Cost")):
+
+            df.at[index, "Best Quality Contract Cost"] = contract.get(
+                "contract_cost"
+            )
+
+        if not _has_value(row.get("Best Quality Affordability Status")):
+
+            df.at[index, "Best Quality Affordability Status"] = contract.get(
+                "affordability_status"
+            )
+
+        if contract.get("affordable") and not _has_value(
+            row.get("Affordable Option Ticker")
+        ):
+
+            df.at[index, "Affordable Option Ticker"] = row.get("Option Ticker")
+            df.at[index, "Affordable Option Contract Cost"] = contract.get(
+                "contract_cost"
+            )
+
+    return df
+
+
 def _load_scanner_output():
 
     if not SCANNER_FILE.exists():
@@ -517,6 +658,7 @@ def _load_scanner_output():
         lambda row: _alternate_option_label(row, "Longer DTE"),
         axis=1
     )
+    df = _backfill_affordability_columns(df)
     df["Trend Phase"] = df["Signal"].apply(_trend_from_signal)
     df["Volume Score"] = df.get("Relative Volume", "N/A")
 
@@ -741,6 +883,42 @@ def _read_download_file(file_path):
     except Exception:
 
         return None
+
+
+def _dataframe_to_xlsx_bytes(df):
+
+    try:
+
+        buffer = BytesIO()
+
+        with pd.ExcelWriter(
+            buffer,
+            engine="openpyxl"
+        ) as writer:
+
+            df.to_excel(
+                writer,
+                index=False
+            )
+
+        return buffer.getvalue()
+
+    except Exception:
+
+        return None
+
+
+def _scanner_output_download_bytes():
+
+    df = _load_scanner_output()
+
+    if df.empty:
+
+        return _read_download_file(SCANNER_FILE)
+
+    data = _dataframe_to_xlsx_bytes(df)
+
+    return data or _read_download_file(SCANNER_FILE)
 
 
 def _load_auto_paper_decision_log():
@@ -1013,9 +1191,15 @@ def _render_download_exports():
 
     for export in exports:
 
-        data = _read_download_file(
-            export["path"]
-        )
+        if export["path"] == SCANNER_FILE:
+
+            data = _scanner_output_download_bytes()
+
+        else:
+
+            data = _read_download_file(
+                export["path"]
+            )
 
         if data is None:
 
