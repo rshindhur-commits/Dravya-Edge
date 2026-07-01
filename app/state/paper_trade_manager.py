@@ -412,4 +412,27 @@ def close_paper_trade(
     save_paper_trades(state)
     _save_paper_trade_telemetry(trade)
 
+    try:
+
+        from app.alerts.telegram_alerts import maybe_send_trade_exit_alert
+
+        maybe_send_trade_exit_alert(
+            symbol=symbol,
+            trade=trade,
+            exit_reason=exit_reason,
+            current_price=close_price,
+            option_current_mid=trade.get("option_mid"),
+            pnl_pct=trade.get("pnl_pct"),
+            r_multiple=trade.get("r_multiple"),
+            outcome=trade.get("outcome"),
+            event_type="EXIT",
+            event_timestamp=trade.get("closed_at")
+        )
+
+    except Exception as e:
+
+        print(
+            f"[PAPER TELEGRAM EXIT ALERT ERROR] {symbol}: {e}"
+        )
+
     return trade
