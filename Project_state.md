@@ -247,6 +247,7 @@ Known environment variables used by the code:
 - `TELEGRAM_MAX_ENTRY_ALERTS_PER_DAY`
 - `TELEGRAM_MAX_ACTIVE_ALERTED_TRADES`
 - `TELEGRAM_ENTRY_COOLDOWN_MINUTES`
+- `TELEGRAM_SYMBOL_COOLDOWN_MINUTES`
 - `TELEGRAM_TOP_CANDIDATE_LIMIT`
 - `TELEGRAM_MIN_ENTRY_ALERT_SCORE`
 - `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE`
@@ -259,6 +260,8 @@ Known environment variables used by the code:
 - `TELEGRAM_MAX_MIDDAY_ENTRY_ALERTS`
 - `TELEGRAM_MAX_AFTERNOON_ENTRY_ALERTS`
 - `TELEGRAM_EXIT_PRICE_MISMATCH_PCT`
+- `AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES`
+- `MAX_TRADES_PER_SYMBOL_PER_DAY`
 
 ## Current Operating Mode
 
@@ -271,7 +274,7 @@ Known environment variables used by the code:
 - Telegram sends entry alerts for high-conviction actionable/reviewable scanner setups, dashboard paper-entry opens, full exit alerts for scanner-managed and paper-trade closes, and one-time partial-profit alerts when scanner trade management reaches the partial threshold.
 - Dashboard paper-entry alerts fire at the moment `open_paper_trade()` succeeds in the dashboard auto/manual paper-entry path. These alerts do not require `Top Candidate`; they require realtime-ready status, affordable contract, setup >= `TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE`, RR >= `TELEGRAM_MIN_RR`, fresh quote, option quality >= `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, acceptable spread, and no event/regime block.
 - Telegram exit alerts resolve the current underlying price from the freshest available same-symbol source in priority order: `latest_quote`, `df_5m_latest_close`, then `df_15m_latest_close`. They validate that resolved price against the same-symbol expected close before sending. If the mismatch exceeds `TELEGRAM_EXIT_PRICE_MISMATCH_PCT` default 3%, the alert is blocked as `UNDERLYING_PRICE_MISMATCH`.
-- Telegram entry alerts are intentionally tight: defaults are max 3 entry alerts per day, max 3 active alerted trades, 60-minute same-symbol/setup cooldown, and only top 1-3 bullish/bearish candidates. Entry alerts are dispatched after the full scanner dataframe is ranked, sorted by alert score, and attempted immediately in that scan. Time buckets are caps, not delays: max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 from 13:30-14:45 ET with a higher score threshold, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and the no-late-entry cutoff. Watchlist-only rows, premarket/opening-range rows, no-trade reasons, stale/delayed quotes, expensive contracts, and trailing-stop updates remain dashboard/logging only.
+- Telegram entry alerts are intentionally tight: defaults are max 3 entry alerts per day, max 2 active alerted trades, 60-minute same-symbol/setup cooldown, 60-minute post-exit symbol cooldown, minimum alert score 85, minimum RR 2.0, max known spread 8%, and only top 1-3 bullish/bearish candidates. Entry alerts are dispatched after the full scanner dataframe is ranked, sorted by alert score, and attempted immediately in that scan. Time buckets are caps, not delays: max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 from 13:30-14:45 ET with a higher score threshold, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect daily max, active alerted trade cap, duplicate cooldown, symbol cooldown, quote/quality/spread/affordability gates, and the no-late-entry cutoff. Watchlist-only rows, premarket/opening-range rows, no-trade reasons, stale/delayed quotes, unknown alert spread, expensive contracts, and trailing-stop updates remain dashboard/logging only.
 - Telegram duplicate protection stores sent alert keys in `app/state/telegram_alert_state.json`, which is ignored by Git.
 - Premarket real-time mode surfaces strong candidates as `PREMARKET_WATCH` but does not mark them execution-ready. The scanner waits for opening-range confirmation from 9:30-9:45 ET and only allows `ENTER`/`ENTER_PAPER` after 9:45 ET when all gates pass.
 - Delayed-data mode remains acceptable for scanning and paper trading with manual confirmation. Real-time mode blocks truly stale stock aggregates and missing/stale/delayed option quotes.
@@ -591,7 +594,9 @@ When starting a fresh GPT session:
 - Added paper-only automation controls in Streamlit: auto paper entries OFF by default, auto exits ON by default, max daily entries, setup/RR thresholds, direction filter, end-of-day close, and configurable profit R threshold.
 - Auto paper minimum RR default lowered to 1.8 for sample collection, while keeping top-candidate, setup %, blocker, quote, quality, expiration, duplicate, active-trade, direction, and daily-limit gates intact.
 - Auto paper entry gates enforce market hours, 9:45-15:30 ET entry window, top candidate status, setup/RR thresholds, allowed action status, event/regime/stale-data blocks, fresh option quote, option quality, spread, expiration bucket, duplicate prevention, active trade caps, per-direction cap, and daily limits.
-- Auto paper entries allow missing option spread only when option quality is otherwise acceptable (`Option Quality Score >= 65`), because Polygon may omit bid/ask. Known spreads above 10% still block, and real-money execution remains manual with broker quote confirmation.
+- Auto paper entries and Telegram alerts now use the shared `app/gates/entry_gate.py` gate for actionable status, RR, setup score, option quality, quote freshness, affordability, spread, and stricter range-bound/weak-breadth thresholds. Auto paper can allow missing option spread only when option quality is strong (`Option Quality Score >= 80`), because Polygon may omit bid/ask. Telegram/real alert modes block unknown spread. Known auto-paper spreads above 10% still block, range-bound days tighten to setup >= 90, RR >= 2.0, and spread <= 5%, and real-money execution remains manual with broker quote confirmation.
+- Paper trade state is keyed by unique trade keys in the form `symbol|option_ticker|opened_at` instead of symbol alone. Helper lookup still prevents duplicate open symbols, but closed same-symbol history is preserved for telemetry and review.
+- Auto paper applies post-exit symbol cooldown through `AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES` and per-symbol daily caps through `MAX_TRADES_PER_SYMBOL_PER_DAY` to reduce churn in names that repeatedly enter/exit intraday. Current validation examples use `AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES=45` and `MAX_TRADES_PER_SYMBOL_PER_DAY=2`; stricter customer-style alerting should use 60 and 1.
 - Added `app/state/auto_paper_decision_log.json` and dashboard display to show each auto-entry decision as `SKIPPED`, `BLOCKED`, or `OPENED` with the exact gate reason.
 - Paper Trade Setup now only shows current valid scanner candidates with entry buttons. Stale/blocked/history rows are shown in a read-only Last Seen Candidates section with no entry controls.
 - Added `app/state/suggested_trade_state.json` and `app/state/suggested_trade_manager.py` to persist suggested call/put lifecycle across dashboard refreshes.
@@ -631,6 +636,16 @@ When starting a fresh GPT session:
 - Added replay outcome tracking
 - Added expectancy analytics foundation
 - Added PROJECT_STATE governance
+
+## Next Session Validation Focus
+
+Do not add more indicators or feature gates until the new state/gating behavior is observed over another full paper session. Review:
+
+1. Whether `paper_trade_state.json` preserves multiple closed trades for the same symbol instead of overwriting by symbol.
+2. Whether `auto_paper_decision_log.json` clearly separates `SKIPPED`, `BLOCKED`, and `OPENED` decisions with exact gate/state reasons.
+3. Whether `RANGE_BOUND` and weak-breadth threshold tightening meaningfully reduces low-quality/choppy-day trade count.
+4. Whether Telegram entry alerts are fewer and higher quality after the 85 score, 2.0 RR, 8% spread, active-alert, and symbol-cooldown changes.
+5. Whether any valid A+ setups are over-blocked by RR, spread, unknown-spread, duplicate-symbol, per-symbol daily cap, or cooldown rules.
 
 ## Current Live Risks
 

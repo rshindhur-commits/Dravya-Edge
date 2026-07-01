@@ -34,6 +34,14 @@ import pandas as pd
 import streamlit as st
 
 from app.config.settings import settings
+from app.gates.entry_gate import (
+    EntryGateConfig,
+    env_int,
+    has_active_symbol_trade,
+    is_symbol_in_cooldown,
+    symbol_trade_count_today,
+    evaluate_entry_gate
+)
 from app.utils.json_store import (
     load_json_file,
     save_json_file
@@ -93,6 +101,8 @@ AUTO_PAPER_ENTRY_START = time(9, 45)
 AUTO_PAPER_ENTRY_END = time(15, 30)
 AUTO_PAPER_EOD_CLOSE = time(15, 55)
 DEFAULT_AUTO_PAPER_MIN_RR = 1.8
+DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0
+DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 10.0
 
 
 TRADE_COLUMNS = [
@@ -1640,9 +1650,18 @@ def _auto_paper_trade_count_today(paper_trades):
 def _open_paper_symbols(paper_trades):
 
     return {
-        symbol for symbol, trade in paper_trades.items()
+        trade.get("symbol") for trade in paper_trades.values()
         if trade.get("status") == "OPEN"
+        and trade.get("symbol")
     }
+
+
+def _closed_paper_trades(paper_trades):
+
+    return [
+        trade for trade in (paper_trades or {}).values()
+        if trade.get("status") == "CLOSED"
+    ]
 
 
 def _auto_paper_entry_reason(row, controls, paper_trades):
@@ -1689,53 +1708,25 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
         return False, "not top candidate"
 
-    setup_percent = _safe_float(
-        row.get("Setup %"),
-        None
+    if _safe_float(row.get("Setup %"), None) is None:
+
+        row = row.copy()
+        row["Setup %"] = _compute_setup_percent(row)
+
+    gate_allowed, gate_reason = evaluate_entry_gate(
+        row,
+        EntryGateConfig(
+            min_rr=controls["min_rr"],
+            min_setup_percent=controls["min_setup"],
+            min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY,
+            max_spread_pct=DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT
+        ),
+        mode="paper"
     )
 
-    if setup_percent is None:
+    if not gate_allowed:
 
-        setup_percent = _compute_setup_percent(row)
-
-    if setup_percent < controls["min_setup"]:
-
-        return False, "setup below threshold"
-
-    rr = _safe_float(
-        row.get("RR"),
-        None
-    )
-
-    if rr is None:
-
-        rr = _safe_float(
-            row.get("Risk Reward"),
-            None
-        )
-
-    if rr is None:
-
-        rr = _safe_float(
-            row.get("Candidate RR"),
-            0
-        )
-
-    if rr < controls["min_rr"]:
-
-        return False, "RR below threshold"
-
-    if action_status not in [
-        "REVIEW_TV_CHART",
-        "ENTER",
-        "ENTER_PAPER"
-    ]:
-
-        return False, "action status not allowed"
-
-    if "Affordable" in row.index and row.get("Affordable") != True:
-
-        return False, row.get("Affordability Status") or "option not affordable"
+        return False, gate_reason
 
     if not realtime_ready:
 
@@ -1761,26 +1752,6 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
         return False, "market data blocked"
 
-    if str(row.get("Option Quote Freshness")) in [
-        "STALE_QUOTE",
-        "DELAYED_QUOTE"
-    ]:
-
-        return False, "option quote not fresh"
-
-    if _safe_float(row.get("Option Quality Score"), 0) < 65:
-
-        return False, "option quality below 65"
-
-    option_spread = _safe_float(
-        row.get("Option Spread %"),
-        None
-    )
-
-    if option_spread is not None and option_spread > 10:
-
-        return False, "spread above 10%"
-
     if row.get("Expiration Bucket") not in [
         "PREFERRED_14_30",
         "FALLBACK_31_45",
@@ -1801,9 +1772,36 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
     symbol = row.get("Symbol")
 
-    if symbol in _open_paper_symbols(paper_trades):
+    if has_active_symbol_trade(paper_trades, symbol):
 
-        return False, "duplicate open symbol"
+        return False, "DUPLICATE_OPEN_SYMBOL"
+
+    cooldown_minutes = env_int(
+        "AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES",
+        60
+    )
+
+    if is_symbol_in_cooldown(
+        symbol,
+        _closed_paper_trades(paper_trades),
+        now_et,
+        cooldown_minutes
+    ):
+
+        return False, "SYMBOL_COOLDOWN_ACTIVE"
+
+    max_trades_per_symbol = env_int(
+        "MAX_TRADES_PER_SYMBOL_PER_DAY",
+        1
+    )
+
+    if symbol_trade_count_today(
+        paper_trades,
+        symbol,
+        now_et
+    ) >= max_trades_per_symbol:
+
+        return False, "MAX_TRADES_PER_SYMBOL_PER_DAY_REACHED"
 
     open_trades = [
         trade for trade in paper_trades.values()
@@ -1812,7 +1810,7 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
     if len(open_trades) >= 3:
 
-        return False, "max active paper trades reached"
+        return False, "MAX_ACTIVE_PAPER_TRADES_REACHED"
 
     same_direction = [
         trade for trade in open_trades
@@ -1821,16 +1819,48 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
     if len(same_direction) >= 1:
 
-        return False, "direction already active"
+        return False, "DIRECTION_ALREADY_ACTIVE"
 
     if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
 
-        return False, "daily auto paper limit reached"
+        return False, "DAILY_AUTO_PAPER_LIMIT_REACHED"
 
-    return True, "eligible"
+    return True, gate_reason
 
 
 def _scanner_block_reason(row):
+
+    action_status = str(
+        row.get("Action Status")
+    ).strip().upper()
+
+    if action_status in [
+        "ENTER",
+        "ENTER_PAPER",
+        "REVIEW_TV_CHART"
+    ]:
+
+        for column in [
+            "Option Rejection Reason",
+            "Realtime Block Reason",
+            "Regime Block Reason",
+            "Event Block Reason",
+            "Blocked By",
+            "Action Reason"
+        ]:
+
+            value = row.get(column)
+
+            if value is not None and str(value).strip() not in [
+                "",
+                "nan",
+                "None",
+                action_status
+            ]:
+
+                return str(value)
+
+        return "NO_AUTO_PAPER_CANDIDATE"
 
     for column in [
         "Option Rejection Reason",
@@ -2058,7 +2088,7 @@ def _run_auto_paper_entries(df, controls):
             notes=f"Auto paper entry: {reason}{spread_note}",
             scanner_context=scanner_context
         )
-        paper_trades[row.get("Symbol")] = opened_trade
+        paper_trades = load_paper_trades()
         opened.append(row.get("Symbol"))
 
         if promote_suggestion_to_paper_trade:
@@ -2192,7 +2222,9 @@ def _run_auto_paper_exits(df, controls):
 
     closed = []
 
-    for symbol, trade in paper_trades.items():
+    for _, trade in paper_trades.items():
+
+        symbol = trade.get("symbol")
 
         if trade.get("status") != "OPEN":
 
@@ -2404,7 +2436,9 @@ def _exit_now_alerts(df, controls):
         current_prices = df.set_index("Symbol")["Price"].to_dict()
 
     rows = []
-    for symbol, trade in paper_trades.items():
+    for _, trade in paper_trades.items():
+
+        symbol = trade.get("symbol")
 
         if trade.get("status") != "OPEN":
 
@@ -2774,7 +2808,9 @@ def _active_trades(df):
             "Bars In Trade": trade.get("bars_in_trade", 0)
         })
 
-    for symbol, trade in paper_trade_state.items():
+    for _, trade in paper_trade_state.items():
+
+        symbol = trade.get("symbol")
 
         if trade.get("status") != "OPEN":
 
@@ -3082,12 +3118,12 @@ def _render_paper_exit_controls(df):
 
         paper_trades = {}
 
-    open_symbols = [
-        symbol for symbol, trade in paper_trades.items()
+    open_paper_trades = [
+        trade for trade in paper_trades.values()
         if trade.get("status") == "OPEN"
     ]
 
-    if not open_symbols:
+    if not open_paper_trades:
 
         return
 
@@ -3099,11 +3135,13 @@ def _render_paper_exit_controls(df):
 
     st.caption("Manual paper exits for tracked dashboard trades.")
 
-    for symbol in open_symbols:
+    for trade in open_paper_trades:
+
+        symbol = trade.get("symbol")
 
         close_price = current_prices.get(
             symbol,
-            paper_trades[symbol].get("entry_price")
+            trade.get("entry_price")
         )
 
         scanner_context = None

@@ -6,6 +6,10 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from app.gates.entry_gate import (
+    EntryGateConfig,
+    evaluate_entry_gate
+)
 from app.utils.json_store import load_json_file, save_json_file
 
 
@@ -141,10 +145,14 @@ def _entry_alert_policy():
         ),
         "max_active_alerted_trades": _int_setting(
             "TELEGRAM_MAX_ACTIVE_ALERTED_TRADES",
-            3
+            2
         ),
         "cooldown_minutes": _int_setting(
             "TELEGRAM_ENTRY_COOLDOWN_MINUTES",
+            60
+        ),
+        "symbol_cooldown_minutes": _int_setting(
+            "TELEGRAM_SYMBOL_COOLDOWN_MINUTES",
             60
         ),
         "top_candidate_limit": _int_setting(
@@ -153,7 +161,7 @@ def _entry_alert_policy():
         ),
         "min_alert_score": _float_setting(
             "TELEGRAM_MIN_ENTRY_ALERT_SCORE",
-            80.0
+            85.0
         ),
         "instant_alert_score": _float_setting(
             "TELEGRAM_INSTANT_ENTRY_ALERT_SCORE",
@@ -169,11 +177,11 @@ def _entry_alert_policy():
         ),
         "min_rr": _float_setting(
             "TELEGRAM_MIN_RR",
-            1.8
+            2.0
         ),
         "max_spread_pct": _float_setting(
             "TELEGRAM_MAX_SPREAD_PCT",
-            10.0
+            8.0
         ),
         "max_morning_entries": _int_setting(
             "TELEGRAM_MAX_MORNING_ENTRY_ALERTS",
@@ -488,6 +496,45 @@ def _recent_matching_entry_alert(state, symbol, setup_key, cooldown_minutes):
     return False
 
 
+def _recent_closed_symbol_alert(state, symbol, cooldown_minutes):
+
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=cooldown_minutes
+    )
+
+    for metadata in state.get("sent", {}).values():
+
+        if metadata.get("event_type") != ENTRY_EVENT_TYPE:
+
+            continue
+
+        if metadata.get("symbol") != symbol:
+
+            continue
+
+        if not metadata.get("closed"):
+
+            continue
+
+        closed_at = None
+
+        try:
+
+            closed_at = datetime.fromisoformat(
+                metadata.get("closed_at")
+            )
+
+        except Exception:
+
+            closed_at = None
+
+        if closed_at and closed_at >= cutoff:
+
+            return True
+
+    return False
+
+
 def _top_candidate_allowed(top_candidate, limit):
 
     top_candidate = str(top_candidate or "").upper()
@@ -714,68 +761,28 @@ def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
             "reason": "REALTIME_NOT_READY"
         }
 
-    if "Affordable" in scanner_context and not _bool_value(
-        scanner_context.get("Affordable")
-    ):
-
-        return {
-            "sent": False,
-            "reason": scanner_context.get(
-                "Affordability Status",
-                "OPTION_NOT_AFFORDABLE"
-            )
-        }
-
     policy = _entry_alert_policy()
-    setup_percent = _float_value(scanner_context.get("Setup %"))
     min_setup = _float_setting(
         "TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE",
         70.0
     )
 
-    if setup_percent < min_setup:
-
-        return {
-            "sent": False,
-            "reason": "SETUP_BELOW_ENTRY_ALERT_MIN"
-        }
-
-    risk_reward = _float_value(
-        scanner_context.get("Candidate RR"),
-        _float_value(scanner_context.get("RR"))
+    gate_allowed, gate_reason = evaluate_entry_gate(
+        scanner_context,
+        EntryGateConfig(
+            min_rr=policy["min_rr"],
+            min_setup_percent=min_setup,
+            min_option_quality=policy["min_option_quality"],
+            max_spread_pct=policy["max_spread_pct"]
+        ),
+        mode="telegram"
     )
 
-    if risk_reward < policy["min_rr"]:
+    if not gate_allowed:
 
         return {
             "sent": False,
-            "reason": "RR_BELOW_ALERT_MIN"
-        }
-
-    if scanner_context.get("Option Quote Freshness") != "LIVE_QUOTE":
-
-        return {
-            "sent": False,
-            "reason": "OPTION_QUOTE_NOT_FRESH"
-        }
-
-    if _float_value(scanner_context.get("Option Quality Score")) < policy["min_option_quality"]:
-
-        return {
-            "sent": False,
-            "reason": "OPTION_QUALITY_BELOW_ALERT_MIN"
-        }
-
-    spread_pct = _float_value(
-        scanner_context.get("Option Spread %"),
-        None
-    )
-
-    if spread_pct is not None and spread_pct > policy["max_spread_pct"]:
-
-        return {
-            "sent": False,
-            "reason": "SPREAD_ABOVE_ALERT_MAX"
+            "reason": gate_reason
         }
 
     if _bool_value(scanner_context.get("Event Blocked")):
@@ -1098,16 +1105,6 @@ def maybe_send_scanner_entry_alert(
             "reason": "NO_OPTION_CONTRACT"
         }
 
-    if not _bool_value(option_contract.get("affordable")):
-
-        return {
-            "sent": False,
-            "reason": option_contract.get(
-                "affordability_status",
-                "OPTION_NOT_AFFORDABLE"
-            )
-        }
-
     policy = _entry_alert_policy()
 
     quote_freshness = (
@@ -1115,44 +1112,42 @@ def maybe_send_scanner_entry_alert(
         or option_contract.get("quote_freshness")
     )
 
-    if quote_freshness != "LIVE_QUOTE":
-
-        return {
-            "sent": False,
-            "reason": "OPTION_QUOTE_NOT_FRESH"
-        }
-
     quality_score = _float_value(
         option_quality_score,
         _float_value(option_contract.get("option_quality_score"))
     )
 
-    if quality_score < policy["min_option_quality"]:
-
-        return {
-            "sent": False,
-            "reason": "OPTION_QUALITY_BELOW_ALERT_MIN"
-        }
-
     risk_reward = _float_value(risk_setup.get("risk_reward"))
-
-    if risk_reward < policy["min_rr"]:
-
-        return {
-            "sent": False,
-            "reason": "RR_BELOW_ALERT_MIN"
-        }
 
     spread_pct = _float_value(
         option_spread_pct,
         _float_value(option_contract.get("spread_pct"), None)
     )
 
-    if spread_pct is not None and spread_pct > policy["max_spread_pct"]:
+    gate_allowed, gate_reason = evaluate_entry_gate(
+        {
+            "Action Status": action_status,
+            "Setup %": setup_score,
+            "Candidate RR": risk_reward,
+            "Option Quality Score": quality_score,
+            "Option Spread %": spread_pct,
+            "Option Quote Freshness": quote_freshness,
+            "Affordable": option_contract.get("affordable")
+        },
+        EntryGateConfig(
+            min_rr=policy["min_rr"],
+            min_setup_percent=0.0,
+            min_option_quality=policy["min_option_quality"],
+            max_spread_pct=policy["max_spread_pct"]
+        ),
+        mode="telegram"
+    )
+
+    if not gate_allowed:
 
         return {
             "sent": False,
-            "reason": "SPREAD_ABOVE_ALERT_MAX"
+            "reason": gate_reason
         }
 
     if event_blocked:
@@ -1267,6 +1262,17 @@ def maybe_send_scanner_entry_alert(
         return {
             "sent": False,
             "reason": "ENTRY_ALERT_COOLDOWN_ACTIVE"
+        }
+
+    if _recent_closed_symbol_alert(
+        state,
+        symbol,
+        policy["symbol_cooldown_minutes"]
+    ):
+
+        return {
+            "sent": False,
+            "reason": "SYMBOL_COOLDOWN_ACTIVE"
         }
 
     alert_key = "_".join([

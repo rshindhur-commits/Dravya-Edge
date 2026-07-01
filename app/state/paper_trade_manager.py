@@ -6,6 +6,10 @@ from app.utils.json_store import (
     load_json_file,
     save_json_file
 )
+from app.gates.entry_gate import (
+    active_symbol_trade,
+    build_trade_key
+)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -43,6 +47,15 @@ def save_paper_trades(state):
     save_json_file(
         PAPER_TRADE_STATE_FILE,
         state
+    )
+
+
+def _state_key_for_trade(trade):
+
+    return build_trade_key(
+        trade.get("symbol"),
+        trade.get("option_ticker"),
+        trade.get("opened_at")
     )
 
 
@@ -314,9 +327,12 @@ def open_paper_trade(
 
     state = load_paper_trades()
 
-    existing = state.get(symbol)
+    _, existing = active_symbol_trade(
+        state,
+        symbol
+    )
 
-    if existing and existing.get("status") == "OPEN":
+    if existing:
 
         return existing
 
@@ -364,7 +380,10 @@ def open_paper_trade(
         "notes": notes or "Paper trade from live-confirmed dashboard candidate"
     }
 
-    state[symbol] = trade
+    trade_key = _state_key_for_trade(trade)
+    trade["trade_key"] = trade_key
+
+    state[trade_key] = trade
     save_paper_trades(state)
 
     return trade
@@ -379,7 +398,19 @@ def close_paper_trade(
 
     state = load_paper_trades()
 
-    trade = state.get(symbol)
+    trade_key, trade = active_symbol_trade(
+        state,
+        symbol
+    )
+
+    if trade is None:
+
+        legacy_trade = state.get(symbol)
+
+        if legacy_trade:
+
+            trade_key = symbol
+            trade = legacy_trade
 
     if not trade:
 
@@ -408,7 +439,11 @@ def close_paper_trade(
     trade["r_multiple"] = result["r_multiple"]
     trade["outcome"] = result["outcome"]
 
-    state[symbol] = trade
+    if not trade_key:
+
+        trade_key = _state_key_for_trade(trade)
+
+    state[trade_key] = trade
     save_paper_trades(state)
     _save_paper_trade_telemetry(trade)
 
