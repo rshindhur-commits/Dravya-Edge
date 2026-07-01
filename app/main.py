@@ -2321,6 +2321,20 @@ def run_scanner():
 
             }
 
+            current_symbol_close = None
+
+            try:
+
+                if df_15m is not None and not df_15m.empty:
+
+                    current_symbol_close = float(
+                        df_15m["Close"].iloc[-1]
+                    )
+
+            except Exception:
+
+                current_symbol_close = None
+
             # Active trade exit evaluation
 
 
@@ -2418,7 +2432,7 @@ def run_scanner():
                             symbol=symbol,
                             trade=active_trade,
                             exit_reason=exit_setup.get("exit_reason"),
-                            current_price=latest_price,
+                            current_price=current_symbol_close,
                             option_current_mid=(
                                 active_option_snapshot.get("mid_price")
                                 if active_option_snapshot
@@ -2432,7 +2446,10 @@ def run_scanner():
                                 df_15m.index[-1].isoformat()
                                 if df_15m is not None and not df_15m.empty
                                 else None
-                            )
+                            ),
+                            expected_underlying_price=current_symbol_close,
+                            price_source="df_15m_latest_close",
+                            scanner_row_symbol=symbol
                         )
                         debug_print(
                             f"[TELEGRAM EXIT ALERT] {symbol} "
@@ -2467,7 +2484,7 @@ def run_scanner():
                                     "adjustment_reason",
                                     "Partial profit threshold reached"
                                 ),
-                                current_price=latest_price,
+                                current_price=current_symbol_close,
                                 option_current_mid=(
                                     active_option_snapshot.get("mid_price")
                                     if active_option_snapshot
@@ -2476,7 +2493,10 @@ def run_scanner():
                                 pnl_pct=active_option_pl.get("option_pl_pct"),
                                 r_multiple=exit_setup.get("rr_progress"),
                                 outcome="PARTIAL_PROFIT",
-                                event_type="PARTIAL_EXIT"
+                                event_type="PARTIAL_EXIT",
+                                expected_underlying_price=current_symbol_close,
+                                price_source="df_15m_latest_close",
+                                scanner_row_symbol=symbol
                             )
                             debug_print(
                                 f"[TELEGRAM PARTIAL ALERT] {symbol} "

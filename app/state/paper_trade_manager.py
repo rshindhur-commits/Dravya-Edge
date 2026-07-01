@@ -426,7 +426,14 @@ def close_paper_trade(
             r_multiple=trade.get("r_multiple"),
             outcome=trade.get("outcome"),
             event_type="EXIT",
-            event_timestamp=trade.get("closed_at")
+            event_timestamp=trade.get("closed_at"),
+            expected_underlying_price=(
+                scanner_context or {}
+            ).get("Price"),
+            price_source="paper_trade_close_price",
+            scanner_row_symbol=(
+                scanner_context or {}
+            ).get("Symbol")
         )
 
     except Exception as e:
