@@ -4,7 +4,7 @@ Last updated: 2026-07-01
 
 ## Project Purpose
 
-This workspace is a Python-based intraday algo/options trading scanner. It scans a configured stock watchlist, fetches or falls back to market aggregate data, computes technical indicators across multiple timeframes, scores momentum setups, evaluates entries and risk, ranks options contracts, projects trade outcomes, manages open trade state, and writes scan telemetry for later analysis.
+This workspace is a Python-based intraday algo/options trading scanner and research sandbox. It scans a configured stock watchlist, fetches or falls back to market aggregate data, computes technical indicators across multiple timeframes, scores momentum setups, evaluates entries and risk, ranks options contracts, projects trade outcomes, manages open trade state, writes scan telemetry, stores candidate snapshots, and provides early replay calibration / expectancy / no-lookahead backtesting utilities for later analysis.
 
 The current v2 intraday options watchlist is defined in `app/config/watchlist.py`:
 
@@ -70,9 +70,10 @@ At a high level, each scan does this per symbol:
 12. Projects target, stop, probability, expected option gain, and grade.
 13. Replays the projection over recent candles when possible.
 14. Adds explicit market regime, sector-reference strength, watchlist breadth, relative strength rankings versus QQQ and SPY, relative volume, ATR %, premarket gap %, top 5 strongest/weakest leaderboards, and top 3 bullish/bearish candidate tags.
-15. Optionally calls OpenAI for a trade summary on strong setups.
-16. Saves actionable scan telemetry and paper-trade outcome/context telemetry to CSV.
-17. Exports a scanner report to `scanner_output.xlsx`; stale/no-data/error symbols now still write dashboard-readable rows.
+15. Stores normalized candidate snapshots for every scanner row so skipped, blocked, and opened setups can be reviewed later.
+16. Optionally calls OpenAI for a trade summary on strong setups.
+17. Saves actionable scan telemetry and paper-trade outcome/context telemetry to CSV.
+18. Exports a scanner report to `scanner_output.xlsx`; stale/no-data/error symbols now still write dashboard-readable rows.
 
 ## Main Components
 
@@ -149,6 +150,30 @@ At a high level, each scan does this per symbol:
 - `app/projections/trade_projection.py` estimates expected move percentage, projected option gain, target price, stop price, probability, best expiry bucket, and trade grade.
 - `app/analytics/replay_engine.py` replays recent candles against projected target/stop.
 - `app/analytics/trade_outcome_tracker.py` determines whether target, stop, no-hit, unknown, or error occurred during replay.
+- `app/analytics/replay_calibration.py` calibrates replay paths across ATR stop/target multiples and time horizons. It reports MFE, MAE, bars to target/stop, best stop ATR multiple, best target ATR multiple, best time-exit bars, best R multiple, and win rate by horizon.
+
+### Research, Expectancy, And Backtesting
+
+- `app/analytics/candidate_snapshot_writer.py` normalizes every scanner result row into a compact research schema and writes daily candidate snapshots under `data/daily/YYYY-MM-DD/`. It prefers parquet and falls back to CSV when no parquet engine is installed.
+- `app/analytics/expectancy_engine.py` exposes reusable expectancy table builders for grouped analysis by setup, direction, regime, candidate rank, option-quality bucket, spread bucket, expiration bucket, and other available fields.
+- `app/analytics/expectancy_report.py` builds grouped HTML-friendly expectancy reports and applies simple `KEEP`, `REVIEW`, `WATCH`, or `BLOCK/TIGHTEN` verdicts based on sample count and expectancy.
+- `app/backtesting/historical_dataset_builder.py` loads CSV or Polygon-style JSON candle datasets and normalizes OHLCV columns.
+- `app/backtesting/no_lookahead_scanner.py` evaluates a symbol using only candles available up to the requested timestamp, reusing the existing indicator, setup, risk, and projection logic where practical.
+- `app/backtesting/backtest_runner.py` walks historical timestamps and symbols without lookahead, records all candidates, applies entry gates, and simulates underlying target/stop outcomes for opened trades.
+- `app/backtesting/backtest_report.py` summarizes backtest candidate/trade counts and grouped expectancy tables into an HTML report.
+- The first backtesting pass is stock-underlying validation only. Historical option quote replay and option P/L approximation remain future work.
+
+### Daily Session Persistence
+
+- `app/storage/daily_paths.py` owns `data/live/` and `data/daily/YYYY-MM-DD/` path helpers.
+- `app/storage/session_manager.py` resolves `trading_day`, `session_id`, and `scan_id`, creates/updates `manifest.json`, and provides stable candidate/trade key helpers.
+- One trading day maps to one validation folder and one session id: `paper_validation_YYYY-MM-DD`.
+- Each scanner run gets a `scan_id` in the form `YYYY-MM-DD_HHMMSS` and updates the daily manifest instead of creating a new report universe.
+- Candidate snapshots append to `data/daily/YYYY-MM-DD/candidate_snapshots.parquet` or `.csv`.
+- Trade telemetry still writes to legacy `telemetry/trade_telemetry.csv` and also appends to `data/daily/YYYY-MM-DD/trade_telemetry.csv`.
+- Scanner Excel output still writes to the configured legacy path for compatibility and mirrors to `data/live/scanner_output_latest.xlsx` plus `data/daily/YYYY-MM-DD/scanner_output_close.xlsx`.
+- `tools/daily_validation_report.py` prefers daily files, falls back to live/legacy files, writes `reports/daily_validation_YYYY-MM-DD.html`, copies the report to `data/daily/YYYY-MM-DD/daily_validation_report.html`, and can mark the manifest final with `--finalize`.
+- The Streamlit sidebar has a `Generate Daily Validation Report` control that runs the same daily report builder in-process, archives available inputs, optionally finalizes the manifest, and exposes a download button for the generated HTML report. This is the preferred Streamlit Cloud path because local terminals cannot see cloud-generated files.
 
 ### AI Summary
 
@@ -165,15 +190,20 @@ At a high level, each scan does this per symbol:
 - `app/state/trade_state.json` stores active open trade state. It is currently empty.
 - `app/state/signal_memory.json` stores the last AI-call signal state per symbol. It currently contains QQQ, SPY, AVGO, TSLA, and NVDA history.
 - `telemetry/trade_telemetry.csv` stores scan/projection telemetry and paper-trade close telemetry with scanner context snapshots.
+- `data/daily/YYYY-MM-DD/candidate_snapshots.parquet` or `.csv` stores every scanner candidate row in a normalized research schema, including skipped and blocked setups.
+- `data/daily/YYYY-MM-DD/manifest.json` tracks daily validation session status, first/last scan time, last scan id, and finalization state.
+- `data/live/scanner_output_latest.xlsx` mirrors the latest scanner output for live/dashboard-style review.
 - Dashboard sidebar export buttons provide quick downloads for `scanner_output.xlsx`, `telemetry/trade_telemetry.csv`, `app/state/paper_trade_state.json`, and `app/state/trade_state.json`.
 - `scanner_output.xlsx` is produced by the scanner at runtime.
-- `logs/` and `data/` exist as storage directories, but no specific runtime ownership is clear from the current code pass.
+- `logs/` is available for diagnostics. `data/` now owns candidate snapshots and can also hold historical candle datasets for backtesting.
 
 ## Tools And Diagnostics
 
 - `tools/dump_header_history.py` prints the in-memory Polygon rate-limit header history.
 - `tools/get_suggested_rate.py` prints a suggested `POLYGON_RATE_LIMIT_PER_MINUTE` based on recent header observations.
 - `tools/diag_fetch.py` fetches raw 5m Polygon data, resamples to 15m, computes indicators correctly, and prints latest close / move diagnostics.
+- `tools/daily_validation_report.py` creates `reports/daily_validation_YYYY-MM-DD.html` from scanner output, trade telemetry, paper/live state JSON, auto-paper decision logs, and suggested-trade state. Use `--archive` to copy those source files into `daily_reviews/YYYY-MM-DD/`.
+- The dashboard sidebar can generate and download the daily validation report directly, which should be used for Streamlit Cloud sessions.
 
 ## Dependencies
 
@@ -317,6 +347,8 @@ Current telemetry fields include:
 - market_regime
 - replay_outcome
 - bars_to_outcome
+- mae
+- mfe
 - option_delta
 - option_gamma
 - option_iv
@@ -397,6 +429,8 @@ Current telemetry fields include:
 
 Paper trade telemetry captures scanner context at entry when opened from the dashboard. If a trade was opened before context capture existed, the dashboard can attach a close-time scanner snapshot when the trade is closed.
 
+Candidate snapshots are separate from trade telemetry and intentionally include every scanner row, not only opened or replayed trades. Current normalized snapshot fields include timestamp, symbol, setup type, setup percent, direction, action status, blocked reason, candidate RR, market/reference regime, sector group, top-candidate tag, option ticker, option quality score, option spread %, option quote freshness, affordability, entry/stop/target prices, relative volume, ATR %, expiration bucket, option Greeks, and option mid price.
+
 ## Current System Maturity
 
 Current status:
@@ -405,7 +439,9 @@ Current status:
 - Projection engine: stable
 - Replay engine: stable
 - Telemetry analytics: stable
-- Expectancy calibration: early-stage
+- Replay calibration utilities: initial implementation
+- Expectancy reporting: initial implementation
+- Historical backtesting framework: initial no-lookahead stock-underlying implementation
 - Automated testing: minimal but now includes focused market-session scanner decision tests
 - Live-trading readiness: experimental
 - Delayed-data paper-trading readiness: improved for supervised use
@@ -417,7 +453,15 @@ Current status:
 |---|---|
 | `main.py` | Orchestration |
 | `replay_engine.py` | Replay simulation |
+| `replay_calibration.py` | MFE/MAE, ATR multiple, and horizon calibration |
 | `trade_outcome_tracker.py` | Target/stop evaluation |
+| `candidate_snapshot_writer.py` | Daily normalized scanner candidate snapshots |
+| `expectancy_engine.py` | Reusable grouped expectancy metrics |
+| `expectancy_report.py` | Grouped expectancy report generation and verdicts |
+| `backtesting/historical_dataset_builder.py` | Historical candle dataset loading/normalization |
+| `backtesting/no_lookahead_scanner.py` | Scanner-at-time evaluation using only candles available at that timestamp |
+| `backtesting/backtest_runner.py` | No-lookahead historical candidate/trade replay loop |
+| `backtesting/backtest_report.py` | Backtest summary and expectancy HTML report |
 | `trade_projection.py` | Projection generation |
 | `contract_ranker.py` | Option scoring |
 | `option_metrics.py` | Option quote, expiration, quality, and P/L metrics |
@@ -432,7 +476,7 @@ Current status:
 1. Automated test coverage is still sparse; current coverage includes focused market-session scanner decision tests in `tests/test_market_session_decisions.py`.
 2. Some modules contain heavy debug printing, including request windows, system time, redacted Polygon URLs, and market data details.
 3. Live/mocked behavior is now mostly settings-driven, but some module-level settings are still loaded at import time and should be restarted after `.env` edits.
-4. Telemetry is still CSV-based and may need schema/version handling as fields evolve.
+4. Telemetry is still CSV-based and candidate snapshots fall back to CSV when parquet dependencies are absent; both may need schema/version handling as fields evolve.
 
 ## Known Replay Calibration Findings
 
@@ -445,6 +489,12 @@ Likely causes:
 - Replay horizon too short
 - Immediate entry assumptions
 - Noisy intraday volatility
+
+Implemented first-pass support:
+
+- `app/analytics/replay_calibration.py` can evaluate ATR stop/target multiple grids by horizon.
+- Calibration output includes MFE, MAE, bars to target/stop, best stop/target ATR multiple, best time exit, and win rate by horizon.
+- `summarize_calibration()` can bucket calibration results by setup, regime, time bucket, top candidate, or any available grouping fields.
 
 Future improvements:
 
@@ -468,6 +518,8 @@ Replay currently:
 - Replay/debug logging is verbose.
 - Mock/live config is scattered across modules.
 - Telemetry storage still uses CSV, though writes now handle empty existing files correctly.
+- Candidate snapshots currently prefer parquet but fall back to CSV unless `pyarrow` or `fastparquet` is installed.
+- Backtesting is stock-underlying only and does not yet replay actual historical option quotes.
 - No centralized config management exists yet.
 
 ## Monday Operating Workflow
@@ -482,24 +534,27 @@ Use this workflow while keeping the current delayed Polygon subscription:
 6. Before 9:30 ET, use `PREMARKET_WATCH` rows as a watchlist only. From 9:30-9:45 ET, use `OPENING_RANGE_CONFIRMATION` rows as candidates waiting for confirmation. Do not paper-enter until after 9:45 ET.
 7. If `Action Status` is `REVIEW_TV_CHART`, `QUALITY_BUT_TOO_EXPENSIVE`, `DELAYED_QUOTE`, `STALE_QUOTE`, or any option rejection code, do not treat the scanner as execution-ready. Confirm the live chart and broker option premium manually.
 8. Paper trade first. For small real trades, use broker live bid/ask and limit orders only; avoid market orders, 0DTE, 1DTE, wide spreads, stale quotes, and event-risk windows.
-9. After the session, review paper/real outcomes and telemetry before changing thresholds. Paper closes now preserve setup grade, RS, regime, sector, option-quality, blocker, and realized R context for model tuning.
-10. Download/export scanner output, telemetry, paper trade state, and trade state from the dashboard sidebar before restarts or end-of-day review.
+9. After the session, review paper/real outcomes, candidate snapshots, replay calibration, and expectancy tables before changing thresholds. Paper closes now preserve setup grade, RS, regime, sector, option-quality, blocker, and realized R context for model tuning.
+10. If running locally, run `python tools/daily_validation_report.py --date YYYY-MM-DD --archive` to write `reports/daily_validation_YYYY-MM-DD.html` and archive scanner output, telemetry, paper trade state, trade state, auto-paper decision log, and suggested-trade state under `daily_reviews/YYYY-MM-DD/`. If running on Streamlit Cloud, use the dashboard sidebar `Generate Daily Validation Report` button and download the generated HTML from there.
+11. Download/export scanner output, telemetry, paper trade state, trade state, and candidate snapshots before restarts or end-of-day review.
 
 ## Suggested Next Priorities
 
-1. Add focused tests for option metrics, option hard gates, RS ranking, risk calculation, state transitions, and replay outcomes.
-2. Re-enable and validate Polygon TTL caching if duplicate aggregate calls are still a problem.
-3. Add official market breadth data if a reliable source/entitlement becomes available.
-4. Consider moving telemetry from CSV to SQLite or another schema-aware store once sample size grows.
+1. Add focused tests for option metrics, option hard gates, RS ranking, risk calculation, state transitions, replay outcomes, replay calibration, candidate snapshot writing, and no-lookahead backtest loops.
+2. Run a 5-day then 20-day stock-underlying backtest from historical candles to catch obvious strategy/gate logic issues.
+3. Add option P/L approximation using entry mid, delta, gamma, theta, underlying move, and elapsed time.
+4. Re-enable and validate Polygon TTL caching if duplicate aggregate calls are still a problem.
+5. Add official market breadth data if a reliable source/entitlement becomes available.
+6. Consider moving telemetry and candidate snapshots from CSV/parquet files to SQLite or another schema-aware store once sample size grows.
 
 ## Next Evolution Roadmap
 
-1. Replay calibration
-2. Expectancy engine
+1. Replay calibration refinement
+2. Expectancy report refinement
 3. Win-rate analytics
 4. ATR adaptive stops
 5. Regime-aware position sizing
-6. Historical backtesting framework
+6. Historical backtesting expansion
 7. Live alerting
 8. Web dashboard/API
 
@@ -528,7 +583,7 @@ WATCHLIST
   -> option chain ranking and quality/freshness gates
   -> projection and replay
   -> relative strength ranking and top candidate tagging
-  -> Rich table, Excel report, telemetry CSV, optional OpenAI summary
+  -> candidate snapshots, Rich table, Excel report, telemetry CSV, optional OpenAI summary
 ```
 
 ## Runtime Data Flow
@@ -542,6 +597,7 @@ Polygon/mock candles
   -> projection generation
   -> replay simulation
   -> RS ranking/top candidate tagging
+  -> candidate snapshot persistence
   -> telemetry persistence
   -> analytics summary
   -> optional AI narration
@@ -549,8 +605,9 @@ Polygon/mock candles
 ## Current Major Limitations
 
 - No real broker integration
-- No true historical backtesting dataset
-- Replay uses limited recent candle windows
+- Historical backtesting framework exists but still needs real multi-day datasets and wider validation
+- Replay still often uses limited recent candle windows in live scanner mode
+- Historical option quote replay is not implemented yet
 - Real-time diagnostics must pass before using scanner output for manual real-trade decisions
 - No asynchronous market stream processing
 
@@ -569,6 +626,13 @@ When starting a fresh GPT session:
 ## Recent Major Changes
 
 2026-07-01
+- Added normalized candidate snapshot persistence for every scanner row under `data/candidate_snapshots/`, with parquet preferred and CSV fallback.
+- Added replay calibration utilities for MFE/MAE, bars to target/stop, ATR stop/target multiple grids, time-exit horizons, and win rate by horizon.
+- Extended expectancy analytics with reusable grouped tables covering trade count, win rate, average/median/total R, profit factor, average win/loss R, max drawdown R, and expectancy R.
+- Added grouped expectancy report generation with simple `KEEP`, `REVIEW`, `WATCH`, and `BLOCK/TIGHTEN` verdicts.
+- Added initial stock-underlying no-lookahead backtesting package with historical dataset loading, scanner-at-time evaluation, backtest runner, and report output.
+- Added `tools/daily_validation_report.py` for daily paper-session review, including trade result scorecard, gate quality summary, skipped opportunities, replay scorecard, rolling expectancy tables, rule-change suggestions, and optional source-file archiving.
+- Added a Streamlit sidebar daily-validation report button and HTML download path for cloud/local dashboard workflows.
 - Added profile-driven option affordability controls with `OPTION_AFFORDABILITY_MODE` and `OPTION_CAPITAL_PROFILE`.
 - Added `SMALL_ACCOUNT`, `GROWTH_ACCOUNT`, and `BEST_QUALITY` capital presets.
 - Scanner now keeps the best-quality option contract visible while selecting an affordable `active` contract when available.
@@ -655,10 +719,10 @@ Do not add more indicators or feature gates until the new state/gating behavior 
 
 The system should not yet be trusted for fully automated live trading because:
 
-- replay calibration is immature
-- expectancy engine is incomplete
+- replay calibration is newly implemented and not yet validated over enough samples
+- expectancy reporting is newly implemented and needs larger live/backtest sample sizes
 - no broker integration safeguards exist
-- no production backtesting validation exists
+- production backtesting validation is not complete; the current framework is stock-underlying first and needs multi-day datasets plus option P/L modeling
 - Polygon data is delayed and must be confirmed against live broker/TradingView data before any real trade
 
 ## Production Readiness Checklist
@@ -671,7 +735,10 @@ Before live deployment:
 - Add event dates before market open
 - Validate Polygon cache behavior
 - Add automated replay tests
+- Add automated replay calibration and backtest tests
 - Add risk kill-switch
 - Add config validation
 - Validate expectancy over large sample size
+- Run 5-day, 20-day, 60-day, then 6-12 month no-lookahead backtests
+- Add option P/L approximation or historical option quote replay
 - Add persistent DB telemetry storage

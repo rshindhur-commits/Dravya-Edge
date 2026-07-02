@@ -1274,6 +1274,96 @@ def _render_download_exports():
             key=f"download_{export['label']}"
         )
 
+    _render_daily_validation_report_controls()
+
+
+def _render_daily_validation_report_controls():
+
+    st.sidebar.subheader("Daily Validation")
+
+    default_report_date = datetime.now(
+        ZoneInfo("America/New_York")
+    ).date().isoformat()
+    report_date = st.sidebar.text_input(
+        "Validation date",
+        value=default_report_date,
+        key="daily_validation_report_date"
+    )
+    finalize_report = st.sidebar.checkbox(
+        "Finalize manifest",
+        value=True,
+        key="daily_validation_finalize_manifest",
+        help="Use after market close. Uncheck for an intraday partial report."
+    )
+
+    if st.sidebar.button(
+        "Generate Daily Validation Report",
+        key="generate_daily_validation_report"
+    ):
+
+        try:
+
+            from types import SimpleNamespace
+            from tools.daily_validation_report import build_report
+
+            output_path = build_report(
+                SimpleNamespace(
+                    date=report_date,
+                    output=None,
+                    archive=True,
+                    update_daily=True,
+                    finalize=finalize_report
+                )
+            )
+            st.session_state["daily_validation_report_path"] = str(output_path)
+            st.sidebar.success(
+                "Daily validation report generated."
+            )
+
+        except Exception as exc:
+
+            st.sidebar.error(
+                "Report generation failed."
+            )
+            st.sidebar.text(str(exc))
+
+    report_path = Path(
+        st.session_state.get(
+            "daily_validation_report_path",
+            ROOT_DIR / "reports" / f"daily_validation_{report_date}.html"
+        )
+    )
+    daily_report_path = (
+        ROOT_DIR
+        / "data"
+        / "daily"
+        / report_date
+        / "daily_validation_report.html"
+    )
+
+    download_path = (
+        daily_report_path
+        if daily_report_path.exists()
+        else report_path
+    )
+    report_data = _read_download_file(download_path)
+
+    if report_data is None:
+
+        st.sidebar.caption(
+            "Daily validation report: not generated yet"
+        )
+
+    else:
+
+        st.sidebar.download_button(
+            label="Download daily_validation_report.html",
+            data=report_data,
+            file_name=f"daily_validation_{report_date}.html",
+            mime="text/html",
+            key="download_daily_validation_report"
+        )
+
 
 def _render_runtime_key_status():
 
