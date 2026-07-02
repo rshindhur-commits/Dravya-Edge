@@ -27,6 +27,10 @@ from app.config.settings import (
     settings,
     validate_runtime_settings
 )
+from app.gates.entry_gate import (
+    EntryGateConfig,
+    evaluate_entry_gate
+)
 from app.indicators.technical_indicators import compute_indicators
 from app.strategies.momentum_strategy import analyze_setup
 from app.ai.trade_analyzer import generate_trade_summary
@@ -98,6 +102,46 @@ from app.alerts.telegram_alerts import (
 from app.utils.runtime_logging import debug_print
 
 console = Console(width=120)
+
+
+SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
+    min_rr=2.0,
+    min_setup_percent=70.0,
+    min_option_quality=65.0,
+    max_spread_pct=10.0
+)
+
+
+def _align_action_status_with_entry_gate(row):
+
+    if row.get("Action Status") not in [
+        "ENTER",
+        "ENTER_PAPER",
+        "REVIEW_TV_CHART"
+    ]:
+
+        return row
+
+    gate_allowed, gate_reason = evaluate_entry_gate(
+        row,
+        SCANNER_ENTRY_GATE_CONFIG,
+        mode="paper"
+    )
+
+    if gate_allowed:
+
+        return row
+
+    row = dict(row)
+    row["Action Status"] = "REVIEW_TV_CHART"
+    row["Action Reason"] = gate_reason
+    row["Blocked By"] = gate_reason
+    row["Execution Ready"] = False
+    row["Realtime Ready"] = False
+    row["Rejected Trade Reason"] = gate_reason
+    row["Do Not Enter Reason"] = gate_reason
+
+    return row
 
 
 def _safe_metric(df, column):
@@ -3286,7 +3330,7 @@ def run_scanner():
 
 
 
-            results.append({
+            result_row = {
 
                 "Symbol": symbol,
 
@@ -3976,7 +4020,12 @@ def run_scanner():
                     else None
                 )
 
-            })
+            }
+
+            result_row = _align_action_status_with_entry_gate(
+                result_row
+            )
+            results.append(result_row)
 
             # =====================================
             # Save telemetry
