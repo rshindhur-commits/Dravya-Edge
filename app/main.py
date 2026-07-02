@@ -87,6 +87,10 @@ from app.analytics.trade_telemetry import (
     save_trade_telemetry
 )
 
+from app.analytics.candidate_snapshot_writer import (
+    append_candidate_snapshots
+)
+
 from app.analytics.performance_summary import (
     summarize_telemetry
 )
@@ -100,6 +104,16 @@ from app.alerts.telegram_alerts import (
     maybe_send_trade_exit_alert
 )
 from app.utils.runtime_logging import debug_print
+from app.storage.daily_paths import (
+    daily_path,
+    live_path
+)
+from app.storage.session_manager import (
+    get_scan_id,
+    get_trading_day,
+    now_et,
+    register_scan
+)
 
 console = Console(width=120)
 
@@ -1848,6 +1862,14 @@ def run_scanner():
 
     validate_runtime_settings()
     print_runtime_banner()
+    scan_timestamp = now_et()
+    trading_day = get_trading_day(scan_timestamp)
+    scan_id = get_scan_id(trading_day, scan_timestamp)
+    register_scan(
+        trading_day=trading_day,
+        scan_id=scan_id,
+        scan_timestamp=scan_timestamp
+    )
 
     table = Table(
         title="AI Trading Copilot Scanner",
@@ -4333,7 +4355,15 @@ def run_scanner():
                         "reasons":
                             json.dumps(
                                 final_reasons
-                            )
+                            ),
+
+                        "trading_day": trading_day,
+
+                        "scan_id": scan_id,
+
+                        "scan_timestamp": scan_timestamp.strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
                     }
                 )            
 
@@ -4532,6 +4562,20 @@ def run_scanner():
         df_results
     )
 
+    snapshot_result = append_candidate_snapshots(
+        df_results,
+        trading_day=trading_day,
+        scan_id=scan_id
+    )
+
+    if snapshot_result:
+
+        print(
+            "[CANDIDATE SNAPSHOTS] "
+            f"saved {snapshot_result['rows']} rows to "
+            f"{snapshot_result['path']}"
+        )
+
     _dispatch_telegram_entry_alerts(
         df_results
     )
@@ -4556,6 +4600,22 @@ def run_scanner():
                 index=False
 
             )
+
+        for mirror_output_file in [
+            live_path("scanner_output_latest.xlsx"),
+            daily_path(trading_day, "scanner_output_close.xlsx")
+        ]:
+
+            with pd.ExcelWriter(
+                mirror_output_file,
+                engine="openpyxl"
+            ) as mirror_writer:
+
+                df_results.to_excel(
+                    mirror_writer,
+                    sheet_name="Scanner",
+                    index=False
+                )
 
     except PermissionError:
 

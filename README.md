@@ -12,6 +12,70 @@ python -m app.main
 
 Run from the workspace root so package imports resolve correctly.
 
+Each scanner run also writes normalized candidate snapshots for research review. The preferred location is `data/daily/YYYY-MM-DD/candidate_snapshots.parquet`; if the local environment does not have a parquet engine such as `pyarrow` or `fastparquet`, the writer falls back to `data/daily/YYYY-MM-DD/candidate_snapshots.csv`.
+
+## Research And Backtesting
+
+The app now has a first-pass research layer for validating edge quality before adding more strategy rules:
+
+- `app/analytics/candidate_snapshot_writer.py` records every scanner candidate row, including skipped and blocked setups.
+- `app/analytics/replay_calibration.py` measures MFE, MAE, bars to target/stop, best ATR stop/target multiples, best time-exit horizon, and win rate by horizon.
+- `app/analytics/expectancy_engine.py` builds expectancy tables with trade count, win rate, average/median/total R, profit factor, average win/loss R, max drawdown R, and expectancy R.
+- `app/analytics/expectancy_report.py` creates grouped expectancy reports by setup, direction, regime, candidate rank, time bucket, option-quality bucket, spread bucket, and expiration bucket when those fields are available.
+- `app/backtesting/` contains the initial no-lookahead historical backtesting framework: dataset loading, scanner-at-time evaluation, backtest runner, and HTML report output.
+
+The backtesting framework is intentionally stock-first. It validates whether the underlying setup hit target before stop using historical candles; historical option quote replay and option P/L approximation are later steps.
+
+## Daily Validation Report
+
+Daily validation uses a session model:
+
+```text
+One trading day = one validation folder
+Many scanner refreshes = one daily dataset
+App restart = same daily session
+End of day = finalized daily report
+```
+
+Each scanner run resolves a trading day and scan id:
+
+```text
+trading_day = YYYY-MM-DD
+session_id = paper_validation_YYYY-MM-DD
+scan_id = YYYY-MM-DD_HHMMSS
+```
+
+Candidate snapshots and telemetry rows include `trading_day`, `session_id`, `scan_id`, `scan_timestamp`, and stable candidate/trade keys where available.
+
+After each paper session, generate a daily scorecard from scanner output, telemetry, and state files:
+
+```powershell
+python tools/daily_validation_report.py --date 2026-07-02 --archive
+```
+
+This writes `reports/daily_validation_YYYY-MM-DD.html` and also copies the latest report to `data/daily/YYYY-MM-DD/daily_validation_report.html`.
+
+Use `--update-daily` when you want to copy available live/legacy files into the daily folder before report generation. Use `--finalize` after market close to mark `data/daily/YYYY-MM-DD/manifest.json` as final:
+
+```powershell
+python tools/daily_validation_report.py --date 2026-07-02 --update-daily --finalize
+```
+
+With `--archive`, it also copies the available daily inputs into `daily_reviews/YYYY-MM-DD/`:
+
+- `scanner_output.xlsx`
+- `telemetry/trade_telemetry.csv`
+- `app/state/paper_trade_state.json`
+- `app/state/trade_state.json`
+- `app/state/auto_paper_decision_log.json`
+- `app/state/suggested_trade_state.json`
+
+The report summarizes daily paper-trade R, opened trades, auto-paper open/block/skip counts, top block reasons, best skipped opportunities, replay outcome by setup, rolling expectancy tables, and rule-change suggestions.
+
+Current daily files live under `data/daily/YYYY-MM-DD/`; dashboard/latest mirrors live under `data/live/` while legacy root files remain for compatibility with the existing dashboard.
+
+If the dashboard is running locally on the same machine, the terminal command can read the same files directly. If the dashboard is running on Streamlit Cloud, generate the report inside the dashboard instead: use the sidebar `Generate Daily Validation Report` button, then download `daily_validation_report.html` from the same sidebar. That keeps report generation in the same filesystem where Streamlit created scanner output, telemetry, and state files.
+
 ## Market Session Flow
 
 - Premarket, 4:00-9:30 ET: strong call/put candidates can surface as `PREMARKET_WATCH`, but they are not execution-ready and cannot auto paper-enter.
@@ -86,3 +150,5 @@ The scanner sends entry alerts only for high-conviction `ENTER`, `ENTER_PAPER`, 
 ```powershell
 python -m unittest tests.test_market_session_decisions
 ```
+
+The current environment may not have `pytest` installed. The pytest-style Telegram exit-price tests can still be exercised by importing and calling their test functions, or by installing pytest in the project venv.
