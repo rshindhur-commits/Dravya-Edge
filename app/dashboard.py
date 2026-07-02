@@ -1389,14 +1389,12 @@ def _render_auto_paper_controls():
 
     auto_paper_enabled = st.sidebar.toggle(
         "Auto Paper Trading",
-        value=st.session_state["auto_paper_enabled"],
         key="auto_paper_enabled"
     )
     max_daily = st.sidebar.number_input(
         "Max Auto Paper Trades Per Day",
         min_value=1,
         max_value=10,
-        value=int(st.session_state["auto_paper_max_daily"]),
         step=1,
         key="auto_paper_max_daily"
     )
@@ -1404,7 +1402,6 @@ def _render_auto_paper_controls():
         "Minimum Setup %",
         min_value=0,
         max_value=100,
-        value=int(st.session_state["auto_paper_min_setup"]),
         step=1,
         key="auto_paper_min_setup"
     )
@@ -1412,26 +1409,20 @@ def _render_auto_paper_controls():
         "Minimum RR",
         min_value=0.0,
         max_value=10.0,
-        value=float(st.session_state["auto_paper_min_rr"]),
         step=0.1,
         key="auto_paper_min_rr"
     )
     direction = st.sidebar.selectbox(
         "Allowed Direction",
         options=["Both", "Calls", "Puts"],
-        index=["Both", "Calls", "Puts"].index(
-            st.session_state["auto_paper_direction"]
-        ),
         key="auto_paper_direction"
     )
     auto_exit_enabled = st.sidebar.toggle(
         "Auto Exit",
-        value=st.session_state["auto_paper_exit_enabled"],
         key="auto_paper_exit_enabled"
     )
     eod_close_enabled = st.sidebar.toggle(
         "End-of-day Auto Close",
-        value=st.session_state["auto_paper_eod_close_enabled"],
         key="auto_paper_eod_close_enabled"
     )
 
@@ -1439,7 +1430,6 @@ def _render_auto_paper_controls():
         "Auto Profit Exit R",
         min_value=0.5,
         max_value=5.0,
-        value=float(st.session_state["auto_paper_profit_r"]),
         step=0.25,
         key="auto_paper_profit_r"
     )
@@ -1484,16 +1474,12 @@ def _render_auto_refresh_controls():
 
     auto_refresh_enabled = st.sidebar.toggle(
         "Auto Refresh",
-        value=st.session_state["auto_refresh_enabled"],
         key="auto_refresh_enabled"
     )
 
     interval_label = st.sidebar.selectbox(
         "Refresh Interval",
         options=list(REFRESH_INTERVALS.keys()),
-        index=list(REFRESH_INTERVALS.keys()).index(
-            st.session_state["refresh_interval_label"]
-        ),
         key="refresh_interval_label"
     )
 
@@ -1501,9 +1487,6 @@ def _render_auto_refresh_controls():
     scanner_cadence_label = st.sidebar.selectbox(
         "Full Scanner Cadence",
         options=list(SCANNER_CADENCE_INTERVALS.keys()),
-        index=list(SCANNER_CADENCE_INTERVALS.keys()).index(
-            st.session_state["scanner_cadence_label"]
-        ),
         key="scanner_cadence_label"
     )
     scanner_cadence_minutes = SCANNER_CADENCE_INTERVALS[
@@ -3481,14 +3464,6 @@ def main():
         st.rerun()
 
     health = _market_health(df)
-
-    top_cols = st.columns(
-        len(health)
-    )
-
-    for col, (label, value) in zip(top_cols, health.items()):
-
-        col.metric(label, value)
 
     st.subheader("Trade Opportunities")
     opportunities = _build_trade_opportunities(df)

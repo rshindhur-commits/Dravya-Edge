@@ -60,6 +60,17 @@ def save_json_file(file_path, data):
         )
         file.write("\n")
 
+    def _write_direct():
+
+        with open(final_path, "w", encoding="utf-8") as file:
+
+            json.dump(
+                data,
+                file,
+                indent=4
+            )
+            file.write("\n")
+
     try:
 
         os.replace(
@@ -74,14 +85,35 @@ def save_json_file(file_path, data):
             exist_ok=True
         )
 
-        with open(final_path, "w", encoding="utf-8") as file:
+        _write_direct()
 
-            json.dump(
-                data,
-                file,
-                indent=4
+    except PermissionError as exc:
+
+        try:
+
+            _write_direct()
+
+        except Exception as direct_exc:
+
+            print(
+                "[STATE WARNING] JSON save skipped after "
+                f"replace permission error for {final_path}: "
+                f"{exc}; direct write failed: {direct_exc}"
             )
-            file.write("\n")
+
+    except OSError as exc:
+
+        try:
+
+            _write_direct()
+
+        except Exception as direct_exc:
+
+            print(
+                "[STATE WARNING] JSON save skipped after "
+                f"replace error for {final_path}: "
+                f"{exc}; direct write failed: {direct_exc}"
+            )
 
     finally:
 
