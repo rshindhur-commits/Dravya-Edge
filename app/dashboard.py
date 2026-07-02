@@ -107,6 +107,47 @@ DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0
 DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 10.0
 
 
+def _env_bool(name, default=False):
+
+    value = os.getenv(name)
+
+    if value is None:
+
+        return default
+
+    return str(value).strip().lower() in [
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on"
+    ]
+
+
+def _manual_paper_entries_enabled():
+
+    return _env_bool(
+        "ENABLE_MANUAL_PAPER_ENTRIES",
+        False
+    )
+
+
+def _show_manual_paper_buttons():
+
+    return _env_bool(
+        "SHOW_MANUAL_PAPER_BUTTONS",
+        False
+    )
+
+
+def _allow_manual_paper_close():
+
+    return _env_bool(
+        "ALLOW_MANUAL_PAPER_CLOSE",
+        True
+    )
+
+
 TRADE_COLUMNS = [
     "Symbol",
     "Suggestion Status",
@@ -1316,7 +1357,7 @@ def _auto_refresh_defaults():
         st.session_state["auto_paper_enabled"] = bool(
             saved_auto_settings.get(
                 "auto_paper_enabled",
-                False
+                _env_bool("AUTO_PAPER_ENABLED", True)
             )
         )
 
@@ -1759,7 +1800,10 @@ def _open_paper_trade_from_row(row):
         option_ticker=row.get("Option Ticker"),
         option_bid=row.get("Option Bid"),
         option_ask=row.get("Option Ask"),
-        scanner_context=scanner_context
+        scanner_context=scanner_context,
+        entry_source="MANUAL_PAPER",
+        trade_mode="PAPER",
+        include_in_strategy_stats=False
     )
 
     if promote_suggestion_to_paper_trade:
@@ -2270,7 +2314,10 @@ def _run_auto_paper_entries(df, controls):
             option_bid=row.get("Option Bid"),
             option_ask=row.get("Option Ask"),
             notes=f"Auto paper entry: {reason}{spread_note}",
-            scanner_context=scanner_context
+            scanner_context=scanner_context,
+            entry_source="AUTO_PAPER",
+            trade_mode="PAPER",
+            include_in_strategy_stats=True
         )
         paper_trades = load_paper_trades()
         opened.append(row.get("Symbol"))
@@ -3196,14 +3243,20 @@ def _render_last_seen_candidates(df):
 
 def _render_paper_trade_controls(df):
 
+    manual_entries_enabled = _manual_paper_entries_enabled()
+    show_manual_buttons = _show_manual_paper_buttons()
+
     candidates = _paper_trade_candidates(df)
 
     if candidates.empty:
 
-        st.info("No paper-trade candidates requiring live confirmation right now.")
+        st.info("No auto-paper candidates requiring review right now.")
         return
 
-    st.caption("Paper-enter only when Action Status is ENTER_PAPER, ENTER, or REVIEW_TV_CHART and all real-time/option gates are clean.")
+    st.caption(
+        "System validation path is Auto Paper + Telegram alerts. "
+        "Manual paper entry is hidden by default to keep telemetry clean."
+    )
 
     age_minutes = _scanner_output_age_minutes()
 
@@ -3274,6 +3327,19 @@ def _render_paper_trade_controls(df):
                     f"AI explanation disabled: {ai_reason}"
                 )
 
+            if not show_manual_buttons:
+
+                continue
+
+            if not manual_entries_enabled:
+
+                st.caption(
+                    "Manual paper entry is disabled. Set "
+                    "ENABLE_MANUAL_PAPER_ENTRIES=true and "
+                    "SHOW_MANUAL_PAPER_BUTTONS=true for debug-only use."
+                )
+                continue
+
             live_confirmed = st.checkbox(
                 "I manually confirmed this setup on the live chart",
                 key=confirm_key
@@ -3291,6 +3357,10 @@ def _render_paper_trade_controls(df):
 
 
 def _render_paper_exit_controls(df):
+
+    if not _allow_manual_paper_close():
+
+        return
 
     try:
 
@@ -3317,7 +3387,7 @@ def _render_paper_exit_controls(df):
 
         current_prices = df.set_index("Symbol")["Price"].to_dict()
 
-    st.caption("Manual paper exits for tracked dashboard trades.")
+    st.caption("Manual close/correction for tracked paper trades.")
 
     for trade in open_paper_trades:
 
@@ -3502,7 +3572,7 @@ def main():
             hide_index=True
         )
 
-    st.subheader("Paper Trade Setup")
+    st.subheader("Auto Paper Candidates")
     _render_paper_trade_controls(df)
 
     st.subheader("Last Seen Candidates")
@@ -3525,7 +3595,7 @@ def main():
         hide_index=True
     )
 
-    st.subheader("Active Trades")
+    st.subheader("Active Paper Trades")
     active_trades = _active_trades(df)
 
     st.dataframe(
@@ -3556,7 +3626,7 @@ def main():
     st.subheader("Auto Paper Decision Log")
     _render_auto_paper_decision_log()
 
-    st.subheader("Telemetry")
+    st.subheader("Alert + Paper Performance Review")
     telemetry_metrics = _telemetry_summary()
     telemetry_cols = st.columns(3)
 

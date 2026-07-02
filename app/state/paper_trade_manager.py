@@ -267,6 +267,11 @@ def _save_paper_trade_telemetry(trade):
             "action_reason": scanner_context.get("Action Reason"),
             "next_condition": scanner_context.get("Next Condition"),
             "paper_trade": True,
+            "entry_source": trade.get("entry_source"),
+            "trade_mode": trade.get("trade_mode"),
+            "include_in_strategy_stats": trade.get(
+                "include_in_strategy_stats"
+            ),
             "live_confirmed": trade.get("live_confirmed"),
             "opened_at": trade.get("opened_at"),
             "closed_at": trade.get("closed_at"),
@@ -322,7 +327,10 @@ def open_paper_trade(
     option_bid=None,
     option_ask=None,
     notes=None,
-    scanner_context=None
+    scanner_context=None,
+    entry_source="MANUAL_PAPER",
+    trade_mode="PAPER",
+    include_in_strategy_stats=False
 ):
 
     state = load_paper_trades()
@@ -376,6 +384,9 @@ def open_paper_trade(
         "exit_reason": None,
         "rr_progress": 0,
         "bars_in_trade": 0,
+        "entry_source": entry_source,
+        "trade_mode": trade_mode,
+        "include_in_strategy_stats": bool(include_in_strategy_stats),
         "live_confirmed": True,
         "notes": notes or "Paper trade from live-confirmed dashboard candidate"
     }
