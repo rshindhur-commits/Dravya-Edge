@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.analytics.expectancy_report import build_grouped_expectancy_reports
+from app.gates.entry_gate import price_geometry_error
 from app.storage.daily_paths import (
     daily_path,
     get_daily_dir,
@@ -33,6 +34,7 @@ DEFAULT_INPUTS = {
     "trade_state": ROOT_DIR / "app" / "state" / "trade_state.json",
     "auto_paper_decision_log": ROOT_DIR / "app" / "state" / "auto_paper_decision_log.json",
     "suggested_trade_state": ROOT_DIR / "app" / "state" / "suggested_trade_state.json",
+    "paper_trade_events": ROOT_DIR / "paper_trade_events.csv",
 }
 
 
@@ -43,6 +45,7 @@ DAILY_INPUT_NAMES = {
     "trade_state": "trade_state.json",
     "auto_paper_decision_log": "auto_paper_decision_log.json",
     "suggested_trade_state": "suggested_trade_state.json",
+    "paper_trade_events": "paper_trade_events.csv",
 }
 
 
@@ -137,6 +140,125 @@ def _read_excel(path):
         return pd.DataFrame()
 
 
+def _read_candidate_snapshots(report_date):
+
+    parquet_path = daily_path(report_date, "candidate_snapshots.parquet")
+    csv_path = daily_path(report_date, "candidate_snapshots.csv")
+
+    try:
+
+        if parquet_path.exists() and parquet_path.stat().st_size > 0:
+
+            return pd.read_parquet(parquet_path)
+
+    except Exception as exc:
+
+        print(f"[REPORT WARNING] Could not read {parquet_path}: {exc}")
+
+    return _read_csv(csv_path)
+
+
+def _json_record_count(data):
+
+    if isinstance(data, dict):
+
+        return len(data)
+
+    if isinstance(data, list):
+
+        return len(data)
+
+    return 0
+
+
+def build_data_health(
+    scanner_df,
+    telemetry_df,
+    paper_trade_state,
+    trade_state,
+    decision_log,
+    suggested_trade_state,
+    candidate_df,
+    paper_events_df
+):
+
+    opened_count = 0
+
+    if decision_log:
+
+        decision_df = pd.DataFrame(decision_log)
+
+        if "decision" in decision_df.columns:
+
+            opened_count = int(
+                decision_df["decision"]
+                .astype(str)
+                .str.upper()
+                .eq("OPENED")
+                .sum()
+            )
+
+    health = {
+        "scanner_output rows": len(scanner_df),
+        "candidate_snapshot rows": len(candidate_df),
+        "trade_telemetry rows": len(telemetry_df),
+        "paper_trade_state records": _json_record_count(paper_trade_state),
+        "trade_state records": _json_record_count(trade_state),
+        "paper_trade_events rows": len(paper_events_df),
+        "auto_paper_decision_log rows": _json_record_count(decision_log),
+        "decision OPENED count": opened_count,
+        "suggested_trade_state records": _json_record_count(suggested_trade_state),
+    }
+    warnings = []
+
+    if (
+        health["paper_trade_state records"] == 0
+        and health["paper_trade_events rows"] == 0
+        and health["decision OPENED count"] == 0
+    ):
+
+        warnings.append(
+            "No paper trades found. Report is based on blocked/skipped candidates only."
+        )
+
+    if health["auto_paper_decision_log rows"] > 0 and health["decision OPENED count"] == 0:
+
+        warnings.append(
+            "Auto-paper decisions exist, but none are OPENED. Suggested trades may not be actual paper trades."
+        )
+
+    if health["scanner_output rows"] == 0 and health["candidate_snapshot rows"] == 0:
+
+        warnings.append(
+            "No scanner output or candidate snapshots found for this report date."
+        )
+
+    return health, warnings
+
+
+def paper_state_to_dataframe(paper_trade_state):
+
+    if not isinstance(paper_trade_state, dict) or not paper_trade_state:
+
+        return pd.DataFrame()
+
+    return pd.DataFrame(list(paper_trade_state.values()))
+
+
+def choose_trade_score_source(paper_events_df, telemetry_df, paper_trade_state):
+
+    if not paper_events_df.empty:
+        return paper_events_df
+
+    telemetry_trades = _trade_rows(telemetry_df)
+
+    if not telemetry_trades.empty:
+
+        return telemetry_trades
+
+    return paper_state_to_dataframe(paper_trade_state)
+
+
 def _safe_numeric(series):
 
     return pd.to_numeric(series, errors="coerce")
@@ -160,6 +282,269 @@ def _html_table(df, empty_message="No data available"):
         return f"<p>{html.escape(empty_message)}</p>"
 
     return df.to_html(index=False, escape=True, border=0)
+
+
+def _is_blank(value):
+
+    if value is None:
+
+        return True
+
+    try:
+
+        if pd.isna(value):
+
+            return True
+
+    except Exception:
+
+        pass
+
+    return str(value).strip().lower() in {"", "nan", "none"}
+
+
+def _option_type_from_ticker(value):
+
+    text = str(value or "").upper()
+
+    if not text:
+
+        return None
+
+    if "C" in text.split("O:")[-1]:
+
+        marker_index = max(text.rfind("C"), text.rfind("P"))
+
+        if marker_index >= 0:
+
+            return text[marker_index]
+
+    if text.endswith("CALL"):
+
+        return "C"
+
+    if text.endswith("PUT"):
+
+        return "P"
+
+    marker_index = max(text.rfind("C"), text.rfind("P"))
+
+    if marker_index >= 0:
+
+        return text[marker_index]
+
+    return None
+
+
+def _direction_option_mismatch(row):
+
+    direction = str(
+        row.get("Candidate Direction")
+        or row.get("direction")
+        or ""
+    ).upper()
+    option_type = _option_type_from_ticker(
+        row.get("Option Ticker")
+        or row.get("option_ticker")
+    )
+
+    if direction == "CALL":
+
+        return option_type == "P"
+
+    if direction == "PUT":
+
+        return option_type == "C"
+
+    return False
+
+
+
+def _count_invalid_geometry(df):
+
+    if df is None or df.empty:
+
+        return 0
+
+    try:
+
+        return int(
+            df.apply(price_geometry_error, axis=1)
+            .notna()
+            .sum()
+        )
+
+    except Exception:
+
+        return 0
+
+
+
+def _count_direction_option_mismatch(df):
+
+    if df is None or df.empty:
+
+        return 0
+
+    try:
+
+        return int(
+            df.apply(_direction_option_mismatch, axis=1)
+            .sum()
+        )
+
+    except Exception:
+
+        return 0
+
+
+
+def _count_high_setup_threshold_blocks(df):
+
+    if df is None or df.empty:
+
+        return 0
+
+    setup_column = _first_existing(
+        df,
+        ["Setup %", "setup_percent", "current_setup_percent"]
+    )
+    rr_column = _first_existing(
+        df,
+        ["Candidate RR", "Risk Reward", "RR", "rr", "current_rr"]
+    )
+    reason_columns = [
+        column for column in [
+            "Blocked By",
+            "blocked_by",
+            "Action Reason",
+            "action_reason",
+            "Realtime Block Reason",
+            "realtime_block_reason"
+        ]
+        if column in df.columns
+    ]
+
+    if not setup_column or not rr_column or not reason_columns:
+
+        return 0
+
+    setup = _safe_numeric(df[setup_column])
+    rr = _safe_numeric(df[rr_column])
+    reasons = df[reason_columns].fillna("").astype(str).agg(" ".join, axis=1)
+
+    return int(
+        (
+            (setup >= 90)
+            & (rr >= 2.0)
+            & reasons.str.contains("SETUP_BELOW_THRESHOLD", case=False, regex=False)
+        ).sum()
+    )
+
+
+def _count_review_missing_realtime_reason(df):
+
+    if df is None or df.empty:
+
+        return 0
+
+    status_column = _first_existing(df, ["Action Status", "action_status"])
+    ready_column = _first_existing(df, ["Realtime Ready", "realtime_ready"])
+    reason_column = _first_existing(
+        df,
+        ["Realtime Block Reason", "realtime_block_reason", "Blocked By", "blocked_by"]
+    )
+
+    if not status_column or not ready_column:
+
+        return 0
+
+    status = df[status_column].astype(str).str.upper()
+    ready = df[ready_column].astype(str).str.lower().isin({"true", "1", "yes"})
+
+    if reason_column:
+
+        missing_reason = df[reason_column].map(_is_blank)
+
+    else:
+
+        missing_reason = pd.Series([True] * len(df), index=df.index)
+
+    return int(
+        (
+            status.eq("REVIEW_TV_CHART")
+            & ~ready
+            & missing_reason
+        ).sum()
+    )
+
+
+def build_data_quality_checks(
+    scanner_df,
+    candidate_df,
+    suggested_trade_state,
+    decision_log,
+    paper_events_df,
+    paper_trade_state
+):
+
+    suggested_df = (
+        pd.DataFrame(list(suggested_trade_state.values()))
+        if isinstance(suggested_trade_state, dict) and suggested_trade_state
+        else pd.DataFrame()
+    )
+    decision_df = pd.DataFrame(decision_log) if decision_log else pd.DataFrame()
+    source_frames = [
+        frame for frame in [scanner_df, candidate_df, suggested_df]
+        if frame is not None and not frame.empty
+    ]
+    combined_df = (
+        pd.concat(source_frames, ignore_index=True, sort=False)
+        if source_frames
+        else pd.DataFrame()
+    )
+    opened_decisions = 0
+
+    if not decision_df.empty and "decision" in decision_df.columns:
+
+        opened_decisions = int(
+            decision_df["decision"]
+            .astype(str)
+            .str.upper()
+            .eq("OPENED")
+            .sum()
+        )
+    suggested_not_entered = 0
+
+    if not suggested_df.empty and "status" in suggested_df.columns:
+
+        suggested_not_entered = int(
+            suggested_df["status"]
+            .astype(str)
+            .str.upper()
+            .isin(["EXPIRED_NOT_ENTERED", "DO_NOT_CHASE", "WATCH_WEAKENING"])
+            .sum()
+        )
+    actual_opened = max(
+        opened_decisions,
+        len(paper_events_df) if not paper_events_df.empty else 0,
+        _json_record_count(paper_trade_state)
+    )
+    checks = {
+        "Invalid price geometry count": _count_invalid_geometry(combined_df),
+        "Direction/option mismatch count": _count_direction_option_mismatch(combined_df),
+        "High setup but blocked by setup threshold count": _count_high_setup_threshold_blocks(combined_df),
+        "Review rows realtime_ready=false and missing reason": _count_review_missing_realtime_reason(combined_df),
+        "Actual opened trades count": actual_opened,
+        "Suggested but not entered count": suggested_not_entered,
+    }
+
+    return pd.DataFrame(
+        [
+            {"Check": key, "Count": value}
+            for key, value in checks.items()
+        ]
+    )
 
 
 def _metric_row(label, value):
@@ -221,7 +606,13 @@ def _trade_rows(telemetry_df):
 
 def build_trade_scorecard(telemetry_df):
 
-    trades_df = _trade_rows(telemetry_df)
+    if not telemetry_df.empty and "event_type" in telemetry_df.columns:
+
+        trades_df = telemetry_df.copy()
+
+    else:
+
+        trades_df = _trade_rows(telemetry_df)
 
     if trades_df.empty or "r_multiple" not in trades_df.columns:
 
@@ -399,14 +790,19 @@ def build_opened_trades_table(trades_df):
 
     columns = [
         column for column in [
+            "event_time",
+            "event_type",
+            "trade_key",
             "symbol",
             "direction",
+            "option_ticker",
             "setup_type",
             "market_regime",
             "option_quality_score",
             "option_spread_pct",
             "option_quote_freshness",
             "r_multiple",
+            "status",
             "exit_reason",
         ]
         if column in trades_df.columns
@@ -434,6 +830,15 @@ def build_best_skipped_table(scanner_df, decision_log):
         else:
 
             skipped_df = df.copy()
+
+        if not skipped_df.empty:
+
+            skipped_df = skipped_df[
+                skipped_df.apply(
+                    lambda row: price_geometry_error(row) is None,
+                    axis=1
+                )
+            ].copy()
 
         if rr_column:
 
@@ -586,6 +991,8 @@ def update_daily_inputs(input_paths, report_date):
 def render_report(
     report_date,
     manifest,
+    data_health,
+    data_health_warnings,
     trade_metrics,
     trades_df,
     gate_metrics,
@@ -593,6 +1000,7 @@ def render_report(
     skipped_df,
     replay_df,
     expectancy_reports,
+    data_quality_df,
     suggestions,
     archived_files
 ):
@@ -609,6 +1017,14 @@ def render_report(
             "finalized"
         ]
     )
+    health_rows = "".join(
+        _metric_row(label, value)
+        for label, value in data_health.items()
+    )
+    health_warnings_html = "".join(
+        f"<li>{html.escape(warning)}</li>"
+        for warning in data_health_warnings
+    ) or "<li>No data-health warnings.</li>"
     metric_rows = "".join(
         _metric_row(label, value)
         for label, value in {"Date": report_date, **trade_metrics}.items()
@@ -654,6 +1070,10 @@ def render_report(
     <h2>Session Manifest</h2>
     <table class="metric-table">{manifest_rows}</table>
 
+    <h2>Validation Data Health</h2>
+    <table class="metric-table">{health_rows}</table>
+    <ul>{health_warnings_html}</ul>
+
   <h2>A. Trade Result Scorecard</h2>
   <table class="metric-table">{metric_rows}</table>
   <h3>Opened Trades</h3>
@@ -672,6 +1092,9 @@ def render_report(
 
   <h2>E. Backtest Validation Scorecard</h2>
   <p>Run the no-lookahead backtest against historical candles once the daily dataset is available. Suggested progression: last 5 trading days, then 20, then 60.</p>
+
+    <h2>F. Data Quality Checks</h2>
+    {_html_table(data_quality_df, "No data quality checks available.")}
 
   <h2>Best Skipped Opportunities</h2>
   {_html_table(skipped_df, "No skipped/block candidate data found.")}
@@ -700,9 +1123,29 @@ def build_report(args):
     input_paths = resolve_input_paths(report_date)
     scanner_df = _read_excel(input_paths["scanner_output"])
     telemetry_df = _read_csv(input_paths["telemetry"])
+    paper_events_df = _read_csv(input_paths["paper_trade_events"])
+    paper_trade_state = _read_json(input_paths["paper_trade_state"], {})
+    trade_state = _read_json(input_paths["trade_state"], {})
     decision_log = _read_json(input_paths["auto_paper_decision_log"], [])
+    suggested_trade_state = _read_json(input_paths["suggested_trade_state"], {})
+    candidate_df = _read_candidate_snapshots(report_date)
+    data_health, data_health_warnings = build_data_health(
+        scanner_df,
+        telemetry_df,
+        paper_trade_state,
+        trade_state,
+        decision_log,
+        suggested_trade_state,
+        candidate_df,
+        paper_events_df
+    )
+    trade_source_df = choose_trade_score_source(
+        paper_events_df,
+        telemetry_df,
+        paper_trade_state
+    )
 
-    trade_metrics, trades_df = build_trade_scorecard(telemetry_df)
+    trade_metrics, trades_df = build_trade_scorecard(trade_source_df)
     gate_metrics, gate_reasons_df = build_gate_scorecard(decision_log)
     replay_df = build_replay_scorecard(telemetry_df)
     expectancy_source = _normalize_telemetry(telemetry_df)
@@ -712,6 +1155,14 @@ def build_report(args):
         else {}
     )
     skipped_df = build_best_skipped_table(scanner_df, decision_log)
+    data_quality_df = build_data_quality_checks(
+        scanner_df,
+        candidate_df,
+        suggested_trade_state,
+        decision_log,
+        paper_events_df,
+        paper_trade_state
+    )
     suggestions = build_rule_suggestions(
         trade_metrics,
         gate_metrics,
@@ -741,6 +1192,8 @@ def build_report(args):
         render_report(
             report_date,
             manifest,
+            data_health,
+            data_health_warnings,
             trade_metrics or {
                 "Total paper trades": 0,
                 "Wins": 0,
@@ -759,6 +1212,7 @@ def build_report(args):
             skipped_df,
             replay_df,
             expectancy_reports,
+            data_quality_df,
             suggestions,
             archived_files
         ),

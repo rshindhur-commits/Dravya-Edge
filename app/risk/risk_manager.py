@@ -1,4 +1,5 @@
 from app.utils.runtime_logging import debug_print
+from app.gates.entry_gate import validate_price_geometry
 
 
 def _safe_value(row, key, default=None):
@@ -26,6 +27,27 @@ def _is_short_entry(entry_type):
         "COILED_BREAKDOWN",
         "EMA_REJECTION_SHORT"
     ]
+
+
+def _risk_direction(analysis, entry_type):
+
+    if _is_short_entry(entry_type):
+
+        return "PUT"
+
+    signal = str(
+        (analysis or {}).get("signal", "")
+    ).upper()
+
+    if "BEARISH" in signal:
+
+        return "PUT"
+
+    if "BULLISH" in signal:
+
+        return "CALL"
+
+    return "UNKNOWN"
 
 
 def calculate_risk(df, analysis, entry_setup):
@@ -345,6 +367,30 @@ def calculate_risk(df, analysis, entry_setup):
 
             "trade_allowed": False,
             "reason": "Invalid risk calculation"
+        }
+
+    intended_direction = _risk_direction(
+        analysis,
+        entry_type
+    )
+
+    if not validate_price_geometry(
+        intended_direction,
+        entry_price,
+        stop_loss,
+        take_profit
+    ):
+
+        return {
+            "entry_price": round(entry_price, 2),
+            "stop_loss": round(stop_loss, 2),
+            "take_profit": round(take_profit, 2),
+            "risk_reward": 0,
+            "max_risk_pct": round(max_risk_pct, 2),
+            "trade_allowed": False,
+            "reasons": reasons + [
+                "INVALID_PRICE_GEOMETRY"
+            ]
         }
 
 

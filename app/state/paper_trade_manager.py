@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
+import csv
 
 from app.utils.json_store import (
     load_json_file,
@@ -9,6 +10,13 @@ from app.utils.json_store import (
 from app.gates.entry_gate import (
     active_symbol_trade,
     build_trade_key
+)
+from app.storage.daily_paths import daily_path
+from app.storage.session_manager import (
+    get_or_create_session_manifest,
+    get_scan_id,
+    get_session_id,
+    get_trading_day
 )
 
 
@@ -31,6 +39,23 @@ PAPER_TELEMETRY_REQUIRED_FIELDS = [
     "exit_reason",
     "opened_at",
     "closed_at"
+]
+
+PAPER_TRADE_EVENT_COLUMNS = [
+    "trading_day",
+    "session_id",
+    "scan_id",
+    "event_time",
+    "event_type",
+    "trade_key",
+    "symbol",
+    "direction",
+    "option_ticker",
+    "entry_price",
+    "exit_price",
+    "status",
+    "r_multiple",
+    "exit_reason"
 ]
 
 
@@ -72,6 +97,71 @@ def _safe_float(value):
     except Exception:
 
         return None
+
+
+def _append_paper_trade_event(trade, event_type, exit_price=None):
+
+    try:
+
+        scanner_context = trade.get("scanner_context") or {}
+        trading_day = trade.get(
+            "trading_day",
+            get_trading_day()
+        )
+        session_id = trade.get(
+            "session_id",
+            get_session_id(trading_day)
+        )
+        scan_id = trade.get(
+            "scan_id",
+            scanner_context.get("scan_id") or get_scan_id(trading_day)
+        )
+        get_or_create_session_manifest(trading_day)
+        event_path = daily_path(
+            trading_day,
+            "paper_trade_events.csv"
+        )
+        event_path.parent.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+        event = {
+            "trading_day": trading_day,
+            "session_id": session_id,
+            "scan_id": scan_id,
+            "event_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "event_type": event_type,
+            "trade_key": trade.get("trade_key") or _state_key_for_trade(trade),
+            "symbol": trade.get("symbol"),
+            "direction": trade.get("direction"),
+            "option_ticker": trade.get("option_ticker"),
+            "entry_price": trade.get("entry_price"),
+            "exit_price": exit_price if exit_price is not None else trade.get("close_price"),
+            "status": trade.get("status"),
+            "r_multiple": trade.get("r_multiple"),
+            "exit_reason": trade.get("exit_reason")
+        }
+        write_header = (
+            not event_path.exists()
+            or event_path.stat().st_size == 0
+        )
+
+        with event_path.open("a", newline="", encoding="utf-8") as file:
+
+            writer = csv.DictWriter(
+                file,
+                fieldnames=PAPER_TRADE_EVENT_COLUMNS
+            )
+
+            if write_header:
+
+                writer.writeheader()
+
+            writer.writerow(event)
+
+    except Exception as exc:
+
+        print(f"[PAPER EVENT LOG ERROR] {exc}")
 
 
 def _paper_trade_result(trade, close_price):
@@ -391,11 +481,23 @@ def open_paper_trade(
         "notes": notes or "Paper trade from live-confirmed dashboard candidate"
     }
 
+    trading_day = get_trading_day()
+    trade["trading_day"] = trading_day
+    trade["session_id"] = get_session_id(trading_day)
+    trade["scan_id"] = (
+        (scanner_context or {}).get("scan_id")
+        or get_scan_id(trading_day)
+    )
+
     trade_key = _state_key_for_trade(trade)
     trade["trade_key"] = trade_key
 
     state[trade_key] = trade
     save_paper_trades(state)
+    _append_paper_trade_event(
+        trade,
+        "OPEN"
+    )
 
     return trade
 
@@ -456,13 +558,23 @@ def close_paper_trade(
 
     state[trade_key] = trade
     save_paper_trades(state)
+    event_type = (
+        "MANUAL_CLOSE"
+        if "manual" in str(exit_reason or "").lower()
+        else "AUTO_EXIT"
+    )
+    _append_paper_trade_event(
+        trade,
+        event_type,
+        exit_price=close_price
+    )
     _save_paper_trade_telemetry(trade)
 
     try:
 
         from app.alerts.telegram_alerts import maybe_send_trade_exit_alert
 
-        maybe_send_trade_exit_alert(
+        telegram_result = maybe_send_trade_exit_alert(
             symbol=symbol,
             trade=trade,
             exit_reason=exit_reason,
@@ -481,6 +593,11 @@ def close_paper_trade(
                 scanner_context or {}
             ).get("Symbol")
         )
+
+        if telegram_result.get("sent"):
+
+            state[trade_key] = trade
+            save_paper_trades(state)
 
     except Exception as e:
 

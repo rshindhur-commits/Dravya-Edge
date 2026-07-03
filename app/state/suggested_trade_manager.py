@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from app.gates.entry_gate import price_geometry_error
 from app.utils.json_store import load_json_file, save_json_file
 
 
@@ -57,6 +58,25 @@ def _safe_float(value, default=None):
         return default
 
 
+def _row_get(row, *names, default=None):
+
+    for name in names:
+
+        try:
+
+            value = row.get(name)
+
+        except Exception:
+
+            value = None
+
+        if value not in [None, ""]:
+
+            return value
+
+    return default
+
+
 def suggestion_id_from_row(row):
 
     symbol = str(row.get("Symbol") or "UNKNOWN")
@@ -109,7 +129,10 @@ def upsert_suggestion_from_scan(row):
     )
     current_price = _safe_float(row.get("Price"))
     current_setup = _safe_float(row.get("Setup %"), 0) or 0
-    current_rr = _safe_float(row.get("RR"), 0) or 0
+    current_rr = _safe_float(
+        _row_get(row, "RR", "Candidate RR", "Risk Reward"),
+        0
+    ) or 0
     original_setup = _safe_float(
         existing.get("original_setup_percent"),
         current_setup
@@ -138,6 +161,13 @@ def upsert_suggestion_from_scan(row):
             status = "DO_NOT_CHASE"
             validity_reason = "price moved away from original entry"
 
+    geometry_error = price_geometry_error(row)
+
+    if geometry_error:
+
+        status = "INVALID_PRICE_GEOMETRY"
+        validity_reason = geometry_error
+
     suggestion = {
         **existing,
         "suggestion_id": suggestion_id,
@@ -160,10 +190,10 @@ def upsert_suggestion_from_scan(row):
         ),
         "original_rr": existing.get(
             "original_rr",
-            row.get("RR")
+            _row_get(row, "RR", "Candidate RR", "Risk Reward")
         ),
         "current_setup_percent": row.get("Setup %"),
-        "current_rr": row.get("RR"),
+        "current_rr": _row_get(row, "RR", "Candidate RR", "Risk Reward"),
         "current_action_status": row.get("Action Status"),
         "current_price": row.get("Price"),
         "current_r_progress": row.get("RR Progress"),
@@ -174,10 +204,10 @@ def upsert_suggestion_from_scan(row):
         "expiration_bucket": row.get("Expiration Bucket"),
         "option_quality_score": row.get("Option Quality Score"),
         "option_quote_freshness": row.get("Option Quote Freshness"),
-        "blocked_by": row.get("Blocked By"),
-        "action_reason": row.get("Action Reason"),
+        "blocked_by": geometry_error or row.get("Blocked By"),
+        "action_reason": geometry_error or row.get("Action Reason"),
         "realtime_ready": row.get("Realtime Ready"),
-        "realtime_block_reason": row.get("Realtime Block Reason")
+        "realtime_block_reason": geometry_error or row.get("Realtime Block Reason")
     }
 
     state[suggestion_id] = suggestion
@@ -202,6 +232,10 @@ def mark_suggestion_expired(suggestion_id, reason="not present in latest scan"):
 
     suggestion["status"] = "EXPIRED_NOT_ENTERED"
     suggestion["validity_reason"] = reason
+    suggestion["blocked_by"] = None
+    suggestion["action_reason"] = reason
+    suggestion["realtime_ready"] = False
+    suggestion["realtime_block_reason"] = reason
     suggestion["last_seen_at"] = suggestion.get("last_seen_at")
     state[suggestion_id] = suggestion
     save_suggestions(state)

@@ -72,6 +72,12 @@ With `--archive`, it also copies the available daily inputs into `daily_reviews/
 
 The report summarizes daily paper-trade R, opened trades, auto-paper open/block/skip counts, top block reasons, best skipped opportunities, replay outcome by setup, rolling expectancy tables, and rule-change suggestions.
 
+The first section is `Validation Data Health`. It shows counts for scanner rows, candidate snapshots, telemetry rows, paper-trade state records, paper-trade event rows, auto-paper decisions, opened decisions, suggested trades, and trade state records. If no paper trades are found, the report explicitly warns that it is based on blocked/skipped candidates only.
+
+The report also includes `F. Data Quality Checks`, which counts invalid price geometry, option direction mismatches, high-setup rows blocked by setup threshold reasons, review rows missing realtime-block reasons, actual opened trades, and suggested-but-not-entered rows.
+
+Paper trade opens/closes also append to `data/daily/YYYY-MM-DD/paper_trade_events.csv`. The report uses this event log before falling back to telemetry or current paper-trade state, so a cleared JSON state file does not hide the fact that a paper trade opened earlier in the session.
+
 Current daily files live under `data/daily/YYYY-MM-DD/`; dashboard/latest mirrors live under `data/live/` while legacy root files remain for compatibility with the existing dashboard.
 
 If the dashboard is running locally on the same machine, the terminal command can read the same files directly. If the dashboard is running on Streamlit Cloud, generate the report inside the dashboard instead: use the sidebar `Generate Daily Validation Report` button, then download `daily_validation_report.html` from the same sidebar. That keeps report generation in the same filesystem where Streamlit created scanner output, telemetry, and state files.
@@ -81,6 +87,7 @@ If the dashboard is running locally on the same machine, the terminal command ca
 - Premarket, 4:00-9:30 ET: strong call/put candidates can surface as `PREMARKET_WATCH`, but they are not execution-ready and cannot auto paper-enter.
 - Opening range, 9:30-9:45 ET: candidates wait as `OPENING_RANGE_CONFIRMATION` until regular-market confirmation develops.
 - After 9:45 ET: `ENTER` or `ENTER_PAPER` is allowed only when stock freshness, risk, timing, option quality, quote freshness, event, regime, and dashboard auto-entry gates pass.
+- CALL/PUT price geometry is a hard safety rule. CALLs require `stop < entry < target`; PUTs require `target < entry < stop`. Invalid geometry is blocked before normal suggestions, alerts, or paper entry.
 
 Polygon/Massive aggregate freshness accounts for candle bucket-start timestamps, so a current 5-minute aggregate is not marked stale solely because the timestamp is at the start of the candle.
 
@@ -113,6 +120,8 @@ Use `OPTION_CAPITAL_PROFILE=GROWTH_ACCOUNT` as buying power grows, or `OPTION_AF
 
 Telegram entry and exit alerts are opt-in and use duplicate protection so dashboard/scanner refreshes do not resend the same signal. Keep real bot tokens in local `.streamlit/secrets.toml` or Streamlit Cloud Secrets; do not commit them.
 
+Exit alerts are only allowed for explicitly tracked `PAPER` or `REAL` trades. Legacy scanner-managed `trade_state.json` entries are treated as dashboard state and do not send Telegram exits unless promoted to a confirmed paper/real trade mode. Successful exit alerts mark `exit_alert_sent` on the trade, and deterministic alert keys include symbol, option ticker, open time, and exit reason.
+
 ```toml
 TELEGRAM_ALERTS_ENABLED = "true"
 TELEGRAM_ENTRY_ALERTS_ENABLED = "true"
@@ -143,7 +152,7 @@ bot_token = "YOUR_BOT_TOKEN_FROM_BOTFATHER"
 chat_id = "YOUR_TELEGRAM_CHAT_ID"
 ```
 
-The scanner sends entry alerts only for high-conviction `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART` option setups that are not marked unaffordable and are within the configured top-candidate limit. Entry alerts are scored after the full scan is ranked, then attempted strongest-first in the same scan; the system does not wait for a later time bucket to compare future candidates. Auto paper entries send entry alerts at the exact moment a system paper trade opens, as long as the opened row is realtime-ready, affordable, has sufficient setup/RR, fresh quote, acceptable spread, and option quality. Manual paper entry buttons are hidden by default (`ENABLE_MANUAL_PAPER_ENTRIES=false`, `SHOW_MANUAL_PAPER_BUTTONS=false`) to keep validation telemetry clean; manual close/correction remains available by default. The default entry buckets are max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 A+ style alert from 13:30-14:45 ET, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect the daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and no-late-entry cutoff. Exit alerts send when scanner-managed trades close on stop, target, trailing/invalidation logic, or when paper trades are closed manually/automatically from the dashboard. Exit-alert price validation resolves the current underlying price from the freshest available same-symbol source in this order: `latest_quote`, `df_5m_latest_close`, then `df_15m_latest_close`. Alerts are blocked if that resolved price differs from the same-symbol expected close by more than `TELEGRAM_EXIT_PRICE_MISMATCH_PCT` (default 3%). Partial-profit scanner events send a one-time `PARTIAL EXIT ALERT`. Sent alert keys are stored in `app/state/telegram_alert_state.json`, which is ignored by Git.
+The scanner sends entry alerts only for high-conviction `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART` option setups that are not marked unaffordable and are within the configured top-candidate limit. Entry alerts are scored after the full scan is ranked, then attempted strongest-first in the same scan; the system does not wait for a later time bucket to compare future candidates. Auto paper entries send entry alerts at the exact moment a system paper trade opens, as long as the opened row is realtime-ready, affordable, has sufficient setup/RR, fresh quote, acceptable spread, and option quality. Manual paper entry buttons are hidden by default (`ENABLE_MANUAL_PAPER_ENTRIES=false`, `SHOW_MANUAL_PAPER_BUTTONS=false`) to keep validation telemetry clean; manual close/correction remains available by default. The default entry buckets are max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 A+ style alert from 13:30-14:45 ET, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect the daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and no-late-entry cutoff. Exit alerts send only when confirmed paper/real trades close manually or automatically; scanner-managed `trade_state.json` exits remain dashboard-only. Exit-alert price validation resolves the current underlying price from the freshest available same-symbol source in this order: `latest_quote`, `df_5m_latest_close`, then `df_15m_latest_close`. Alerts are blocked if that resolved price differs from the same-symbol expected close by more than `TELEGRAM_EXIT_PRICE_MISMATCH_PCT` (default 3%). Sent alert keys are stored in `app/state/telegram_alert_state.json`, which is ignored by Git.
 
 ## Validate
 

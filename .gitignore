@@ -136,7 +136,13 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+app/state/trade_state.json
+app/state/*backup*.json
+app/state/paper_trade_state.json
+app/state/suggested_trade_state.json
 app/state/telegram_alert_state.json
+app/state/auto_paper_decision_log.json
+app/state/auto_paper_settings.json
 
 # Spyder project settings
 .spyderproject
