@@ -3577,11 +3577,11 @@ def _telemetry_summary():
 def main():
 
     st.set_page_config(
-        page_title="AI Trading Scanner",
+        page_title="Dravya Wallstreet Edge",
         layout="wide"
     )
 
-    st.title("AI Trading Scanner")
+    st.title("Dravya Wallstreet Edge")
     st.caption("Decision dashboard only. Full engine diagnostics stay in Excel/backend.")
 
     refresh_state = _render_auto_refresh_controls()
