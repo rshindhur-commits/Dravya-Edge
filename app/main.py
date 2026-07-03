@@ -4586,6 +4586,25 @@ def run_scanner():
 
     try:
 
+        live_csv_path = live_path("scanner_output_latest.csv")
+        daily_csv_path = daily_path(trading_day, "scanner_output_close.csv")
+        live_csv_path.parent.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+        daily_csv_path.parent.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+        df_results.to_csv(
+            live_csv_path,
+            index=False
+        )
+        df_results.to_csv(
+            daily_csv_path,
+            index=False
+        )
+
         with pd.ExcelWriter(
 
             output_file,

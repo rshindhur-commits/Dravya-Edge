@@ -143,6 +143,8 @@ app/state/suggested_trade_state.json
 app/state/telegram_alert_state.json
 app/state/auto_paper_decision_log.json
 app/state/auto_paper_settings.json
+data/live/scanner_run.lock
+data/live/scanner_output_latest.csv
 
 # Spyder project settings
 .spyderproject
