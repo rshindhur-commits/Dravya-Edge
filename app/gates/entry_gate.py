@@ -67,44 +67,43 @@ def safe_float(value, default=0.0):
         return default
 
 
+def _geometry_float(value):
+
+    try:
+
+        if value is None:
+
+            return None
+
+        numeric_value = float(value)
+
+        if math.isnan(numeric_value) or math.isinf(numeric_value):
+
+            return None
+
+        return numeric_value
+
+    except (TypeError, ValueError):
+
+        return None
+
+
 def normalize_candidate_direction(direction):
 
     direction = str(direction or "").strip().upper()
 
-    if direction in {"CALL", "BULLISH", "HIGH CONVICTION BULLISH"}:
+    if direction in {"CALL", "LONG", "BULLISH", "HIGH CONVICTION BULLISH"}:
 
         return "CALL"
 
-    if direction in {"PUT", "BEARISH", "HIGH CONVICTION BEARISH"}:
+    if direction in {"PUT", "SHORT", "BEARISH", "HIGH CONVICTION BEARISH"}:
 
         return "PUT"
 
     return "UNKNOWN"
 
 
-def validate_price_geometry(direction, entry, stop, target):
-
-    direction = normalize_candidate_direction(direction)
-    entry = safe_float(entry, None)
-    stop = safe_float(stop, None)
-    target = safe_float(target, None)
-
-    if entry is None or stop is None or target is None:
-
-        return False
-
-    if direction == "CALL":
-
-        return stop < entry < target
-
-    if direction == "PUT":
-
-        return target < entry < stop
-
-    return False
-
-
-def price_geometry_error(row):
+def _row_price_geometry_values(row):
 
     direction = _row_get(
         row,
@@ -116,6 +115,8 @@ def price_geometry_error(row):
         row,
         "Candidate Entry Price",
         "entry_price",
+        "Entry Price",
+        "entry",
         "Price"
     )
     stop = _row_get(
@@ -123,35 +124,123 @@ def price_geometry_error(row):
         "Candidate Stop Price",
         "stop_price",
         "stop_loss",
-        "Stop Loss"
+        "Stop Price",
+        "Stop Loss",
+        "stop"
     )
     target = _row_get(
         row,
         "Candidate Target Price",
         "target_price",
         "take_profit",
-        "Take Profit"
+        "Target Price",
+        "Take Profit",
+        "target"
     )
-    normalized_direction = normalize_candidate_direction(direction)
 
-    if validate_price_geometry(
-        normalized_direction,
-        entry,
-        stop,
-        target
-    ):
+    return direction, entry, stop, target
+
+
+def price_geometry_error(
+    direction=None,
+    entry_price=None,
+    stop_loss=None,
+    take_profit=None,
+    **kwargs
+):
+
+    if hasattr(direction, "get") and entry_price is None and stop_loss is None and take_profit is None:
+
+        direction, entry_price, stop_loss, take_profit = _row_price_geometry_values(
+            direction
+        )
+
+    if entry_price is None:
+
+        entry_price = (
+            kwargs.get("entry")
+            or kwargs.get("Entry Price")
+            or kwargs.get("Candidate Entry Price")
+        )
+
+    if stop_loss is None:
+
+        stop_loss = (
+            kwargs.get("stop")
+            or kwargs.get("Stop Price")
+            or kwargs.get("Stop Loss")
+            or kwargs.get("Candidate Stop Price")
+        )
+
+    if take_profit is None:
+
+        take_profit = (
+            kwargs.get("target")
+            or kwargs.get("Target Price")
+            or kwargs.get("Take Profit")
+            or kwargs.get("Candidate Target Price")
+        )
+
+    direction = normalize_candidate_direction(direction)
+    entry = _geometry_float(entry_price)
+    stop = _geometry_float(stop_loss)
+    target = _geometry_float(take_profit)
+
+    if direction not in {"CALL", "PUT"}:
 
         return None
 
-    if normalized_direction == "PUT":
+    if entry is None or stop is None or target is None:
 
-        return "INVALID_PRICE_GEOMETRY: PUT requires target < entry < stop"
+        return "MISSING_PRICE_GEOMETRY"
 
-    if normalized_direction == "CALL":
+    if direction == "CALL":
 
-        return "INVALID_PRICE_GEOMETRY: CALL requires stop < entry < target"
+        if not (stop < entry < target):
 
-    return "INVALID_PRICE_GEOMETRY: unknown direction"
+            return "INVALID_PRICE_GEOMETRY_CALL_REQUIRES_STOP_LT_ENTRY_LT_TARGET"
+
+    if direction == "PUT":
+
+        if not (target < entry < stop):
+
+            return "INVALID_PRICE_GEOMETRY_PUT_REQUIRES_TARGET_LT_ENTRY_LT_STOP"
+
+    return None
+
+
+def validate_price_geometry(
+    direction,
+    entry_price=None,
+    stop_loss=None,
+    take_profit=None,
+    **kwargs
+):
+
+    return price_geometry_error(
+        direction,
+        entry_price,
+        stop_loss,
+        take_profit,
+        **kwargs
+    ) is None
+
+
+def has_valid_price_geometry(
+    direction,
+    entry_price=None,
+    stop_loss=None,
+    take_profit=None,
+    **kwargs
+):
+
+    return validate_price_geometry(
+        direction,
+        entry_price,
+        stop_loss,
+        take_profit,
+        **kwargs
+    )
 
 
 def _bool_false(value):
