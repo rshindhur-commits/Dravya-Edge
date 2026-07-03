@@ -67,6 +67,93 @@ def safe_float(value, default=0.0):
         return default
 
 
+def normalize_candidate_direction(direction):
+
+    direction = str(direction or "").strip().upper()
+
+    if direction in {"CALL", "BULLISH", "HIGH CONVICTION BULLISH"}:
+
+        return "CALL"
+
+    if direction in {"PUT", "BEARISH", "HIGH CONVICTION BEARISH"}:
+
+        return "PUT"
+
+    return "UNKNOWN"
+
+
+def validate_price_geometry(direction, entry, stop, target):
+
+    direction = normalize_candidate_direction(direction)
+    entry = safe_float(entry, None)
+    stop = safe_float(stop, None)
+    target = safe_float(target, None)
+
+    if entry is None or stop is None or target is None:
+
+        return False
+
+    if direction == "CALL":
+
+        return stop < entry < target
+
+    if direction == "PUT":
+
+        return target < entry < stop
+
+    return False
+
+
+def price_geometry_error(row):
+
+    direction = _row_get(
+        row,
+        "Candidate Direction",
+        "direction",
+        "final_signal"
+    )
+    entry = _row_get(
+        row,
+        "Candidate Entry Price",
+        "entry_price",
+        "Price"
+    )
+    stop = _row_get(
+        row,
+        "Candidate Stop Price",
+        "stop_price",
+        "stop_loss",
+        "Stop Loss"
+    )
+    target = _row_get(
+        row,
+        "Candidate Target Price",
+        "target_price",
+        "take_profit",
+        "Take Profit"
+    )
+    normalized_direction = normalize_candidate_direction(direction)
+
+    if validate_price_geometry(
+        normalized_direction,
+        entry,
+        stop,
+        target
+    ):
+
+        return None
+
+    if normalized_direction == "PUT":
+
+        return "INVALID_PRICE_GEOMETRY: PUT requires target < entry < stop"
+
+    if normalized_direction == "CALL":
+
+        return "INVALID_PRICE_GEOMETRY: CALL requires stop < entry < target"
+
+    return "INVALID_PRICE_GEOMETRY: unknown direction"
+
+
 def _bool_false(value):
 
     if value is False or value == 0:
@@ -251,6 +338,12 @@ def evaluate_entry_gate(
     if action_status not in ACTIONABLE_STATUSES:
 
         return False, "NOT_ACTIONABLE_STATUS"
+
+    geometry_error = price_geometry_error(row)
+
+    if geometry_error:
+
+        return False, "INVALID_PRICE_GEOMETRY"
 
     min_setup, min_rr, max_spread = apply_regime_entry_thresholds(
         row,

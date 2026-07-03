@@ -109,7 +109,15 @@ def open_trade(
 
         "option_quote_age_minutes": option_data.get("quote_age_minutes"),
 
-        "option_contracts": contracts
+        "option_contracts": contracts,
+
+        "trade_mode": "SCANNER_TRACKED",
+
+        "entry_source": "SCANNER_STATE",
+
+        "is_real_money": False,
+
+        "exit_alert_sent": False
 
     }
 

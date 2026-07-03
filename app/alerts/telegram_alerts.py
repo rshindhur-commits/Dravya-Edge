@@ -19,6 +19,12 @@ MAX_SENT_ALERTS = 1000
 ENTRY_EVENT_TYPE = "ENTRY"
 
 
+EXIT_ALERT_TRADE_MODES = {
+    "PAPER",
+    "REAL"
+}
+
+
 def _bool_value(value, default=False):
 
     if value is None:
@@ -377,6 +383,52 @@ def mark_alert_closed(symbol, option_ticker=None):
         metadata["closed_at"] = datetime.now(timezone.utc).isoformat()
 
     _save_alert_state(state)
+
+
+def _exit_alert_key(symbol, option_ticker, trade, exit_reason, event_type):
+
+    opened_at = (
+        trade.get("opened_at")
+        or trade.get("trade_key")
+        or "NO_OPEN_TIME"
+    )
+
+    return "|".join([
+        str(event_type or "EXIT"),
+        str(symbol),
+        str(option_ticker or "NO_CONTRACT"),
+        str(opened_at),
+        str(exit_reason or "NO_REASON")
+    ])
+
+
+def _can_send_exit_alert(trade, event_type):
+
+    trade = trade or {}
+    trade_mode = str(
+        trade.get("trade_mode") or ""
+    ).upper()
+    status = str(
+        trade.get("status") or "OPEN"
+    ).upper()
+
+    if trade_mode not in EXIT_ALERT_TRADE_MODES:
+
+        return False, "EXIT_ALERT_NOT_CONFIRMED_TRADE"
+
+    if status not in {"OPEN", "CLOSED"}:
+
+        return False, "TRADE_NOT_OPEN_OR_CLOSED"
+
+    if event_type == "EXIT" and trade.get("exit_alert_sent"):
+
+        return False, "EXIT_ALERT_ALREADY_SENT"
+
+    if event_type == "PARTIAL_EXIT" and trade.get("partial_exit_alert_sent"):
+
+        return False, "PARTIAL_EXIT_ALERT_ALREADY_SENT"
+
+    return True, "ELIGIBLE"
 
 
 def _sent_at_datetime(metadata):
@@ -924,6 +976,18 @@ def maybe_send_trade_exit_alert(
         or "NO_CONTRACT"
     )
 
+    can_send, guard_reason = _can_send_exit_alert(
+        trade,
+        event_type
+    )
+
+    if not can_send:
+
+        return {
+            "sent": False,
+            "reason": guard_reason
+        }
+
     trade_symbol = trade.get("symbol") or symbol
 
     if scanner_row_symbol and str(scanner_row_symbol) != str(symbol):
@@ -973,13 +1037,13 @@ def maybe_send_trade_exit_alert(
                 "price_source": price_source
             }
 
-    event_key_part = event_timestamp or exit_reason or event_type
-    alert_key = "_".join([
-        str(symbol),
-        str(option_ticker),
-        str(event_type),
-        str(event_key_part)
-    ])
+    alert_key = _exit_alert_key(
+        symbol,
+        option_ticker,
+        trade,
+        exit_reason,
+        event_type
+    )
 
     if alert_was_sent(alert_key):
 
@@ -1010,6 +1074,13 @@ def maybe_send_trade_exit_alert(
             symbol,
             option_ticker
         )
+        trade["exit_alert_sent"] = True
+        trade["exit_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+
+    if event_type == "PARTIAL_EXIT":
+
+        trade["partial_exit_alert_sent"] = True
+        trade["partial_exit_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
 
     mark_alert_sent(
         alert_key,

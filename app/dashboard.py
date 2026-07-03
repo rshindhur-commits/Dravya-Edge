@@ -41,7 +41,8 @@ from app.gates.entry_gate import (
     has_active_symbol_trade,
     is_symbol_in_cooldown,
     symbol_trade_count_today,
-    evaluate_entry_gate
+    evaluate_entry_gate,
+    price_geometry_error
 )
 from app.options.option_affordability import add_affordability_metrics
 from app.utils.json_store import (
@@ -744,7 +745,16 @@ def _candidate_rows_for_suggestions(df):
         & (df["Candidate Direction"].isin(["CALL", "PUT"]))
         & (df["Action Status"].isin(["REVIEW_TV_CHART", "ENTER", "ENTER_PAPER"]))
         & (df.get("Affordable", True) == True)
-    ]
+    ].copy()
+
+    if not rows.empty:
+
+        rows = rows[
+            rows.apply(
+                lambda row: price_geometry_error(row) is None,
+                axis=1
+            )
+        ]
 
     return [row for _, row in rows.iterrows()]
 
@@ -1011,7 +1021,7 @@ def _save_auto_paper_decision_log(entries):
     )
 
 
-def _record_auto_paper_decision(symbol, decision, reason, row=None):
+def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None):
 
     entries = _load_auto_paper_decision_log()
     entry = {
@@ -1019,6 +1029,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None):
         "symbol": symbol,
         "decision": decision,
         "reason": reason,
+        "trade_key": trade.get("trade_key") if trade else None,
         "top_candidate": row.get("Top Candidate") if row is not None else None,
         "setup_percent": row.get("Setup %") if row is not None else None,
         "rr": row.get("RR") if row is not None else None,
@@ -2433,7 +2444,8 @@ def _run_auto_paper_entries(df, controls):
             row.get("Symbol"),
             "OPENED",
             reason,
-            row
+            row,
+            trade=opened_trade
         )
 
         if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
@@ -3218,6 +3230,16 @@ def _paper_trade_candidates(df):
         & (df["Action Status"].isin(["REVIEW_TV_CHART", "ENTER", "ENTER_PAPER"]))
         & (df.get("Affordable", True) == True)
     ].copy()
+
+    if not candidates.empty:
+
+        candidates["Price Geometry Error"] = candidates.apply(
+            price_geometry_error,
+            axis=1
+        )
+        candidates = candidates[
+            candidates["Price Geometry Error"].isna()
+        ].copy()
 
     age_minutes = _scanner_output_age_minutes()
 

@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-07-01
+Last updated: 2026-07-02
 
 ## Project Purpose
 
@@ -95,6 +95,8 @@ At a high level, each scan does this per symbol:
 - Premarket, 4:00-9:30 ET: strong call/put candidates can surface as `PREMARKET_WATCH`, but `Realtime Ready` remains false and auto paper entry is not allowed.
 - Opening range, 9:30-9:45 ET: candidates use `OPENING_RANGE_CONFIRMATION`; the scanner waits for regular-market confirmation before entry.
 - Regular session after 9:45 ET: `ENTER` or `ENTER_PAPER` is allowed only if stock freshness, risk, timing, option quality, option affordability, quote freshness, event, regime, and dashboard auto-entry gates pass.
+- Price geometry is a hard gate: CALL candidates require `stop < entry < target`; PUT candidates require `target < entry < stop`. Invalid geometry is blocked as `INVALID_PRICE_GEOMETRY` before normal suggestions, auto-paper, Telegram/real entry gates, or paper setup display.
+- The risk manager also performs a final intended-direction geometry guard, so bearish/PUT-intended setups cannot return bullish stop/target structures even if their entry type falls through a long-side branch.
 - Regular session auto paper entries remain constrained to the dashboard's 9:45-15:30 ET entry window.
 
 ### Timeframes And Indicators
@@ -171,8 +173,10 @@ At a high level, each scan does this per symbol:
 - Each scanner run gets a `scan_id` in the form `YYYY-MM-DD_HHMMSS` and updates the daily manifest instead of creating a new report universe.
 - Candidate snapshots append to `data/daily/YYYY-MM-DD/candidate_snapshots.parquet` or `.csv`.
 - Trade telemetry still writes to legacy `telemetry/trade_telemetry.csv` and also appends to `data/daily/YYYY-MM-DD/trade_telemetry.csv`.
+- Paper trade opens/closes append immutable events to `data/daily/YYYY-MM-DD/paper_trade_events.csv`. Event types include `OPEN`, `MANUAL_CLOSE`, and `AUTO_EXIT`, with trade key, symbol, direction, option ticker, prices, status, R multiple, and exit reason when available.
 - Scanner Excel output still writes to the configured legacy path for compatibility and mirrors to `data/live/scanner_output_latest.xlsx` plus `data/daily/YYYY-MM-DD/scanner_output_close.xlsx`.
-- `tools/daily_validation_report.py` prefers daily files, falls back to live/legacy files, writes `reports/daily_validation_YYYY-MM-DD.html`, copies the report to `data/daily/YYYY-MM-DD/daily_validation_report.html`, and can mark the manifest final with `--finalize`.
+- `tools/daily_validation_report.py` prefers daily files, falls back to live/legacy files, writes `reports/daily_validation_YYYY-MM-DD.html`, copies the report to `data/daily/YYYY-MM-DD/daily_validation_report.html`, and can mark the manifest final with `--finalize`. It starts with a Validation Data Health section and uses paper trade events before telemetry/state for trade evidence.
+- The daily report includes `F. Data Quality Checks` with invalid price geometry, direction/option mismatch, high setup plus setup-threshold block, missing realtime-block reason, actual opened trade, and suggested-not-entered counts.
 - The Streamlit sidebar has a `Generate Daily Validation Report` control that runs the same daily report builder in-process, archives available inputs, optionally finalizes the manifest, and exposes a download button for the generated HTML report. This is the preferred Streamlit Cloud path because local terminals cannot see cloud-generated files.
 
 ### AI Summary
@@ -191,6 +195,7 @@ At a high level, each scan does this per symbol:
 - `app/state/signal_memory.json` stores the last AI-call signal state per symbol. It currently contains QQQ, SPY, AVGO, TSLA, and NVDA history.
 - `telemetry/trade_telemetry.csv` stores scan/projection telemetry and paper-trade close telemetry with scanner context snapshots.
 - `data/daily/YYYY-MM-DD/candidate_snapshots.parquet` or `.csv` stores every scanner candidate row in a normalized research schema, including skipped and blocked setups.
+- `data/daily/YYYY-MM-DD/paper_trade_events.csv` stores immutable paper open/close events so reports can detect true paper activity even if JSON state is later cleared.
 - `data/daily/YYYY-MM-DD/manifest.json` tracks daily validation session status, first/last scan time, last scan id, and finalization state.
 - `data/live/scanner_output_latest.xlsx` mirrors the latest scanner output for live/dashboard-style review.
 - Dashboard sidebar export buttons provide quick downloads for `scanner_output.xlsx`, `telemetry/trade_telemetry.csv`, `app/state/paper_trade_state.json`, and `app/state/trade_state.json`.
@@ -308,8 +313,10 @@ Known environment variables used by the code:
 - Telegram sends entry alerts for high-conviction actionable/reviewable scanner setups, dashboard paper-entry opens, full exit alerts for scanner-managed and paper-trade closes, and one-time partial-profit alerts when scanner trade management reaches the partial threshold.
 - Auto paper-entry alerts fire at the moment `open_paper_trade()` succeeds in the dashboard auto-paper path. Manual paper entry buttons are hidden by default through `ENABLE_MANUAL_PAPER_ENTRIES=false` and `SHOW_MANUAL_PAPER_BUTTONS=false` so telemetry represents system-generated scanner/alert trades. Manual close/correction remains enabled by default through `ALLOW_MANUAL_PAPER_CLOSE=true`. Auto paper alerts require realtime-ready status, affordable contract, setup >= `TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE`, RR >= `TELEGRAM_MIN_RR`, fresh quote, option quality >= `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, acceptable spread, and no event/regime block.
 - Telegram exit alerts resolve the current underlying price from the freshest available same-symbol source in priority order: `latest_quote`, `df_5m_latest_close`, then `df_15m_latest_close`. They validate that resolved price against the same-symbol expected close before sending. If the mismatch exceeds `TELEGRAM_EXIT_PRICE_MISMATCH_PCT` default 3%, the alert is blocked as `UNDERLYING_PRICE_MISMATCH`.
+- Telegram exit alerts are restricted to explicitly tracked `PAPER` or `REAL` trades. Scanner-managed `trade_state.json` entries use `trade_mode=SCANNER_TRACKED` and are dashboard/state only; they cannot send Telegram exits. Successful paper/real exit alerts set `exit_alert_sent` and use deterministic duplicate keys built from event type, symbol, option ticker, opened time, and exit reason.
 - Telegram entry alerts are intentionally tight: defaults are max 3 entry alerts per day, max 2 active alerted trades, 60-minute same-symbol/setup cooldown, 60-minute post-exit symbol cooldown, minimum alert score 85, minimum RR 2.0, max known spread 8%, and only top 1-3 bullish/bearish candidates. Entry alerts are dispatched after the full scanner dataframe is ranked, sorted by alert score, and attempted immediately in that scan. Time buckets are caps, not delays: max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 from 13:30-14:45 ET with a higher score threshold, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect daily max, active alerted trade cap, duplicate cooldown, symbol cooldown, quote/quality/spread/affordability gates, and the no-late-entry cutoff. Watchlist-only rows, premarket/opening-range rows, no-trade reasons, stale/delayed quotes, unknown alert spread, expensive contracts, and trailing-stop updates remain dashboard/logging only.
 - Telegram duplicate protection stores sent alert keys in `app/state/telegram_alert_state.json`, which is ignored by Git.
+- Runtime state files are ignored by Git, including scanner trade state, paper trade state, suggested trade state, auto-paper decision/settings JSON, and Telegram alert state. Do not commit stale active positions.
 - Premarket real-time mode surfaces strong candidates as `PREMARKET_WATCH` but does not mark them execution-ready. The scanner waits for opening-range confirmation from 9:30-9:45 ET and only allows `ENTER`/`ENTER_PAPER` after 9:45 ET when all gates pass.
 - Delayed-data mode remains acceptable for scanning and paper trading with manual confirmation. Real-time mode blocks truly stale stock aggregates and missing/stale/delayed option quotes.
 - Current option gate defaults: minimum volume 100, minimum open interest 500, max spread 10%, minimum option quality score 65, delayed quote threshold 10 minutes, stale quote threshold 30 minutes, 0DTE disabled, 1DTE disabled.
@@ -626,12 +633,15 @@ When starting a fresh GPT session:
 ## Recent Major Changes
 
 2026-07-01
+- Added hard CALL/PUT price-geometry validation and regression tests so reversed PUT stop/target structures are blocked before suggestion display or paper/alert entry.
+- Added a final risk-manager geometry invariant and daily report data-quality counters for invalid geometry, option mismatch, stale setup-threshold reasons, and missing realtime-ready explanations.
 - Added normalized candidate snapshot persistence for every scanner row under `data/candidate_snapshots/`, with parquet preferred and CSV fallback.
 - Added replay calibration utilities for MFE/MAE, bars to target/stop, ATR stop/target multiple grids, time-exit horizons, and win rate by horizon.
 - Extended expectancy analytics with reusable grouped tables covering trade count, win rate, average/median/total R, profit factor, average win/loss R, max drawdown R, and expectancy R.
 - Added grouped expectancy report generation with simple `KEEP`, `REVIEW`, `WATCH`, and `BLOCK/TIGHTEN` verdicts.
 - Added initial stock-underlying no-lookahead backtesting package with historical dataset loading, scanner-at-time evaluation, backtest runner, and report output.
 - Added `tools/daily_validation_report.py` for daily paper-session review, including trade result scorecard, gate quality summary, skipped opportunities, replay scorecard, rolling expectancy tables, rule-change suggestions, and optional source-file archiving.
+- Added Validation Data Health counts to the daily report and append-only `paper_trade_events.csv` logging for paper opens/closes.
 - Added a Streamlit sidebar daily-validation report button and HTML download path for cloud/local dashboard workflows.
 - Added profile-driven option affordability controls with `OPTION_AFFORDABILITY_MODE` and `OPTION_CAPITAL_PROFILE`.
 - Added `SMALL_ACCOUNT`, `GROWTH_ACCOUNT`, and `BEST_QUALITY` capital presets.
