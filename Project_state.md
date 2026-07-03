@@ -678,7 +678,7 @@ When starting a fresh GPT session:
 - Added `app/state/auto_paper_decision_log.json` and dashboard display to show each auto-entry decision as `SKIPPED`, `BLOCKED`, or `OPENED` with the exact gate reason.
 - Paper Trade Setup now only shows current valid scanner candidates with entry buttons. Stale/blocked/history rows are shown in a read-only Last Seen Candidates section with no entry controls.
 - Added `app/state/suggested_trade_state.json` and `app/state/suggested_trade_manager.py` to persist suggested call/put lifecycle across dashboard refreshes.
-- Dashboard is split into New Calls / Puts, Still Valid Suggested Trades, Paper Trade Setup, Last Seen Candidates, Active Trades, Exit Now Alerts, Auto Paper Decision Log, and Telemetry.
+- Dashboard wording separates review ideas, eligible paper candidates, and actual opened trades. Main sections are ordered as System Status, Market Health, Top Scanner Opportunities, New Suggested Calls / Puts - Review Only, Still Valid Suggested Trades, Paper Trade Setup - Eligible Candidates, Active Paper Trades - Actually Opened, Exit Now Alerts, Auto Paper Decision Summary, Validation Data Health, Daily Validation Report, and Telemetry & Debug.
 - Dashboard refresh cadence is separated from full scanner cadence: dashboard can refresh every 1 minute while full scanner defaults to every 5 minutes.
 - Scanner output now includes lifecycle placeholder columns: Suggestion Status, Suggestion First Seen, Suggestion Last Seen, Suggestion Age Minutes, Still Valid, Invalidation Reason, Exit Status, and Exit Reason Live.
 - Auto paper exits can close on stop, target, live exit signal/reason, profit R threshold, or end-of-day close. Real trading remains manual only.

@@ -49,6 +49,8 @@ from app.utils.json_store import (
     load_json_file,
     save_json_file
 )
+from app.storage.daily_paths import daily_path
+from app.storage.session_manager import get_trading_day
 
 try:
 
@@ -1045,6 +1047,61 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None):
     }
     entries.append(entry)
     _save_auto_paper_decision_log(entries)
+
+
+def _current_trading_day():
+
+    try:
+
+        return get_trading_day(
+            datetime.now(ZoneInfo("America/New_York"))
+        )
+
+    except Exception:
+
+        return datetime.now(
+            ZoneInfo("America/New_York")
+        ).date().isoformat()
+
+
+def _latest_scanner_run(df):
+
+    for column in ["Current ET", "Data Timestamp ET"]:
+
+        if column in df.columns and not df[column].dropna().empty:
+
+            return df[column].dropna().iloc[0]
+
+    age_minutes = _scanner_output_age_minutes()
+
+    if age_minutes is None:
+
+        return "missing"
+
+    return f"{age_minutes} minutes ago"
+
+
+def _dashboard_market_session():
+
+    now = datetime.now(ZoneInfo("America/New_York"))
+    minutes = now.hour * 60 + now.minute
+
+    if minutes < 4 * 60:
+
+        return "CLOSED"
+    if minutes < 9 * 60 + 30:
+
+        return "PREMARKET"
+    if minutes < 9 * 60 + 45:
+
+        return "OPENING_RANGE"
+    if minutes < 16 * 60:
+
+        return "REGULAR"
+    if minutes < 20 * 60:
+
+        return "AFTERHOURS"
+    return "CLOSED"
 
 
 def _round_timestamp_15m(value):
@@ -2612,13 +2669,57 @@ def _render_auto_paper_decision_log():
         st.info("No auto-paper decisions logged yet.")
         return
 
-    recent = pd.DataFrame(entries[-50:])
+    decisions = pd.DataFrame(entries)
 
-    st.dataframe(
-        _display_safe_dataframe(recent.iloc[::-1]),
-        width="stretch",
-        hide_index=True
-    )
+    if "decision" in decisions.columns:
+
+        counts = (
+            decisions["decision"]
+            .fillna("UNKNOWN")
+            .astype(str)
+            .str.upper()
+            .value_counts()
+        )
+        cols = st.columns(3)
+        cols[0].metric("OPENED", int(counts.get("OPENED", 0)))
+        cols[1].metric("BLOCKED", int(counts.get("BLOCKED", 0)))
+        cols[2].metric("SKIPPED", int(counts.get("SKIPPED", 0)))
+
+    reason_column = None
+
+    for candidate_column in ["reason", "blocked_by", "action_reason"]:
+
+        if candidate_column in decisions.columns:
+
+            reason_column = candidate_column
+            break
+
+    if reason_column:
+
+        top_reasons = (
+            decisions[reason_column]
+            .fillna("UNKNOWN")
+            .astype(str)
+            .value_counts()
+            .head(5)
+            .rename_axis("Reason")
+            .reset_index(name="Count")
+        )
+        st.dataframe(
+            _display_safe_dataframe(top_reasons),
+            width="stretch",
+            hide_index=True
+        )
+
+    with st.expander("Full auto-paper decision log", expanded=False):
+
+        recent = pd.DataFrame(entries[-50:])
+
+        st.dataframe(
+            _display_safe_dataframe(recent.iloc[::-1]),
+            width="stretch",
+            hide_index=True
+        )
 
 
 def _build_trade_opportunities(df):
@@ -2660,22 +2761,70 @@ def _build_trade_opportunities(df):
     return opportunities
 
 
+def _reason_not_entered(row):
+
+    geometry_error = price_geometry_error(row)
+
+    if geometry_error:
+
+        return geometry_error
+
+    for column in [
+        "Realtime Block Reason",
+        "Option Rejection Reason",
+        "Blocked By",
+        "Action Reason",
+        "Do Not Enter Reason",
+        "Action Status"
+    ]:
+
+        try:
+
+            value = row.get(column)
+
+        except Exception:
+
+            value = None
+
+        if value is not None and str(value).strip().lower() not in {
+            "",
+            "nan",
+            "none",
+            "eligible"
+        }:
+
+            return value
+
+    if str(row.get("Realtime Ready", "")).lower() not in {"true", "1", "yes"}:
+
+        return "REVIEW_ONLY_NOT_REALTIME_READY"
+
+    return "REVIEW_ONLY_NOT_ENTERED"
+
+
 def _new_calls_puts(df):
 
-    candidates = _paper_trade_candidates(df)
+    rows = _candidate_rows_for_suggestions(df)
 
-    if candidates.empty:
+    if not rows:
 
         return pd.DataFrame()
 
-    output = candidates.copy()
+    output = pd.DataFrame(rows).copy()
     output["Status"] = output["Candidate Direction"].map(
         lambda direction: "NEW_CALL" if direction == "CALL" else "NEW_PUT"
+    )
+    output["Review Badge"] = "REVIEW ONLY - NOT ENTERED"
+    output["Reason Not Entered"] = output.apply(
+        _reason_not_entered,
+        axis=1
     )
     columns = [
         "Symbol",
         "Candidate Direction",
         "Status",
+        "Review Badge",
+        "Reason Not Entered",
         "Top Candidate",
         "Setup Grade",
         "Setup %",
@@ -2728,10 +2877,20 @@ def _still_valid_suggestions():
 
         return pd.DataFrame()
 
+    rows["reason_not_entered"] = rows.apply(
+        lambda row: row.get("realtime_block_reason")
+        or row.get("action_reason")
+        or row.get("blocked_by")
+        or row.get("validity_reason")
+        or "review only; not entered",
+        axis=1
+    )
+
     columns = [
         "symbol",
         "direction",
         "status",
+        "reason_not_entered",
         "validity_reason",
         "first_seen_at",
         "last_seen_at",
@@ -3078,8 +3237,6 @@ def _calculate_option_pl(trade):
 
 def _active_trades(df):
 
-    trade_state = _load_trade_state()
-
     try:
 
         from app.state.paper_trade_manager import load_paper_trades
@@ -3090,7 +3247,7 @@ def _active_trades(df):
 
         paper_trade_state = {}
 
-    if not trade_state and not paper_trade_state:
+    if not paper_trade_state:
 
         return pd.DataFrame(columns=ACTIVE_TRADE_COLUMNS)
 
@@ -3101,45 +3258,6 @@ def _active_trades(df):
         current_prices = df.set_index("Symbol")["Price"].to_dict()
 
     rows = []
-
-    for symbol, trade in trade_state.items():
-
-        if trade.get("status") != "OPEN":
-
-            continue
-
-        current_price = current_prices.get(
-            symbol,
-            trade.get("entry_price")
-        )
-
-        rows.append({
-            "Symbol": symbol,
-            "Entry Price": trade.get("entry_price"),
-            "Current Price": current_price,
-            "P/L %": _calculate_trade_pl_pct(
-                trade,
-                current_price
-            ),
-            "Option Entry Mid": trade.get("option_entry_mid"),
-            "Option Current Mid": trade.get("option_current_mid"),
-            "Option P/L %": _calculate_option_pl(trade).get(
-                "option_pl_pct"
-            ),
-            "Option P/L $": _calculate_option_pl(trade).get(
-                "option_pl_dollars"
-            ),
-            "Option Quality": trade.get("option_liquidity_grade"),
-            "Quote Freshness": trade.get("option_quote_freshness"),
-            "Stop": trade.get("stop_loss"),
-            "Target": trade.get("take_profit"),
-            "Exit Signal": "HOLD",
-            "RR Progress": _calculate_trade_r_progress(
-                trade,
-                current_price
-            ),
-            "Bars In Trade": trade.get("bars_in_trade", 0)
-        })
 
     for _, trade in paper_trade_state.items():
 
@@ -3227,9 +3345,16 @@ def _paper_trade_candidates(df):
     candidates = df[
         (df["Setup Valid"] == True)
         & (df["Candidate Direction"].isin(["CALL", "PUT"]))
-        & (df["Action Status"].isin(["REVIEW_TV_CHART", "ENTER", "ENTER_PAPER"]))
+        & (df["Action Status"].isin(["ENTER", "ENTER_PAPER"]))
         & (df.get("Affordable", True) == True)
     ].copy()
+
+    if "Realtime Ready" in candidates.columns:
+
+        candidates = candidates[
+            candidates["Realtime Ready"].astype(str).str.lower().isin(["true", "1", "yes"])
+            | (candidates["Realtime Ready"] == True)
+        ].copy()
 
     if not candidates.empty:
 
@@ -3574,6 +3699,142 @@ def _telemetry_summary():
     }
 
 
+def _file_row_count(path, reader):
+
+    try:
+
+        if not path.exists() or path.stat().st_size == 0:
+
+            return 0
+
+        return len(reader(path))
+
+    except Exception:
+
+        return 0
+
+
+def _daily_candidate_snapshot_count(trading_day):
+
+    parquet_path = daily_path(trading_day, "candidate_snapshots.parquet")
+    csv_path = daily_path(trading_day, "candidate_snapshots.csv")
+
+    if parquet_path.exists():
+
+        return _file_row_count(parquet_path, pd.read_parquet)
+
+    return _file_row_count(csv_path, pd.read_csv)
+
+
+def _render_system_status(df, refresh_state, auto_paper_controls):
+
+    st.subheader("System Status")
+    telegram_enabled = _env_bool("TELEGRAM_ALERTS_ENABLED", False)
+    status = {
+        "App": "Dravya Wallstreet Edge",
+        "Trading Day": _current_trading_day(),
+        "Market Session": _dashboard_market_session(),
+        "Last Scanner Run": _latest_scanner_run(df),
+        "Auto Refresh": "ON" if refresh_state.get("enabled") else "OFF",
+        "Scanner Cadence": f"{refresh_state.get('scanner_cadence_minutes')} min",
+        "Market Data Mode": "MOCK" if settings.use_mock_market_data else "LIVE",
+        "Options Mode": "MOCK" if settings.use_mock_options else "LIVE",
+        "AI Summary": "ON" if settings.scanner_ai_summary_enabled else "OFF",
+        "Auto Paper": "ON" if auto_paper_controls.get("auto_paper_enabled") else "OFF",
+        "Telegram Alerts": "ON" if telegram_enabled else "OFF",
+        "Manual Paper Entry": "ON" if _manual_paper_entries_enabled() else "OFF",
+    }
+    status_df = pd.DataFrame(
+        list(status.items()),
+        columns=["Metric", "Value"]
+    )
+    st.dataframe(
+        _display_safe_dataframe(status_df),
+        width="stretch",
+        hide_index=True
+    )
+
+
+def _render_validation_data_health(df):
+
+    st.subheader("Validation Data Health")
+    trading_day = _current_trading_day()
+    decisions = _load_auto_paper_decision_log()
+    decision_df = pd.DataFrame(decisions) if decisions else pd.DataFrame()
+
+    try:
+
+        from app.state.paper_trade_manager import load_paper_trades
+        paper_trades = load_paper_trades()
+
+    except Exception:
+
+        paper_trades = {}
+
+    suggested = _load_suggested_trades_df()
+    opened_count = 0
+
+    if not decision_df.empty and "decision" in decision_df.columns:
+
+        opened_count = int(
+            decision_df["decision"]
+            .astype(str)
+            .str.upper()
+            .eq("OPENED")
+            .sum()
+        )
+
+    paper_events_path = daily_path(trading_day, "paper_trade_events.csv")
+    health = {
+        "Scanner rows": len(df),
+        "Candidate snapshots": _daily_candidate_snapshot_count(trading_day),
+        "Telemetry rows": len(_load_telemetry()),
+        "Paper trade events": _file_row_count(paper_events_path, pd.read_csv),
+        "Paper trade state records": len(paper_trades),
+        "Auto-paper decisions": len(decisions),
+        "OPENED decisions": opened_count,
+        "Suggested trades": len(suggested),
+        "Invalid geometry count": int(
+            df.apply(price_geometry_error, axis=1).notna().sum()
+        ) if not df.empty else 0,
+    }
+    health_df = pd.DataFrame(
+        list(health.items()),
+        columns=["Metric", "Value"]
+    )
+    st.dataframe(
+        _display_safe_dataframe(health_df),
+        width="stretch",
+        hide_index=True
+    )
+
+
+def _render_daily_validation_report_panel():
+
+    st.subheader("Daily Validation Report")
+    trading_day = _current_trading_day()
+    report_path = daily_path(
+        trading_day,
+        "daily_validation_report.html"
+    )
+    report_data = _read_download_file(report_path)
+
+    if report_data is None:
+
+        st.info(
+            "No daily validation report generated yet. Use the sidebar Daily Validation controls."
+        )
+        return
+
+    st.download_button(
+        label="Download daily_validation_report.html",
+        data=report_data,
+        file_name=f"daily_validation_{trading_day}.html",
+        mime="text/html",
+        key="download_daily_validation_report_main"
+    )
+
+
 def main():
 
     st.set_page_config(
@@ -3645,9 +3906,32 @@ def main():
         )
         st.rerun()
 
+    _render_system_status(
+        df,
+        refresh_state,
+        auto_paper_controls
+    )
+
     health = _market_health(df)
 
-    st.subheader("Trade Opportunities")
+    st.subheader("Market Health")
+
+    market_df = pd.DataFrame(
+        list(health.items()),
+        columns=["Metric", "Value"]
+    )
+
+    market_df = _display_safe_dataframe(
+        market_df
+    )
+
+    st.dataframe(
+        market_df,
+        width="stretch",
+        hide_index=True
+    )
+
+    st.subheader("Top Scanner Opportunities")
     opportunities = _build_trade_opportunities(df)
 
     st.dataframe(
@@ -3656,11 +3940,12 @@ def main():
         hide_index=True
     )
 
-    st.subheader("New Calls / Puts")
+    st.subheader("New Suggested Calls / Puts - Review Only")
+    st.caption("REVIEW ONLY - NOT ENTERED. These are scanner ideas, not opened paper trades.")
     new_calls_puts = _new_calls_puts(df)
     if new_calls_puts.empty:
 
-        st.info("No fresh current calls/puts right now.")
+        st.info("No fresh review-only suggested calls/puts right now.")
 
     else:
 
@@ -3684,30 +3969,10 @@ def main():
             hide_index=True
         )
 
-    st.subheader("Auto Paper Candidates")
+    st.subheader("Paper Trade Setup - Eligible Candidates")
     _render_paper_trade_controls(df)
 
-    st.subheader("Last Seen Candidates")
-    _render_last_seen_candidates(df)
-
-    st.subheader("Market Health Panel")
-
-    market_df = pd.DataFrame(
-        list(health.items()),
-        columns=["Metric", "Value"]
-    )
-
-    market_df = _display_safe_dataframe(
-        market_df
-    )
-
-    st.dataframe(
-        market_df,
-        width="stretch",
-        hide_index=True
-    )
-
-    st.subheader("Active Paper Trades")
+    st.subheader("Active Paper Trades - Actually Opened")
     active_trades = _active_trades(df)
 
     st.dataframe(
@@ -3735,16 +4000,25 @@ def main():
 
     _render_paper_exit_controls(df)
 
-    st.subheader("Auto Paper Decision Log")
+    st.subheader("Auto Paper Decision Summary")
     _render_auto_paper_decision_log()
 
-    st.subheader("Alert + Paper Performance Review")
-    telemetry_metrics = _telemetry_summary()
-    telemetry_cols = st.columns(3)
+    _render_validation_data_health(df)
 
-    for col, (label, value) in zip(telemetry_cols, telemetry_metrics.items()):
+    _render_daily_validation_report_panel()
 
-        col.metric(label, value)
+    with st.expander("Telemetry & Debug", expanded=False):
+
+        st.subheader("Last Seen Candidates")
+        _render_last_seen_candidates(df)
+
+        st.subheader("Alert + Paper Performance Review")
+        telemetry_metrics = _telemetry_summary()
+        telemetry_cols = st.columns(3)
+
+        for col, (label, value) in zip(telemetry_cols, telemetry_metrics.items()):
+
+            col.metric(label, value)
 
     st.caption("Auto-refresh controls are in the sidebar. Market-hours default is ON at 5 minutes; after-hours default is OFF.")
 
