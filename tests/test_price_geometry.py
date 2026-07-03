@@ -94,7 +94,7 @@ class PriceGeometryTests(unittest.TestCase):
 
         self.assertEqual(
             error,
-            "INVALID_PRICE_GEOMETRY: PUT requires target < entry < stop"
+            "INVALID_PRICE_GEOMETRY_PUT_REQUIRES_TARGET_LT_ENTRY_LT_STOP"
         )
 
     def test_bearish_active_trade_risk_rejects_bullish_geometry(self):
