@@ -175,6 +175,7 @@ At a high level, each scan does this per symbol:
 - Trade telemetry still writes to legacy `telemetry/trade_telemetry.csv` and also appends to `data/daily/YYYY-MM-DD/trade_telemetry.csv`.
 - Paper trade opens/closes append immutable events to `data/daily/YYYY-MM-DD/paper_trade_events.csv`. Event types include `OPEN`, `MANUAL_CLOSE`, and `AUTO_EXIT`, with trade key, symbol, direction, option ticker, prices, status, R multiple, and exit reason when available.
 - Scanner Excel output still writes to the configured legacy path for compatibility and mirrors to `data/live/scanner_output_latest.xlsx` plus `data/daily/YYYY-MM-DD/scanner_output_close.xlsx`.
+- The scanner writes fast CSV mirrors to `data/live/scanner_output_latest.csv` and `data/daily/YYYY-MM-DD/scanner_output_close.csv` before Excel output. The dashboard reads live CSV first, then live Excel, then legacy `scanner_output.xlsx`. Dashboard-triggered scanner runs use `data/live/scanner_run.lock` with stale-lock cleanup to prevent overlapping Streamlit refreshes from running the scanner concurrently.
 - `tools/daily_validation_report.py` prefers daily files, falls back to live/legacy files, writes `reports/daily_validation_YYYY-MM-DD.html`, copies the report to `data/daily/YYYY-MM-DD/daily_validation_report.html`, and can mark the manifest final with `--finalize`. It starts with a Validation Data Health section and uses paper trade events before telemetry/state for trade evidence.
 - The daily report includes `F. Data Quality Checks` with invalid price geometry, direction/option mismatch, high setup plus setup-threshold block, missing realtime-block reason, actual opened trade, and suggested-not-entered counts.
 - The Streamlit sidebar has a `Generate Daily Validation Report` control that runs the same daily report builder in-process, archives available inputs, optionally finalizes the manifest, and exposes a download button for the generated HTML report. This is the preferred Streamlit Cloud path because local terminals cannot see cloud-generated files.
@@ -325,7 +326,7 @@ Known environment variables used by the code:
 - Capital profiles: `SMALL_ACCOUNT` is the current $1,000/day profile, `GROWTH_ACCOUNT` widens contract-cost limits for larger buying power, and `BEST_QUALITY` effectively removes affordability limits while keeping metadata visible.
 - Current DTE preference defaults: minimum 10 DTE, preferred 14-30 DTE, max fallback 45 DTE. The ranker heavily penalizes 2-6 DTE, allows 7-13 DTE as lower-priority short swing/fallback, favors 14-30 DTE, treats 31-45 DTE as acceptable fallback, and de-prioritizes 46+ DTE unless otherwise justified.
 - Event blocker is configurable and enabled by default through environment settings.
-- Polygon aggregate cache lookup and cache set are currently commented out in `app/utils/polygon_client.py`.
+- Polygon aggregate cache lookup and cache set are enabled in `app/utils/polygon_client.py` using the short `POLYGON_CACHE_TTL` setting to reduce duplicate aggregate requests during rapid refreshes.
 - Polygon rate limiting is implemented in `app/utils/polygon_client.py` and active through `acquire_rate_limit()` in `get_aggs_cached()`.
 - Polygon request URL logs redact the API key before printing.
 - `POLYGON_API_KEY` loading now defaults to an empty string so missing env vars do not crash the module at import time.

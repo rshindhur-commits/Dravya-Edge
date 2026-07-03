@@ -70,6 +70,10 @@ if str(ROOT_DIR) not in sys.path:
 
 
 SCANNER_FILE = ROOT_DIR / "scanner_output.xlsx"
+LIVE_SCANNER_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.xlsx"
+LIVE_SCANNER_CSV_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.csv"
+SCANNER_LOCK_FILE = ROOT_DIR / "data" / "live" / "scanner_run.lock"
+SCANNER_LOCK_STALE_MINUTES = 10
 TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "trade_state.json"
 TELEMETRY_FILE = ROOT_DIR / "telemetry" / "trade_telemetry.csv"
 PAPER_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "paper_trade_state.json"
@@ -652,28 +656,42 @@ def _backfill_affordability_columns(df):
 
 def _load_scanner_output():
 
-    if not SCANNER_FILE.exists():
+    scanner_file = (
+        LIVE_SCANNER_CSV_FILE
+        if LIVE_SCANNER_CSV_FILE.exists()
+        else LIVE_SCANNER_FILE
+        if LIVE_SCANNER_FILE.exists()
+        else SCANNER_FILE
+    )
+
+    if not scanner_file.exists():
 
         return pd.DataFrame()
 
     try:
 
-        df = pd.read_excel(SCANNER_FILE)
+        if scanner_file.suffix.lower() == ".csv":
+
+            df = pd.read_csv(scanner_file)
+
+        else:
+
+            df = pd.read_excel(scanner_file)
 
     except Exception as exc:
 
-        bad_file = SCANNER_FILE.with_suffix(".bad.xlsx")
+        bad_file = scanner_file.with_suffix(".bad.xlsx")
 
         try:
 
-            SCANNER_FILE.replace(bad_file)
+            scanner_file.replace(bad_file)
 
         except Exception:
 
             pass
 
         st.error(
-            f"scanner_output.xlsx is corrupted or was partially written. "
+            f"{scanner_file.name} is corrupted or was partially written. "
             f"Moved it aside if possible. Run scanner again. Error: {exc}"
         )
 
@@ -986,7 +1004,11 @@ def _scanner_output_download_bytes():
 
     data = _dataframe_to_xlsx_bytes(df)
 
-    return data or _read_download_file(SCANNER_FILE)
+    return data or _read_download_file(
+        LIVE_SCANNER_FILE
+        if LIVE_SCANNER_FILE.exists()
+        else SCANNER_FILE
+    )
 
 
 def _load_auto_paper_decision_log():
@@ -1414,15 +1436,38 @@ def _is_market_hours():
 
 def _scanner_output_age_minutes():
 
-    if not SCANNER_FILE.exists():
+    scanner_file = (
+        LIVE_SCANNER_CSV_FILE
+        if LIVE_SCANNER_CSV_FILE.exists()
+        else LIVE_SCANNER_FILE
+        if LIVE_SCANNER_FILE.exists()
+        else SCANNER_FILE
+    )
+
+    if not scanner_file.exists():
 
         return None
 
     modified_at = datetime.fromtimestamp(
-        SCANNER_FILE.stat().st_mtime,
+        scanner_file.stat().st_mtime,
         tz=ZoneInfo("America/New_York")
     )
 
+    current_et = datetime.now(
+        ZoneInfo("America/New_York")
+    )
+
+
+def _scanner_lock_age_minutes():
+
+    if not SCANNER_LOCK_FILE.exists():
+
+        return None
+
+    modified_at = datetime.fromtimestamp(
+        SCANNER_LOCK_FILE.stat().st_mtime,
+        tz=ZoneInfo("America/New_York")
+    )
     current_et = datetime.now(
         ZoneInfo("America/New_York")
     )
@@ -1431,6 +1476,83 @@ def _scanner_output_age_minutes():
         (current_et - modified_at).total_seconds() / 60,
         2
     )
+
+
+def _scanner_is_running():
+
+    lock_age = _scanner_lock_age_minutes()
+
+    if lock_age is None:
+
+        return False
+
+    if lock_age > SCANNER_LOCK_STALE_MINUTES:
+
+        try:
+
+            SCANNER_LOCK_FILE.unlink()
+
+        except Exception:
+
+            pass
+
+        return False
+
+    return True
+
+
+def _acquire_scanner_lock():
+
+    SCANNER_LOCK_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    try:
+
+        lock_handle = os.open(
+            str(SCANNER_LOCK_FILE),
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        )
+
+    except FileExistsError:
+
+        if _scanner_is_running():
+
+            return False
+
+        try:
+
+            SCANNER_LOCK_FILE.unlink()
+
+        except Exception:
+
+            return False
+
+        return _acquire_scanner_lock()
+
+    with os.fdopen(lock_handle, "w", encoding="utf-8") as file:
+
+        file.write(
+            datetime.now(ZoneInfo("America/New_York")).isoformat()
+        )
+
+    return True
+
+
+def _release_scanner_lock():
+
+    try:
+
+        SCANNER_LOCK_FILE.unlink()
+
+    except FileNotFoundError:
+
+        pass
+
+    except Exception:
+
+        pass
 
 
 def _auto_refresh_defaults():
@@ -1697,9 +1819,14 @@ def _maybe_auto_run_scanner(refresh_state):
 
         return
 
+    scanner_file = (
+        LIVE_SCANNER_FILE
+        if LIVE_SCANNER_FILE.exists()
+        else SCANNER_FILE
+    )
     marker = (
-        SCANNER_FILE.stat().st_mtime
-        if SCANNER_FILE.exists()
+        scanner_file.stat().st_mtime
+        if scanner_file.exists()
         else "missing"
     )
 
@@ -1713,10 +1840,19 @@ def _maybe_auto_run_scanner(refresh_state):
 
         try:
 
-            _run_scanner_once()
-            st.sidebar.success(
-                "Scanner auto-run completed."
-            )
+            result = _run_scanner_once()
+
+            if result.get("ran"):
+
+                st.sidebar.success(
+                    "Scanner auto-run completed."
+                )
+
+            else:
+
+                st.sidebar.info(
+                    "Scanner already running; showing latest available results."
+                )
 
         except Exception as exc:
 
@@ -1742,30 +1878,48 @@ def _sync_streamlit_secrets_to_env():
 
 def _run_scanner_once():
 
-    _sync_streamlit_secrets_to_env()
+    if not _acquire_scanner_lock():
 
-    import importlib
-
-    from app.config import settings as settings_module
-
-    settings_module.settings = settings_module.get_settings()
+        return {
+            "ran": False,
+            "reason": "SCANNER_ALREADY_RUNNING"
+        }
 
     try:
 
-        polygon_client = importlib.import_module(
-            "app.utils.polygon_client"
-        )
-        polygon_client.POLYGON_API_KEY = (
-            settings_module.settings.polygon_api_key
-        )
+        _sync_streamlit_secrets_to_env()
 
-    except Exception:
+        import importlib
 
-        pass
+        from app.config import settings as settings_module
 
-    from app.main import run_scanner
+        settings_module.settings = settings_module.get_settings()
 
-    run_scanner()
+        try:
+
+            polygon_client = importlib.import_module(
+                "app.utils.polygon_client"
+            )
+            polygon_client.POLYGON_API_KEY = (
+                settings_module.settings.polygon_api_key
+            )
+
+        except Exception:
+
+            pass
+
+        from app.main import run_scanner
+
+        run_scanner()
+
+        return {
+            "ran": True,
+            "reason": "COMPLETED"
+        }
+
+    finally:
+
+        _release_scanner_lock()
 
 
 def _scanner_context_from_row(row):
@@ -3596,8 +3750,15 @@ def main():
 
             try:
 
-                _run_scanner_once()
-                st.success("Scanner completed. Dashboard refreshed.")
+                result = _run_scanner_once()
+
+                if result.get("ran"):
+
+                    st.success("Scanner completed. Dashboard refreshed.")
+
+                else:
+
+                    st.info("Scanner already running; showing latest available results.")
 
             except Exception as exc:
 
@@ -3614,10 +3775,30 @@ def main():
     df = _enrich_with_suggestion_lifecycle(df)
 
     latest_time = df.get("Current ET")
+    latest_scanner_run = "N/A"
 
     if latest_time is not None and len(latest_time) > 0:
 
-        st.caption(f"Last scanner run: {latest_time.iloc[0]}")
+        latest_scanner_run = latest_time.iloc[0]
+        st.caption(f"Last scanner run: {latest_scanner_run}")
+
+    st.subheader("System Status")
+    system_status = {
+        "Last Scanner Run": latest_scanner_run,
+        "Scanner Running": "YES" if _scanner_is_running() else "NO",
+        "Auto Refresh": "ON" if refresh_state.get("enabled") else "OFF"
+    }
+
+    st.dataframe(
+        _display_safe_dataframe(
+            pd.DataFrame(
+                list(system_status.items()),
+                columns=["Metric", "Value"]
+            )
+        ),
+        width="stretch",
+        hide_index=True
+    )
 
     auto_closed = _run_auto_paper_exits(
         df,

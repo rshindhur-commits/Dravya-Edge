@@ -300,9 +300,13 @@ def get_aggs_cached(symbol: str, multiplier: int, timespan: str, from_: int, to:
     """
     key = (symbol, multiplier, timespan, from_, to, limit)
 
-    # cached = _cache_get(key)
-    # if cached is not None:
-    #     return cached
+    cached = _cache_get(key)
+    if cached is not None:
+
+        debug_print(
+            f"[POLYGON CACHE HIT] {symbol} {multiplier}{timespan}"
+        )
+        return cached
 
     # acquire token before making the request
     acquire_rate_limit()
@@ -525,7 +529,7 @@ def get_aggs_cached(symbol: str, multiplier: int, timespan: str, from_: int, to:
         })
 
     debug_print(f"[TOTAL CANDLES RETURNED] {symbol}: {len(results)}")
-    #_cache_set(key, results)
+    _cache_set(key, results)
     return results
 
 
