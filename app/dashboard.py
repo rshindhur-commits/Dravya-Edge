@@ -75,6 +75,7 @@ SCANNER_FILE = ROOT_DIR / "scanner_output.xlsx"
 LIVE_SCANNER_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.xlsx"
 LIVE_SCANNER_CSV_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.csv"
 SCANNER_LOCK_FILE = ROOT_DIR / "data" / "live" / "scanner_run.lock"
+SCANNER_STATUS_FILE = ROOT_DIR / "data" / "live" / "scanner_run_status.json"
 SCANNER_LOCK_STALE_MINUTES = 10
 TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "trade_state.json"
 TELEMETRY_FILE = ROOT_DIR / "telemetry" / "trade_telemetry.csv"
@@ -1514,6 +1515,97 @@ def _scanner_output_age_minutes():
         ZoneInfo("America/New_York")
     )
 
+    return round(
+        (current_et - modified_at).total_seconds() / 60,
+        2
+    )
+
+
+def _load_scanner_run_status():
+
+    return load_json_file(
+        str(SCANNER_STATUS_FILE),
+        {}
+    )
+
+
+def _save_scanner_run_status(status):
+
+    save_json_file(
+        str(SCANNER_STATUS_FILE),
+        status
+    )
+
+
+def _scanner_status_timestamp_age_minutes(field):
+
+    status = _load_scanner_run_status()
+    value = status.get(field)
+
+    if not value:
+
+        return None
+
+    try:
+
+        timestamp = datetime.fromisoformat(value)
+
+        if timestamp.tzinfo is None:
+
+            timestamp = timestamp.replace(
+                tzinfo=ZoneInfo("America/New_York")
+            )
+
+        current_et = datetime.now(
+            ZoneInfo("America/New_York")
+        )
+
+        return round(
+            (current_et - timestamp.astimezone(ZoneInfo("America/New_York"))).total_seconds() / 60,
+            2
+        )
+
+    except Exception:
+
+        return None
+
+
+def _scanner_recently_attempted(cadence_minutes):
+
+    ages = [
+        age for age in [
+            _scanner_status_timestamp_age_minutes("last_started_at"),
+            _scanner_status_timestamp_age_minutes("last_completed_at")
+        ]
+        if age is not None
+    ]
+
+    if not ages:
+
+        return False
+
+    return min(ages) < cadence_minutes
+
+
+def _mark_scanner_started():
+
+    status = _load_scanner_run_status()
+    status.update({
+        "status": "RUNNING",
+        "last_started_at": datetime.now(ZoneInfo("America/New_York")).isoformat()
+    })
+    _save_scanner_run_status(status)
+
+
+def _mark_scanner_completed(result_status="COMPLETED"):
+
+    status = _load_scanner_run_status()
+    status.update({
+        "status": result_status,
+        "last_completed_at": datetime.now(ZoneInfo("America/New_York")).isoformat()
+    })
+    _save_scanner_run_status(status)
+
 
 def _scanner_lock_age_minutes():
 
@@ -1854,6 +1946,8 @@ def _render_auto_refresh_controls():
 
     should_run_scanner = (
         auto_refresh_enabled
+        and not _scanner_is_running()
+        and not _scanner_recently_attempted(scanner_cadence_minutes)
         and (
             age_minutes is None
             or age_minutes >= scanner_cadence_minutes
@@ -1877,7 +1971,9 @@ def _maybe_auto_run_scanner(refresh_state):
         return
 
     scanner_file = (
-        LIVE_SCANNER_FILE
+        LIVE_SCANNER_CSV_FILE
+        if LIVE_SCANNER_CSV_FILE.exists()
+        else LIVE_SCANNER_FILE
         if LIVE_SCANNER_FILE.exists()
         else SCANNER_FILE
     )
@@ -1942,6 +2038,8 @@ def _run_scanner_once():
             "reason": "SCANNER_ALREADY_RUNNING"
         }
 
+    _mark_scanner_started()
+
     try:
 
         _sync_streamlit_secrets_to_env()
@@ -1969,10 +2067,17 @@ def _run_scanner_once():
 
         run_scanner()
 
+        _mark_scanner_completed("COMPLETED")
+
         return {
             "ran": True,
             "reason": "COMPLETED"
         }
+
+    except Exception:
+
+        _mark_scanner_completed("FAILED")
+        raise
 
     finally:
 
