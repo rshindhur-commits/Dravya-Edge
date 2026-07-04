@@ -24,6 +24,18 @@ def db_writes_enabled() -> bool:
     ] and bool(os.getenv("DATABASE_URL", "").strip())
 
 
+def print_db_status(prefix="[DB STATUS]"):
+    print(
+        prefix,
+        "DB_WRITE_ENABLED=",
+        os.getenv("DB_WRITE_ENABLED"),
+        "DATABASE_URL_PRESENT=",
+        bool(os.getenv("DATABASE_URL", "").strip()),
+        "DB_WRITES_ACTIVE=",
+        db_writes_enabled()
+    )
+
+
 def _json_safe(value):
     if value is None:
         return None
