@@ -104,6 +104,7 @@ from app.alerts.telegram_alerts import (
     maybe_send_trade_exit_alert
 )
 from app.db.persistence import (
+    print_db_status,
     record_gate_decisions,
     record_scanner_run_finish,
     record_scanner_run_start
@@ -1867,6 +1868,7 @@ def run_scanner():
 
     validate_runtime_settings()
     print_runtime_banner()
+    print_db_status()
     scan_timestamp = now_et()
     trading_day = get_trading_day(scan_timestamp)
     scan_id = get_scan_id(trading_day, scan_timestamp)

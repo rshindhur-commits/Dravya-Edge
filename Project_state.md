@@ -212,6 +212,7 @@ At a high level, each scan does this per symbol:
 - `tools/diag_fetch.py` fetches raw 5m Polygon data, resamples to 15m, computes indicators correctly, and prints latest close / move diagnostics.
 - `tools/daily_validation_report.py` creates `reports/daily_validation_YYYY-MM-DD.html` from scanner output, trade telemetry, paper/live state JSON, auto-paper decision logs, and suggested-trade state. Use `--archive` to copy those source files into `daily_reviews/YYYY-MM-DD/`.
 - `tools/test_db_connection.py` verifies the configured SQLAlchemy/Postgres connection by running `SELECT now()`.
+- `tools/test_db_insert.py` verifies inserts into `scanner_runs` using `manual_db_test_001`.
 - The dashboard sidebar can generate and download the daily validation report directly, which should be used for Streamlit Cloud sessions.
 
 ## Dependencies
@@ -320,7 +321,9 @@ Known environment variables used by the code:
 - Intended market-hours AI mode is `ENABLE_AI_SUMMARY=false` and `SCANNER_AI_SUMMARY_ENABLED=false`; use dashboard rules only.
 - Runtime settings load `.env` with override enabled so local config changes, including `ENABLE_AI_SUMMARY=false`, win over stale process variables after restart.
 - Streamlit Cloud must be configured through Streamlit Secrets; local `.env` is not automatically available in deployed Streamlit. The dashboard syncs Streamlit Secrets into env before scanner imports and shows non-sensitive sidebar key status.
+- Runtime environment reads `APP_ENV` first and accepts `ENV` as a fallback alias, so Streamlit Secrets can set either `APP_ENV="production"` or `ENV="production"`.
 - Neon/Postgres persistence is optional and additive. `DATABASE_URL` should use the Neon pooler host for Streamlit runtime writes, while `DATABASE_DIRECT_URL` is reserved for schema setup and one-time migrations. DB writes occur only when `DB_WRITE_ENABLED=true` and `DATABASE_URL` is configured; otherwise the current JSON/CSV/Excel dashboard flow continues unchanged.
+- Scanner startup prints a non-sensitive DB status line showing `DB_WRITE_ENABLED`, whether `DATABASE_URL` is present, and whether DB writes are active. It never prints the URL or password.
 - Current Neon tables are small event/state tables only: `alert_events`, `paper_trades`, `scanner_runs`, and `gate_decisions`. Full candle history, option chain snapshots, raw API responses, scanner Excel blobs, and large CSV payloads are intentionally kept out of Neon during the free-tier phase.
 - Telegram alerts are opt-in with `TELEGRAM_ALERTS_ENABLED=true`. Bot credentials should be stored in Streamlit Secrets under `[telegram]` as `bot_token` and `chat_id`, or in local ignored env vars for development. Real bot tokens must not be committed.
 - Telegram sends entry alerts for high-conviction actionable/reviewable scanner setups, dashboard paper-entry opens, full exit alerts for scanner-managed and paper-trade closes, and one-time partial-profit alerts when scanner trade management reaches the partial threshold.

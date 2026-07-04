@@ -138,7 +138,10 @@ def get_settings():
     return RuntimeSettings(
         app_env=get_secret_env(
             "APP_ENV",
-            "development"
+            get_secret_env(
+                "ENV",
+                "development"
+            )
         ),
         use_mock_market_data=get_bool_env(
             "USE_MOCK_MARKET_DATA",

@@ -119,6 +119,20 @@ After creating the tables in Neon SQL Editor and setting local `DATABASE_URL`, t
 python tools\test_db_connection.py
 ```
 
+To verify inserts into `scanner_runs`, run:
+
+```powershell
+python tools\test_db_insert.py
+```
+
+The scanner prints a non-sensitive startup line like this when it runs:
+
+```text
+[DB STATUS] DB_WRITE_ENABLED= true DATABASE_URL_PRESENT= True DB_WRITES_ACTIVE= True
+```
+
+If `DB_WRITES_ACTIVE` is false in Streamlit Cloud logs, check that Streamlit Secrets include `DB_WRITE_ENABLED=true` and `DATABASE_URL`. The runtime banner uses `APP_ENV`; `ENV` is also accepted as a fallback alias for Streamlit Secrets.
+
 ## Market Session Flow
 
 - Premarket, 4:00-9:30 ET: strong call/put candidates can surface as `PREMARKET_WATCH`, but they are not execution-ready and cannot auto paper-enter.
