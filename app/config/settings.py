@@ -16,24 +16,7 @@ def get_secret_env(name, default=None):
 
         return value
 
-    try:
-
-        import streamlit as st
-
-        value = st.secrets.get(
-            name,
-            default
-        )
-
-        if value is None:
-
-            return default
-
-        return str(value)
-
-    except Exception:
-
-        return default
+    return default
 
 
 def get_bool_env(name, default=False):
