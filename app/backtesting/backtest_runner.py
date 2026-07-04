@@ -2,7 +2,7 @@ import pandas as pd
 
 from app.analytics.trade_outcome_tracker import evaluate_trade_outcome
 from app.backtesting.no_lookahead_scanner import evaluate_symbol_at_time
-from app.gates.entry_gate import EntryGateConfig, evaluate_entry_gate
+from app.gates import EntryGateConfig, evaluate_entry_gate
 
 
 def _candidate_key(candidate):

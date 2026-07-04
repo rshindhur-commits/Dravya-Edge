@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from app.gates.entry_gate import (
+from app.gates import (
     EntryGateConfig,
     evaluate_entry_gate
 )
