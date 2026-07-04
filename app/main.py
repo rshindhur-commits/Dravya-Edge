@@ -103,6 +103,11 @@ from app.alerts.telegram_alerts import (
     maybe_send_scanner_entry_alert,
     maybe_send_trade_exit_alert
 )
+from app.db.persistence import (
+    record_gate_decisions,
+    record_scanner_run_finish,
+    record_scanner_run_start
+)
 from app.utils.runtime_logging import debug_print
 from app.storage.daily_paths import (
     daily_path,
@@ -1869,6 +1874,13 @@ def run_scanner():
         trading_day=trading_day,
         scan_id=scan_id,
         scan_timestamp=scan_timestamp
+    )
+    record_scanner_run_start(
+        scan_id,
+        {
+            "trading_day": trading_day,
+            "scan_timestamp": scan_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        }
     )
 
     table = Table(
@@ -4561,6 +4573,10 @@ def run_scanner():
     df_results = _add_relative_strength_rankings(
         df_results
     )
+    record_gate_decisions(
+        df_results.to_dict("records"),
+        run_id=scan_id
+    )
 
     snapshot_result = append_candidate_snapshots(
         df_results,
@@ -4671,6 +4687,18 @@ def run_scanner():
     print(
         f"\nExcel report saved:"
         f" {output_file}"
+    )
+    record_scanner_run_finish(
+        scan_id,
+        status="FINISHED",
+        rows_count=len(df_results),
+        payload={
+            "trading_day": trading_day,
+            "output_file": str(output_file),
+            "snapshot_rows": (
+                snapshot_result or {}
+            ).get("rows")
+        }
     )
 
 

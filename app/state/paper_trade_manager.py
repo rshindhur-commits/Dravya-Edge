@@ -494,6 +494,17 @@ def open_paper_trade(
 
     state[trade_key] = trade
     save_paper_trades(state)
+
+    try:
+
+        from app.db.persistence import upsert_paper_trade
+
+        upsert_paper_trade(trade)
+
+    except Exception as exc:
+
+        print(f"[DB PAPER TRADE WARNING] {exc}")
+
     _append_paper_trade_event(
         trade,
         "OPEN"
@@ -558,6 +569,17 @@ def close_paper_trade(
 
     state[trade_key] = trade
     save_paper_trades(state)
+
+    try:
+
+        from app.db.persistence import upsert_paper_trade
+
+        upsert_paper_trade(trade)
+
+    except Exception as exc:
+
+        print(f"[DB PAPER TRADE WARNING] {exc}")
+
     event_type = (
         "MANUAL_CLOSE"
         if "manual" in str(exit_reason or "").lower()

@@ -1,6 +1,8 @@
 import html
 import os
 from datetime import datetime, timedelta, timezone
+from functools import wraps
+from inspect import signature
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -284,6 +286,131 @@ def get_telegram_credentials():
     )
 
     return str(token).strip(), str(chat_id).strip()
+
+
+def _alert_attempt_context(alert_type, arguments):
+
+    if alert_type == "PAPER_ENTRY":
+
+        trade = arguments.get("trade") or {}
+        scanner_context = (
+            arguments.get("scanner_context")
+            or trade.get("scanner_context")
+            or {}
+        )
+        return {
+            "symbol": trade.get("symbol") or scanner_context.get("Symbol"),
+            "direction": trade.get("direction") or scanner_context.get("Candidate Direction"),
+            "option_ticker": trade.get("option_ticker") or scanner_context.get("Option Ticker"),
+            "payload": {
+                "trade_key": trade.get("trade_key"),
+                "reason": arguments.get("reason"),
+                "scanner_context": scanner_context
+            }
+        }
+
+    if alert_type == "TRADE_EXIT":
+
+        trade = arguments.get("trade") or {}
+        return {
+            "symbol": arguments.get("symbol") or trade.get("symbol"),
+            "direction": trade.get("direction"),
+            "option_ticker": trade.get("option_ticker") or trade.get("ticker"),
+            "payload": {
+                "trade_key": trade.get("trade_key"),
+                "exit_reason": arguments.get("exit_reason"),
+                "event_type": arguments.get("event_type"),
+                "current_price": arguments.get("current_price"),
+                "pnl_pct": arguments.get("pnl_pct"),
+                "r_multiple": arguments.get("r_multiple"),
+                "outcome": arguments.get("outcome"),
+                "scanner_row_symbol": arguments.get("scanner_row_symbol")
+            }
+        }
+
+    option_contract = arguments.get("option_contract") or {}
+    action_decision = arguments.get("action_decision") or {}
+    return {
+        "symbol": arguments.get("symbol"),
+        "direction": option_contract.get("type"),
+        "option_ticker": option_contract.get("ticker"),
+        "payload": {
+            "final_signal": arguments.get("final_signal"),
+            "action_status": action_decision.get("action_status"),
+            "bar_timestamp": arguments.get("bar_timestamp"),
+            "top_candidate": arguments.get("top_candidate"),
+            "market_session": arguments.get("market_session"),
+            "option_quality_score": arguments.get("option_quality_score"),
+            "option_spread_pct": arguments.get("option_spread_pct")
+        }
+    }
+
+
+def _record_alert_attempt(alert_type, context, result=None, error=None):
+
+    try:
+
+        from app.db.persistence import record_alert_event
+
+        result = result or {}
+        status = "ERROR" if error else "SENT" if result.get("sent") else "SKIPPED"
+        reason = str(error) if error else result.get("reason")
+        payload = dict(context.get("payload") or {})
+        payload["result"] = result
+
+        record_alert_event(
+            alert_type=alert_type,
+            symbol=context.get("symbol"),
+            direction=context.get("direction"),
+            option_ticker=context.get("option_ticker"),
+            status=status,
+            reason=reason,
+            dedupe_key=result.get("alert_key") if result.get("sent") else None,
+            payload=payload
+        )
+
+    except Exception as exc:
+
+        print(f"[DB ALERT EVENT WARNING] {exc}")
+
+
+def _telegram_attempt_logger(alert_type):
+
+    def decorator(func):
+
+        func_signature = signature(func)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+
+            bound = func_signature.bind_partial(*args, **kwargs)
+            context = _alert_attempt_context(
+                alert_type,
+                bound.arguments
+            )
+
+            try:
+
+                result = func(*args, **kwargs)
+                _record_alert_attempt(
+                    alert_type,
+                    context,
+                    result=result
+                )
+                return result
+
+            except Exception as exc:
+
+                _record_alert_attempt(
+                    alert_type,
+                    context,
+                    error=exc
+                )
+                raise
+
+        return wrapper
+
+    return decorator
 
 
 def send_telegram_alert(message):
@@ -779,6 +906,7 @@ def build_paper_entry_alert_message(trade, scanner_context, reason=None):
     ])
 
 
+@_telegram_attempt_logger("PAPER_ENTRY")
 def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
 
     if not telegram_entry_alerts_enabled():
@@ -945,6 +1073,7 @@ def build_trade_exit_alert_message(
     ])
 
 
+@_telegram_attempt_logger("TRADE_EXIT")
 def maybe_send_trade_exit_alert(
     symbol,
     trade,
@@ -1104,6 +1233,7 @@ def maybe_send_trade_exit_alert(
     }
 
 
+@_telegram_attempt_logger("SCANNER_ENTRY")
 def maybe_send_scanner_entry_alert(
     symbol,
     final_signal,
