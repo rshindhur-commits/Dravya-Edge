@@ -91,6 +91,13 @@ def _sync_database_section(secrets):
     if database is None:
         return False
 
+    return _sync_database_mapping(database)
+
+
+def _sync_database_mapping(source):
+    if source is None:
+        return False
+
     mapping = {
         "DATABASE_URL": ["DATABASE_URL", "database_url", "url"],
         "DATABASE_DIRECT_URL": [
@@ -119,12 +126,28 @@ def _sync_database_section(secrets):
 
     for env_key, secret_keys in mapping.items():
         for secret_key in secret_keys:
-            value = _get_secret(database, secret_key)
+            value = _get_secret(source, secret_key)
 
             if value is not None:
                 os.environ[env_key] = str(value)
                 found = True
                 break
+
+    return found
+
+
+def _sync_nested_database_keys(secrets):
+    found = False
+
+    for section_name, section_value in _items(secrets):
+        if section_name in {"connections", "database"}:
+            continue
+
+        if not _items(section_value):
+            continue
+
+        if _sync_database_mapping(section_value):
+            found = True
 
     return found
 
@@ -153,6 +176,7 @@ def sync_streamlit_secrets_to_env(secrets=None):
         pass
 
     database_section_found = _sync_database_section(secrets)
+    nested_database_keys_found = _sync_nested_database_keys(secrets)
 
     connection_url_found = False
 
@@ -177,6 +201,8 @@ def sync_streamlit_secrets_to_env(secrets=None):
         _get_secret(secrets, "DB_WRITE_ENABLED") is not None,
         "DATABASE_SECTION_FOUND=",
         database_section_found,
+        "NESTED_DATABASE_KEYS_FOUND=",
+        nested_database_keys_found,
         "CONNECTION_URL_FOUND=",
         connection_url_found,
         "ENV_DATABASE_URL_PRESENT=",
