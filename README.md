@@ -104,7 +104,7 @@ DB_MAX_OVERFLOW = "5"
 DB_CONNECT_TIMEOUT_SECONDS = "10"
 ```
 
-These keys should be at the root level of Streamlit Secrets. If you use Streamlit native connections, the app can also fall back to a connection `url` under common names such as `[connections.trading_db]`, `[connections.neon]`, or `[connections.postgres]`. It also supports a `[database]` section with `url`, `direct_url`, and `write_enabled` keys. Root-level keys remain the clearest deployment path.
+These keys should be at the root level of Streamlit Secrets. In TOML, keys placed after `[telegram]` belong to the `telegram` table until another `[section]` starts, so put the root-level database block before `[telegram]`. If you use Streamlit native connections, the app can also fall back to a connection `url` under common names such as `[connections.trading_db]`, `[connections.neon]`, or `[connections.postgres]`. It also supports a `[database]` section with `url`, `direct_url`, and `write_enabled` keys. Root-level keys remain the clearest deployment path.
 
 Current DB-backed tables are intentionally small event/state tables:
 
@@ -130,7 +130,7 @@ python tools\test_db_insert.py
 The scanner prints a non-sensitive startup line like this when it runs:
 
 ```text
-[STREAMLIT SECRETS STATUS] ROOT_DATABASE_URL_PRESENT= True ROOT_DB_WRITE_ENABLED_PRESENT= True DATABASE_SECTION_FOUND= False CONNECTION_URL_FOUND= False ENV_DATABASE_URL_PRESENT= True ENV_DB_WRITE_ENABLED= true
+[STREAMLIT SECRETS STATUS] ROOT_DATABASE_URL_PRESENT= True ROOT_DB_WRITE_ENABLED_PRESENT= True DATABASE_SECTION_FOUND= False NESTED_DATABASE_KEYS_FOUND= False CONNECTION_URL_FOUND= False ENV_DATABASE_URL_PRESENT= True ENV_DB_WRITE_ENABLED= true
 [DB STATUS] DB_WRITE_ENABLED= true DATABASE_URL_PRESENT= True DB_WRITES_ACTIVE= True
 ```
 
