@@ -1,5 +1,5 @@
 from app.utils.runtime_logging import debug_print
-from app.gates.entry_gate import validate_price_geometry
+from app.gates import validate_price_geometry
 
 
 def _safe_value(row, key, default=None):

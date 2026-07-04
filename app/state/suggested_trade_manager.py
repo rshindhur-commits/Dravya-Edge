@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from app.gates.entry_gate import price_geometry_error
+from app.gates import price_geometry_error
 from app.utils.json_store import load_json_file, save_json_file
 
 

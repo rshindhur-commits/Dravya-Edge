@@ -35,7 +35,7 @@ import pandas as pd
 import streamlit as st
 
 from app.config.settings import settings
-from app.gates.entry_gate import (
+from app.gates import (
     EntryGateConfig,
     env_int,
     has_active_symbol_trade,

@@ -7,7 +7,7 @@ from app.utils.json_store import (
     load_json_file,
     save_json_file
 )
-from app.gates.entry_gate import (
+from app.gates import (
     active_symbol_trade,
     build_trade_key
 )

@@ -27,7 +27,7 @@ from app.config.settings import (
     settings,
     validate_runtime_settings
 )
-from app.gates.entry_gate import (
+from app.gates import (
     EntryGateConfig,
     evaluate_entry_gate
 )
