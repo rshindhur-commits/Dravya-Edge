@@ -195,6 +195,8 @@ At a high level, each scan does this per symbol:
 - `app/state/trade_state.json` stores active open trade state. It is currently empty.
 - `app/state/signal_memory.json` stores the last AI-call signal state per symbol. It currently contains QQQ, SPY, AVGO, TSLA, and NVDA history.
 - `telemetry/trade_telemetry.csv` stores scan/projection telemetry and paper-trade close telemetry with scanner context snapshots.
+- `app/db/connection.py` owns the SQLAlchemy engine built from `DATABASE_URL`; `app/db/persistence.py` owns best-effort Neon writes for alert attempts, paper trades, scanner run summaries, and gate decision summaries.
+- Neon persistence currently writes `alert_events`, `paper_trades`, `scanner_runs`, and `gate_decisions` only when `DB_WRITE_ENABLED=true`. Failed DB writes log warnings and do not block Telegram, scanner output, paper trade JSON state, or Streamlit dashboard rendering.
 - `data/daily/YYYY-MM-DD/candidate_snapshots.parquet` or `.csv` stores every scanner candidate row in a normalized research schema, including skipped and blocked setups.
 - `data/daily/YYYY-MM-DD/paper_trade_events.csv` stores immutable paper open/close events so reports can detect true paper activity even if JSON state is later cleared.
 - `data/daily/YYYY-MM-DD/manifest.json` tracks daily validation session status, first/last scan time, last scan id, and finalization state.
@@ -209,6 +211,7 @@ At a high level, each scan does this per symbol:
 - `tools/get_suggested_rate.py` prints a suggested `POLYGON_RATE_LIMIT_PER_MINUTE` based on recent header observations.
 - `tools/diag_fetch.py` fetches raw 5m Polygon data, resamples to 15m, computes indicators correctly, and prints latest close / move diagnostics.
 - `tools/daily_validation_report.py` creates `reports/daily_validation_YYYY-MM-DD.html` from scanner output, trade telemetry, paper/live state JSON, auto-paper decision logs, and suggested-trade state. Use `--archive` to copy those source files into `daily_reviews/YYYY-MM-DD/`.
+- `tools/test_db_connection.py` verifies the configured SQLAlchemy/Postgres connection by running `SELECT now()`.
 - The dashboard sidebar can generate and download the daily validation report directly, which should be used for Streamlit Cloud sessions.
 
 ## Dependencies
@@ -217,6 +220,7 @@ The project uses a UTF-8 encoded `requirements.txt`. Important packages include:
 
 - `pandas`, `numpy`, `ta`
 - `requests`, `urllib3`, `python-dotenv`, `pytz`, `tzdata`
+- `SQLAlchemy`, `psycopg2-binary` for optional Neon/Postgres persistence
 - `polygon-api-client` for Polygon REST client imports
 - `openai` for optional AI trade summaries
 - `rich` for console table output
@@ -296,6 +300,12 @@ Known environment variables used by the code:
 - `TELEGRAM_MAX_MIDDAY_ENTRY_ALERTS`
 - `TELEGRAM_MAX_AFTERNOON_ENTRY_ALERTS`
 - `TELEGRAM_EXIT_PRICE_MISMATCH_PCT`
+- `DATABASE_URL`
+- `DATABASE_DIRECT_URL`
+- `DB_WRITE_ENABLED`
+- `DB_POOL_SIZE`
+- `DB_MAX_OVERFLOW`
+- `DB_CONNECT_TIMEOUT_SECONDS`
 - `AUTO_PAPER_ENABLED`
 - `ENABLE_MANUAL_PAPER_ENTRIES`
 - `SHOW_MANUAL_PAPER_BUTTONS`
@@ -310,6 +320,8 @@ Known environment variables used by the code:
 - Intended market-hours AI mode is `ENABLE_AI_SUMMARY=false` and `SCANNER_AI_SUMMARY_ENABLED=false`; use dashboard rules only.
 - Runtime settings load `.env` with override enabled so local config changes, including `ENABLE_AI_SUMMARY=false`, win over stale process variables after restart.
 - Streamlit Cloud must be configured through Streamlit Secrets; local `.env` is not automatically available in deployed Streamlit. The dashboard syncs Streamlit Secrets into env before scanner imports and shows non-sensitive sidebar key status.
+- Neon/Postgres persistence is optional and additive. `DATABASE_URL` should use the Neon pooler host for Streamlit runtime writes, while `DATABASE_DIRECT_URL` is reserved for schema setup and one-time migrations. DB writes occur only when `DB_WRITE_ENABLED=true` and `DATABASE_URL` is configured; otherwise the current JSON/CSV/Excel dashboard flow continues unchanged.
+- Current Neon tables are small event/state tables only: `alert_events`, `paper_trades`, `scanner_runs`, and `gate_decisions`. Full candle history, option chain snapshots, raw API responses, scanner Excel blobs, and large CSV payloads are intentionally kept out of Neon during the free-tier phase.
 - Telegram alerts are opt-in with `TELEGRAM_ALERTS_ENABLED=true`. Bot credentials should be stored in Streamlit Secrets under `[telegram]` as `bot_token` and `chat_id`, or in local ignored env vars for development. Real bot tokens must not be committed.
 - Telegram sends entry alerts for high-conviction actionable/reviewable scanner setups, dashboard paper-entry opens, full exit alerts for scanner-managed and paper-trade closes, and one-time partial-profit alerts when scanner trade management reaches the partial threshold.
 - Auto paper-entry alerts fire at the moment `open_paper_trade()` succeeds in the dashboard auto-paper path. Manual paper entry buttons are hidden by default through `ENABLE_MANUAL_PAPER_ENTRIES=false` and `SHOW_MANUAL_PAPER_BUTTONS=false` so telemetry represents system-generated scanner/alert trades. Manual close/correction remains enabled by default through `ALLOW_MANUAL_PAPER_CLOSE=true`. Auto paper alerts require realtime-ready status, affordable contract, setup >= `TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE`, RR >= `TELEGRAM_MIN_RR`, fresh quote, option quality >= `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, acceptable spread, and no event/regime block.
@@ -634,6 +646,7 @@ When starting a fresh GPT session:
 ## Recent Major Changes
 
 2026-07-01
+- Added optional Neon/Postgres persistence with SQLAlchemy for Telegram alert attempts, paper trade opens/closes, scanner run summaries, and gate decision summaries. DB writes are best-effort and gated by `DB_WRITE_ENABLED=true` plus `DATABASE_URL`, preserving JSON/CSV/Excel fallback behavior for Streamlit.
 - Added hard CALL/PUT price-geometry validation and regression tests so reversed PUT stop/target structures are blocked before suggestion display or paper/alert entry.
 - Added a final risk-manager geometry invariant and daily report data-quality counters for invalid geometry, option mismatch, stale setup-threshold reasons, and missing realtime-ready explanations.
 - Added normalized candidate snapshot persistence for every scanner row under `data/candidate_snapshots/`, with parquet preferred and CSV fallback.
