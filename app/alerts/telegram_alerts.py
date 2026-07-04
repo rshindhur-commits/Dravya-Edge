@@ -302,6 +302,10 @@ def _alert_attempt_context(alert_type, arguments):
             "symbol": trade.get("symbol") or scanner_context.get("Symbol"),
             "direction": trade.get("direction") or scanner_context.get("Candidate Direction"),
             "option_ticker": trade.get("option_ticker") or scanner_context.get("Option Ticker"),
+            "dedupe_key": _paper_entry_alert_key(
+                trade,
+                scanner_context
+            ),
             "payload": {
                 "trade_key": trade.get("trade_key"),
                 "reason": arguments.get("reason"),
@@ -316,6 +320,13 @@ def _alert_attempt_context(alert_type, arguments):
             "symbol": arguments.get("symbol") or trade.get("symbol"),
             "direction": trade.get("direction"),
             "option_ticker": trade.get("option_ticker") or trade.get("ticker"),
+            "dedupe_key": _exit_alert_key(
+                arguments.get("symbol") or trade.get("symbol"),
+                trade.get("option_ticker") or trade.get("ticker"),
+                trade,
+                arguments.get("exit_reason"),
+                arguments.get("event_type")
+            ),
             "payload": {
                 "trade_key": trade.get("trade_key"),
                 "exit_reason": arguments.get("exit_reason"),
@@ -330,13 +341,21 @@ def _alert_attempt_context(alert_type, arguments):
 
     option_contract = arguments.get("option_contract") or {}
     action_decision = arguments.get("action_decision") or {}
+    action_status = action_decision.get("action_status")
+    option_ticker = option_contract.get("ticker")
     return {
         "symbol": arguments.get("symbol"),
         "direction": option_contract.get("type"),
-        "option_ticker": option_contract.get("ticker"),
+        "option_ticker": option_ticker,
+        "dedupe_key": _scanner_entry_alert_key(
+            arguments.get("symbol"),
+            option_ticker,
+            action_status,
+            arguments.get("bar_timestamp")
+        ),
         "payload": {
             "final_signal": arguments.get("final_signal"),
-            "action_status": action_decision.get("action_status"),
+            "action_status": action_status,
             "bar_timestamp": arguments.get("bar_timestamp"),
             "top_candidate": arguments.get("top_candidate"),
             "market_session": arguments.get("market_session"),
@@ -353,10 +372,19 @@ def _record_alert_attempt(alert_type, context, result=None, error=None):
         from app.db.persistence import record_alert_event
 
         result = result or {}
-        status = "ERROR" if error else "SENT" if result.get("sent") else "SKIPPED"
+        status = "FAILED" if error else "SENT" if result.get("sent") else "SKIPPED"
         reason = str(error) if error else result.get("reason")
         payload = dict(context.get("payload") or {})
         payload["result"] = result
+        dedupe_key = None
+
+        if result.get("sent"):
+
+            dedupe_key = result.get("alert_key") or context.get("dedupe_key")
+
+        elif error:
+
+            dedupe_key = context.get("dedupe_key")
 
         record_alert_event(
             alert_type=alert_type,
@@ -365,7 +393,7 @@ def _record_alert_attempt(alert_type, context, result=None, error=None):
             option_ticker=context.get("option_ticker"),
             status=status,
             reason=reason,
-            dedupe_key=result.get("alert_key") if result.get("sent") else None,
+            dedupe_key=dedupe_key,
             payload=payload
         )
 
@@ -510,6 +538,40 @@ def mark_alert_closed(symbol, option_ticker=None):
         metadata["closed_at"] = datetime.now(timezone.utc).isoformat()
 
     _save_alert_state(state)
+
+
+def _paper_entry_alert_key(trade, scanner_context=None):
+
+    trade = trade or {}
+    scanner_context = scanner_context or {}
+    symbol = trade.get("symbol") or scanner_context.get("Symbol")
+    direction = trade.get("direction") or scanner_context.get("Candidate Direction")
+    option_ticker = (
+        trade.get("option_ticker")
+        or scanner_context.get("Option Ticker")
+        or "NO_CONTRACT"
+    )
+    opened_at = trade.get("opened_at") or datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    opened_date = str(opened_at).split(" ")[0]
+    return "_".join([
+        str(symbol),
+        str(direction),
+        str(option_ticker),
+        "PAPER_ENTRY",
+        opened_date
+    ])
+
+
+def _scanner_entry_alert_key(symbol, option_ticker, action_status, bar_timestamp):
+
+    return "_".join([
+        str(symbol),
+        str(option_ticker),
+        str(action_status),
+        str(bar_timestamp)
+    ])
 
 
 def _exit_alert_key(symbol, option_ticker, trade, exit_reason, event_type):
@@ -982,14 +1044,11 @@ def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
     opened_at = trade.get("opened_at") or datetime.now().strftime(
         "%Y-%m-%d %H:%M:%S"
     )
-    opened_date = str(opened_at).split(" ")[0]
-    alert_key = "_".join([
-        str(symbol),
-        str(direction),
-        str(option_ticker),
-        "PAPER_ENTRY",
-        opened_date
-    ])
+    trade["opened_at"] = opened_at
+    alert_key = _paper_entry_alert_key(
+        trade,
+        scanner_context
+    )
 
     if alert_was_sent(alert_key):
 
@@ -1476,12 +1535,12 @@ def maybe_send_scanner_entry_alert(
             "reason": "SYMBOL_COOLDOWN_ACTIVE"
         }
 
-    alert_key = "_".join([
-        str(symbol),
-        str(option_ticker),
-        str(action_status),
-        str(bar_timestamp)
-    ])
+    alert_key = _scanner_entry_alert_key(
+        symbol,
+        option_ticker,
+        action_status,
+        bar_timestamp
+    )
 
     if alert_was_sent(alert_key):
 

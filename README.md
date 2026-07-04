@@ -115,6 +115,10 @@ Current DB-backed tables are intentionally small event/state tables:
 
 Do not store full candle history, option chain snapshots, raw API responses, scanner Excel blobs, or large CSV payloads in Neon during the free-tier phase.
 
+DB writes are optional audit persistence, not part of the live trading decision path. Failed DB writes should log warnings and must not block Telegram sends, scanner output, paper trade JSON/CSV state, or dashboard rendering.
+
+Use narrow idempotency keys only. `alert_events.dedupe_key` is the safest early unique key because Telegram duplicate protection already uses deterministic alert keys; failed send attempts and later successful retries can update the same audit row. Avoid broad unique constraints such as `UNIQUE(symbol)`, `UNIQUE(symbol, trading_day)`, `UNIQUE(trading_day)`, or `UNIQUE(option_ticker)`, because valid intraday flows can produce multiple scans, blocked decisions, opens, closes, re-entries, and refreshed option observations for the same symbol or contract. Add broader table constraints only through an explicit Neon migration and duplicate-write tests.
+
 After creating the tables in Neon SQL Editor and setting local `DATABASE_URL`, test connectivity from the workspace root:
 
 ```powershell
