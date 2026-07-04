@@ -31,8 +31,26 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import pandas as pd
-import streamlit as st
+
+def _verify_app_imports():
+
+    try:
+
+        import app
+        import app.config
+        import app.gates
+        import app.options
+        import app.utils
+
+        return app
+
+    except Exception as exc:
+
+        st.error(f"Failed to initialize application package imports: {exc}")
+        st.stop()
+
+
+_verify_app_imports()
 
 from app.config.settings import settings
 from app.gates import (
