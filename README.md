@@ -104,6 +104,8 @@ DB_MAX_OVERFLOW = "5"
 DB_CONNECT_TIMEOUT_SECONDS = "10"
 ```
 
+These keys must be at the root level of Streamlit Secrets. If you use Streamlit native connections, the app can also fall back to `[connections.trading_db].url` for `DATABASE_URL`, but `DB_WRITE_ENABLED` and pool settings should still be root-level secrets.
+
 Current DB-backed tables are intentionally small event/state tables:
 
 - `alert_events`: Telegram entry/exit attempts, sent status, skip/error reason, and dedupe key.

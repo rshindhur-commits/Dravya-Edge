@@ -10,26 +10,13 @@ import pandas as pd
 import streamlit as st
 
 
-def _bootstrap_streamlit_secrets_to_env():
-
-    try:
-
-        for key, value in st.secrets.items():
-
-            if isinstance(value, (str, int, float, bool)):
-
-                os.environ[str(key)] = str(value)
-
-    except Exception:
-
-        return
-
-
-_bootstrap_streamlit_secrets_to_env()
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.utils.streamlit_env import sync_streamlit_secrets_to_env
+
+sync_streamlit_secrets_to_env()
 
 
 def _verify_app_imports():
@@ -2032,21 +2019,6 @@ def _maybe_auto_run_scanner(refresh_state):
             )
 
 
-def _sync_streamlit_secrets_to_env():
-
-    try:
-
-        for key, value in st.secrets.items():
-
-            if isinstance(value, (str, int, float, bool)):
-
-                os.environ[str(key)] = str(value)
-
-    except Exception:
-
-        return
-
-
 def _run_scanner_once():
 
     if not _acquire_scanner_lock():
@@ -2060,7 +2032,7 @@ def _run_scanner_once():
 
     try:
 
-        _sync_streamlit_secrets_to_env()
+        sync_streamlit_secrets_to_env()
 
         import importlib
 
