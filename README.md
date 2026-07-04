@@ -84,6 +84,41 @@ The dashboard reads `data/live/scanner_output_latest.csv` first, then `data/live
 
 If the dashboard is running locally on the same machine, the terminal command can read the same files directly. If the dashboard is running on Streamlit Cloud, generate the report inside the dashboard instead: use the sidebar `Generate Daily Validation Report` button, then download `daily_validation_report.html` from the same sidebar. That keeps report generation in the same filesystem where Streamlit created scanner output, telemetry, and state files.
 
+## Neon Persistence
+
+Neon/Postgres persistence is optional and additive. The dashboard still reads the current CSV, Excel, and JSON files first, so Streamlit remains usable if the database is not configured or a write fails.
+
+DB writes are enabled only when `DB_WRITE_ENABLED=true` and `DATABASE_URL` is present. For Streamlit Cloud, use the Neon pooler host for `DATABASE_URL`; keep `DATABASE_DIRECT_URL` for schema setup and one-time migrations. Do not commit real database passwords.
+
+Streamlit Secrets placeholders:
+
+```toml
+# =========================
+# DATABASE
+# =========================
+DATABASE_URL = "postgresql+psycopg2://neondb_owner:PASTE_ROTATED_PASSWORD_HERE@ep-round-pond-atro9w6h-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require"
+DATABASE_DIRECT_URL = "postgresql+psycopg2://neondb_owner:PASTE_ROTATED_PASSWORD_HERE@ep-round-pond-atro9w6h.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require"
+DB_WRITE_ENABLED = "true"
+DB_POOL_SIZE = "5"
+DB_MAX_OVERFLOW = "5"
+DB_CONNECT_TIMEOUT_SECONDS = "10"
+```
+
+Current DB-backed tables are intentionally small event/state tables:
+
+- `alert_events`: Telegram entry/exit attempts, sent status, skip/error reason, and dedupe key.
+- `paper_trades`: auto/manual paper trade opens and closes, with compact payload context.
+- `scanner_runs`: scanner start/end status, row count, output path, and small run summary.
+- `gate_decisions`: per-symbol action/gate summary for scanner rows.
+
+Do not store full candle history, option chain snapshots, raw API responses, scanner Excel blobs, or large CSV payloads in Neon during the free-tier phase.
+
+After creating the tables in Neon SQL Editor and setting local `DATABASE_URL`, test connectivity from the workspace root:
+
+```powershell
+python tools\test_db_connection.py
+```
+
 ## Market Session Flow
 
 - Premarket, 4:00-9:30 ET: strong call/put candidates can surface as `PREMARKET_WATCH`, but they are not execution-ready and cannot auto paper-enter.
