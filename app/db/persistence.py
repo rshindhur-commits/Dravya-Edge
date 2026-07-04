@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import logging
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -10,6 +11,9 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.db.connection import get_engine
+
+
+logger = logging.getLogger(__name__)
 
 
 def db_writes_enabled() -> bool:
@@ -89,7 +93,10 @@ def _safe_execute(statement, params):
         return True
 
     except Exception as exc:
-        print(f"[DB WRITE WARNING] {exc}")
+        logger.warning(
+            "DB write failed; continuing without blocking operational flow",
+            exc_info=exc
+        )
         return False
 
 
@@ -358,8 +365,27 @@ def record_gate_decision(row, run_id=None):
 def record_gate_decisions(rows, run_id=None):
     count = 0
 
-    for row in rows:
-        if record_gate_decision(row, run_id=run_id):
-            count += 1
+    try:
+
+        for row in rows or []:
+
+            try:
+
+                if record_gate_decision(row, run_id=run_id):
+                    count += 1
+
+            except Exception as exc:
+
+                logger.warning(
+                    "Gate decision DB write failed; continuing scanner output",
+                    exc_info=exc
+                )
+
+    except Exception as exc:
+
+        logger.warning(
+            "Gate decision DB batch failed; continuing scanner output",
+            exc_info=exc
+        )
 
     return count
