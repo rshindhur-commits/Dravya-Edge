@@ -1085,8 +1085,21 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None):
         "option_quote_freshness": row.get("Option Quote Freshness") if row is not None else None,
         "expiration_bucket": row.get("Expiration Bucket") if row is not None else None
     }
-    append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
-    update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
+    try:
+
+        append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
+
+    except Exception as exc:
+
+        print(f"[AUTO PAPER LOG WARNING] daily CSV write failed: {exc}")
+
+    try:
+
+        update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
+
+    except Exception as exc:
+
+        print(f"[AUTO PAPER LOG WARNING] recent JSON write failed: {exc}")
 
 
 def _current_trading_day():
