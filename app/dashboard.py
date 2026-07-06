@@ -185,10 +185,21 @@ TRADE_COLUMNS = [
     "Option Moneyness",
     "Expiration Bucket",
     "Expiration Risk",
+    "Option Quality Score",
+    "Option Liquidity Grade",
     "Setup Grade",
     "Setup %",
+    "Candidate Entry Price",
+    "Candidate Stop Price",
+    "Candidate Target Price",
+    "Candidate Direction",
     "Action Status",
+    "Action Reason",
     "Blocked By",
+    "Option Rejection Reason",
+    "Event Block Reason",
+    "TradingView Check Status",
+    "Realtime Confirmation Needed",
     "Realtime Ready",
     "Realtime Block Reason",
     "Stock Data Freshness",
@@ -226,6 +237,7 @@ TRADE_COLUMNS = [
     "Best Quality Affordability Status",
     "Affordable Option Ticker",
     "Affordable Option Contract Cost",
+    "Active Option Ticker",
     "Option Quote Timestamp",
     "Option Quote Timeframe",
     "Option Quote Source",
@@ -1483,6 +1495,77 @@ def _render_daily_validation_report_controls():
             file_name=f"daily_validation_{report_date}.html",
             mime="text/html",
             key="download_daily_validation_report"
+        )
+
+    _render_daily_artifact_downloads(report_date)
+
+
+def _render_daily_artifact_downloads(report_date):
+
+    daily_exports = [
+        {
+            "label": "full_auto_paper_decisions.csv",
+            "path": daily_path(report_date, "auto_paper_decisions.csv"),
+            "file_name": "auto_paper_decisions.csv",
+            "mime": "text/csv"
+        },
+        {
+            "label": "signal_lifecycle_events.csv",
+            "path": daily_path(report_date, "signal_lifecycle_events.csv"),
+            "file_name": "signal_lifecycle_events.csv",
+            "mime": "text/csv"
+        },
+        {
+            "label": "signal_state_transitions.csv",
+            "path": daily_path(report_date, "signal_state_transitions.csv"),
+            "file_name": "signal_state_transitions.csv",
+            "mime": "text/csv"
+        },
+        {
+            "label": "paper_trade_events.csv",
+            "path": daily_path(report_date, "paper_trade_events.csv"),
+            "file_name": "paper_trade_events.csv",
+            "mime": "text/csv"
+        },
+        {
+            "label": "candidate_snapshots.csv",
+            "path": daily_path(report_date, "candidate_snapshots.csv"),
+            "file_name": "candidate_snapshots.csv",
+            "mime": "text/csv"
+        },
+        {
+            "label": "candidate_snapshots.parquet",
+            "path": daily_path(report_date, "candidate_snapshots.parquet"),
+            "file_name": "candidate_snapshots.parquet",
+            "mime": "application/octet-stream"
+        },
+        {
+            "label": "scanner_output_close.csv",
+            "path": daily_path(report_date, "scanner_output_close.csv"),
+            "file_name": "scanner_output_close.csv",
+            "mime": "text/csv"
+        }
+    ]
+
+    st.sidebar.caption("Daily observability files")
+
+    for export in daily_exports:
+
+        data = _read_download_file(export["path"])
+
+        if data is None:
+
+            st.sidebar.caption(
+                f"{export['label']}: not found"
+            )
+            continue
+
+        st.sidebar.download_button(
+            label=f"Download {export['label']}",
+            data=data,
+            file_name=export["file_name"],
+            mime=export["mime"],
+            key=f"download_daily_{report_date}_{export['label']}"
         )
 
 
