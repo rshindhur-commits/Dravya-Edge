@@ -996,6 +996,51 @@ def _read_download_file(file_path):
         return None
 
 
+def _render_file_download_button(
+    label,
+    path,
+    file_name=None,
+    mime="text/plain",
+    key=None,
+    container=None
+):
+
+    container = container or st.sidebar
+    file_path = Path(path)
+    key_base = key or f"download_{file_path.name}"
+
+    try:
+
+        if not file_path.exists() or file_path.stat().st_size == 0:
+
+            container.button(
+                f"{label} - not available yet",
+                disabled=True,
+                key=f"missing_{key_base}"
+            )
+            return False
+
+        stat = file_path.stat()
+        container.download_button(
+            label=label,
+            data=file_path.read_bytes(),
+            file_name=file_name or file_path.name,
+            mime=mime,
+            key=f"{key_base}_{stat.st_mtime_ns}"
+        )
+        return True
+
+    except Exception as exc:
+
+        container.button(
+            f"{label} - unavailable",
+            disabled=True,
+            key=f"unavailable_{key_base}"
+        )
+        container.caption(str(exc))
+        return False
+
+
 def _dataframe_to_xlsx_bytes(df):
 
     try:
@@ -1394,8 +1439,12 @@ def _render_download_exports():
 
         if data is None:
 
-            st.sidebar.caption(
-                f"{export['label']}: not found"
+            _render_file_download_button(
+                f"Download {export['label']}",
+                export["path"],
+                file_name=export["label"],
+                mime=export["mime"],
+                key=f"download_{export['label']}"
             )
             continue
 
@@ -1479,23 +1528,13 @@ def _render_daily_validation_report_controls():
         if daily_report_path.exists()
         else report_path
     )
-    report_data = _read_download_file(download_path)
-
-    if report_data is None:
-
-        st.sidebar.caption(
-            "Daily validation report: not generated yet"
-        )
-
-    else:
-
-        st.sidebar.download_button(
-            label="Download daily_validation_report.html",
-            data=report_data,
-            file_name=f"daily_validation_{report_date}.html",
-            mime="text/html",
-            key="download_daily_validation_report"
-        )
+    _render_file_download_button(
+        "Download daily_validation_report.html",
+        download_path,
+        file_name=f"daily_validation_{report_date}.html",
+        mime="text/html",
+        key=f"download_daily_validation_report_{report_date}"
+    )
 
     _render_daily_artifact_downloads(report_date)
 
@@ -1551,18 +1590,9 @@ def _render_daily_artifact_downloads(report_date):
 
     for export in daily_exports:
 
-        data = _read_download_file(export["path"])
-
-        if data is None:
-
-            st.sidebar.caption(
-                f"{export['label']}: not found"
-            )
-            continue
-
-        st.sidebar.download_button(
-            label=f"Download {export['label']}",
-            data=data,
+        _render_file_download_button(
+            f"Download {export['label']}",
+            export["path"],
             file_name=export["file_name"],
             mime=export["mime"],
             key=f"download_daily_{report_date}_{export['label']}"
