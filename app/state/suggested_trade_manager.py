@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from app.gates import price_geometry_error
+from app.storage.signal_lifecycle_store import record_signal_expiry_transition
 from app.utils.json_store import load_json_file, save_json_file
 
 
@@ -230,8 +231,29 @@ def mark_suggestion_expired(suggestion_id, reason="not present in latest scan"):
 
         return suggestion
 
+    expiry = record_signal_expiry_transition(
+        suggestion,
+        reason=reason
+    )
+    expired_at = expiry.get("expired_at")
+    first_seen_at = suggestion.get("first_seen_at")
+    last_valid_at = suggestion.get("last_valid_at")
+    review_minutes = None
+
+    if suggestion.get("current_action_status") == "REVIEW_TV_CHART":
+
+        review_minutes = _minutes_between(first_seen_at, expired_at)
+
     suggestion["status"] = "EXPIRED_NOT_ENTERED"
     suggestion["validity_reason"] = reason
+    suggestion["expired_at"] = expired_at
+    suggestion["lifetime_minutes"] = _minutes_between(first_seen_at, expired_at)
+    suggestion["valid_minutes"] = _minutes_between(first_seen_at, last_valid_at)
+    suggestion["review_minutes"] = review_minutes
+    suggestion["scans_seen"] = suggestion.get("times_seen", 0)
+    suggestion["last_state_before_expiry"] = expiry.get("last_state_before_expiry")
+    suggestion["expiry_market_session"] = expiry.get("expiry_market_session")
+    suggestion["expiry_reason"] = reason
     suggestion["blocked_by"] = None
     suggestion["action_reason"] = reason
     suggestion["realtime_ready"] = False
@@ -241,6 +263,19 @@ def mark_suggestion_expired(suggestion_id, reason="not present in latest scan"):
     save_suggestions(state)
 
     return suggestion
+
+
+def _minutes_between(start_value, end_value):
+
+    try:
+
+        start = datetime.strptime(str(start_value), "%Y-%m-%d %H:%M:%S")
+        end = datetime.strptime(str(end_value), "%Y-%m-%d %H:%M:%S")
+        return round((end - start).total_seconds() / 60, 2)
+
+    except Exception:
+
+        return None
 
 
 def promote_suggestion_to_paper_trade(symbol):

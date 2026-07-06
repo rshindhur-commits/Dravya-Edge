@@ -90,6 +90,9 @@ from app.analytics.trade_telemetry import (
 from app.analytics.candidate_snapshot_writer import (
     append_candidate_snapshots
 )
+from app.storage.signal_lifecycle_store import (
+    record_signal_lifecycle_events_for_scan
+)
 
 from app.analytics.performance_summary import (
     summarize_telemetry
@@ -4585,6 +4588,26 @@ def run_scanner():
         trading_day=trading_day,
         scan_id=scan_id
     )
+
+    try:
+
+        lifecycle_count = record_signal_lifecycle_events_for_scan(
+            df_results.to_dict("records"),
+            trading_day=trading_day,
+            scan_id=scan_id,
+            observed_at=now_et()
+        )
+
+        print(
+            f"[SIGNAL LIFECYCLE] recorded {lifecycle_count} observations"
+        )
+
+    except Exception as exc:
+
+        print(
+            "[SIGNAL LIFECYCLE WARNING] "
+            f"failed to record lifecycle observations: {exc}"
+        )
 
     if snapshot_result:
 

@@ -54,8 +54,13 @@ from app.utils.json_store import (
     load_json_file,
     save_json_file
 )
-from app.storage.daily_paths import daily_path
-from app.storage.session_manager import get_trading_day
+from app.storage.auto_paper_decision_store import (
+    append_daily_auto_paper_decision,
+    classify_decision_time,
+    update_recent_auto_paper_log
+)
+from app.storage.daily_paths import daily_path, get_daily_dir
+from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
 
 try:
 
@@ -1053,9 +1058,16 @@ def _save_auto_paper_decision_log(entries):
 
 def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None):
 
-    entries = _load_auto_paper_decision_log()
+    decision_time = _current_et()
+    trading_day = get_trading_day(decision_time)
+    scan_timestamp = decision_time.strftime("%Y-%m-%d %H:%M:%S")
     entry = {
-        "timestamp": _current_et().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": scan_timestamp,
+        "trading_day": trading_day,
+        "session_id": get_session_id(trading_day),
+        "scan_id": get_scan_id(trading_day, decision_time),
+        "scan_timestamp": scan_timestamp,
+        **classify_decision_time(decision_time),
         "symbol": symbol,
         "decision": decision,
         "reason": reason,
@@ -1073,8 +1085,8 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None):
         "option_quote_freshness": row.get("Option Quote Freshness") if row is not None else None,
         "expiration_bucket": row.get("Expiration Bucket") if row is not None else None
     }
-    entries.append(entry)
-    _save_auto_paper_decision_log(entries)
+    append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
+    update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
 
 
 def _current_trading_day():
