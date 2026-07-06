@@ -1,0 +1,312 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Daily Validation 2026-07-06</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 32px; color: #202124; }
+    h1, h2, h3 { margin-top: 28px; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0 24px; }
+    th, td { border: 1px solid #d0d7de; padding: 7px 9px; text-align: left; }
+    th { background: #f6f8fa; }
+    .metric-table { max-width: 760px; }
+  </style>
+</head>
+<body>
+  <h1>Daily Validation 2026-07-06</h1>
+
+    <h2>Session Manifest</h2>
+    <table class="metric-table"><tr><th>trading_day</th><td>2026-07-06</td></tr><tr><th>session_id</th><td>paper_validation_2026-07-06</td></tr><tr><th>status</th><td>OPEN</td></tr><tr><th>first_scan_at</th><td>None</td></tr><tr><th>last_scan_at</th><td>None</td></tr><tr><th>last_scan_id</th><td></td></tr><tr><th>finalized</th><td>False</td></tr></table>
+
+    <h2>Validation Data Health</h2>
+    <table class="metric-table"><tr><th>scanner_output rows</th><td>16</td></tr><tr><th>candidate_snapshot rows</th><td>0</td></tr><tr><th>trade_telemetry rows</th><td>0</td></tr><tr><th>paper_trade_state records</th><td>0</td></tr><tr><th>trade_state records</th><td>0</td></tr><tr><th>paper_trade_events rows</th><td>0</td></tr><tr><th>auto-paper decision source</th><td>recent state JSON only</td></tr><tr><th>auto-paper decision source path</th><td>D:\Dravya_Trade_Works\app\state\auto_paper_decision_log.json</td></tr><tr><th>auto_paper_decision_log rows</th><td>1</td></tr><tr><th>decision OPENED count</th><td>0</td></tr><tr><th>suggested_trade_state records</th><td>0</td></tr></table>
+    <ul><li>No paper trades found. Report is based on blocked/skipped candidates only.</li><li>Auto-paper decisions exist, but none are OPENED. Suggested trades may not be actual paper trades.</li><li>Auto-paper decision history is using the capped dashboard JSON. This may not include regular market hours.</li></ul>
+
+  <h2>A. Trade Result Scorecard</h2>
+  <table class="metric-table"><tr><th>Date</th><td>2026-07-06</td></tr><tr><th>Total paper trades</th><td>0</td></tr><tr><th>Wins</th><td>0</td></tr><tr><th>Losses</th><td>0</td></tr><tr><th>Win rate</th><td>0%</td></tr><tr><th>Total R</th><td>0</td></tr><tr><th>Average R</th><td>0</td></tr><tr><th>Best trade</th><td>N/A</td></tr><tr><th>Worst trade</th><td>N/A</td></tr><tr><th>Average hold time minutes</th><td>N/A</td></tr><tr><th>Calls vs puts</th><td>N/A</td></tr></table>
+  <h3>Opened Trades</h3>
+  <p>No opened/closed trade rows found.</p>
+
+    <h2>B. Gate Quality - Full Day</h2>
+    <table class="metric-table"><tr><th>Decisions</th><td>1</td></tr><tr><th>OPENED</th><td>0</td></tr><tr><th>BLOCKED</th><td>0</td></tr><tr><th>SKIPPED</th><td>1</td></tr></table>
+    <h3>Top Block/Skip Reasons</h3>
+    <table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>reason</th>
+      <th>count</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>auto paper disabled; no current candidates</td>
+      <td>1</td>
+    </tr>
+  </tbody>
+</table>
+
+    <h2>Gate Quality - Auto Entry Window Only</h2>
+    <table class="metric-table"><tr><th>OPENED</th><td>0</td></tr><tr><th>BLOCKED</th><td>0</td></tr><tr><th>SKIPPED</th><td>0</td></tr></table>
+    <h3>Top skip reasons during 09:45-15:30 ET only</h3>
+    <p>No auto-entry-window skip reasons found.</p>
+
+    <h2>Gate Quality - After Close Only</h2>
+    <table class="metric-table"><tr><th>OPENED</th><td>0</td></tr><tr><th>BLOCKED</th><td>0</td></tr><tr><th>SKIPPED</th><td>0</td></tr></table>
+    <h3>Top Block/Skip Reasons After Close</h3>
+    <p>No after-close skip reasons found.</p>
+
+    <h2>Quote Freshness - Auto Entry Window Only</h2>
+    <p>No auto-entry-window quote freshness data found.</p>
+
+    <h2>Quote Freshness - After Close Only</h2>
+    <p>No after-close quote freshness data found.</p>
+
+  <h2>C. Replay Calibration Scorecard</h2>
+  <p>No replay telemetry found.</p>
+
+  <h2>D. Expectancy Scorecard</h2>
+  <p>No expectancy tables available yet.</p>
+
+  <h2>E. Backtest Validation Scorecard</h2>
+  <p>Run the no-lookahead backtest against historical candles once the daily dataset is available. Suggested progression: last 5 trading days, then 20, then 60.</p>
+
+    <h2>F. Data Quality Checks</h2>
+    <table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Check</th>
+      <th>Count</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Invalid price geometry count</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Direction/option mismatch count</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>High setup but blocked by setup threshold count</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Review rows realtime_ready=false and missing reason</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Actual opened trades count</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Suggested but not entered count</td>
+      <td>0</td>
+    </tr>
+  </tbody>
+</table>
+
+    <h2>G. Signal Lifecycle Analysis</h2>
+    <h3>Quote Freshness During Auto Entry Window</h3>
+    <p>No signal lifecycle quote freshness data found.</p>
+    <h3>Review State Duration</h3>
+    <table class="metric-table"><tr><th>avg REVIEW_TV_CHART minutes</th><td>N/A</td></tr><tr><th>median REVIEW_TV_CHART minutes</th><td>N/A</td></tr><tr><th>max REVIEW_TV_CHART minutes</th><td>N/A</td></tr><tr><th>count stuck &gt; 15 min</th><td>0</td></tr><tr><th>count stuck &gt; 30 min</th><td>0</td></tr></table>
+    <h3>Suggestion Expiry</h3>
+    <table class="metric-table"><tr><th>expired in &lt; 5 min</th><td>0</td></tr><tr><th>expired in 5-15 min</th><td>0</td></tr><tr><th>expired in 15-30 min</th><td>0</td></tr><tr><th>expired after 30+ min</th><td>0</td></tr><tr><th>expired while LIVE_QUOTE</th><td>0</td></tr><tr><th>expired while RR &gt;= 1.8</th><td>0</td></tr><tr><th>expired while setup &gt;= 70</th><td>0</td></tr></table>
+
+  <h2>Best Skipped Opportunities</h2>
+  <table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Symbol</th>
+      <th>symbol</th>
+      <th>Top Candidate</th>
+      <th>top_candidate</th>
+      <th>Entry</th>
+      <th>setup_percent</th>
+      <th>Candidate RR</th>
+      <th>rr</th>
+      <th>Action Status</th>
+      <th>decision</th>
+      <th>reason</th>
+      <th>Blocked By</th>
+      <th>blocked_by</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>SPY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>MSFT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>QQQ</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>PLTR</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>CRWD</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>SMCI</td>
+      <td>NaN</td>
+      <td>BULLISH_TOP_3</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>AMZN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>TSLA</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>META</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>AAPL</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>WAIT</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NO_ENTRY_TRIGGER</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>NaN</td>
+      <td>SYSTEM</td>
+      <td>NaN</td>
+      <td>None</td>
+      <td>NaN</td>
+      <td>None</td>
+      <td>NaN</td>
+      <td>None</td>
+      <td>NaN</td>
+      <td>SKIPPED</td>
+      <td>auto paper disabled; no current candidates</td>
+      <td>NaN</td>
+      <td>None</td>
+    </tr>
+  </tbody>
+</table>
+
+  <h2>Rule-Change Suggestions</h2>
+  <ul><li>No auto-paper opens. Check whether A+ setups were blocked by minor spread, quote, or cooldown rules.</li></ul>
+
+  <h2>Archived Inputs</h2>
+  <ul><li>No input files archived.</li></ul>
+</body>
+</html>

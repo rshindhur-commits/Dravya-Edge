@@ -83,6 +83,30 @@ def resolve_input_paths(report_date):
     return resolved
 
 
+def load_auto_paper_decisions(report_date, fallback_path):
+
+    daily_csv_path = daily_path(report_date, "auto_paper_decisions.csv")
+    daily_df = _read_csv(daily_csv_path)
+
+    if not daily_df.empty:
+
+        return (
+            daily_df.to_dict(orient="records"),
+            "full daily CSV",
+            daily_csv_path,
+            None,
+        )
+
+    decisions = _read_json(fallback_path, [])
+
+    return (
+        decisions,
+        "recent state JSON only",
+        fallback_path,
+        "Auto-paper decision history is using the capped dashboard JSON. This may not include regular market hours.",
+    )
+
+
 def _today():
 
     return datetime.now().strftime("%Y-%m-%d")
@@ -177,6 +201,8 @@ def build_data_health(
     paper_trade_state,
     trade_state,
     decision_log,
+    decision_source,
+    decision_source_path,
     suggested_trade_state,
     candidate_df,
     paper_events_df
@@ -205,6 +231,8 @@ def build_data_health(
         "paper_trade_state records": _json_record_count(paper_trade_state),
         "trade_state records": _json_record_count(trade_state),
         "paper_trade_events rows": len(paper_events_df),
+        "auto-paper decision source": decision_source,
+        "auto-paper decision source path": decision_source_path,
         "auto_paper_decision_log rows": _json_record_count(decision_log),
         "decision OPENED count": opened_count,
         "suggested_trade_state records": _json_record_count(suggested_trade_state),
@@ -709,12 +737,199 @@ def build_gate_scorecard(decision_log):
         )
 
     metrics = {
+        "Decisions": len(decisions_df),
         "OPENED": int(counts.get("OPENED", 0)),
         "BLOCKED": int(counts.get("BLOCKED", 0)),
         "SKIPPED": int(counts.get("SKIPPED", 0)),
     }
 
     return metrics, top_reasons
+
+
+def _decision_dataframe(decision_log):
+
+    return pd.DataFrame(decision_log) if decision_log else pd.DataFrame()
+
+
+def _truthy_series(series):
+
+    return series.astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
+
+
+def filter_decisions_by_bucket(decision_log, bucket):
+
+    decisions_df = _decision_dataframe(decision_log)
+
+    if decisions_df.empty:
+
+        return []
+
+    if bucket == "AUTO_ENTRY_WINDOW" and "is_auto_entry_window" in decisions_df.columns:
+
+        return decisions_df[_truthy_series(decisions_df["is_auto_entry_window"])].to_dict(orient="records")
+
+    if bucket == "AFTER_CLOSE" and "is_after_close" in decisions_df.columns:
+
+        return decisions_df[_truthy_series(decisions_df["is_after_close"])].to_dict(orient="records")
+
+    bucket_column = _first_existing(decisions_df, ["decision_time_bucket", "market_session"])
+
+    if not bucket_column:
+
+        return []
+
+    return decisions_df[
+        decisions_df[bucket_column].astype(str).str.upper().eq(bucket)
+    ].to_dict(orient="records")
+
+
+def build_quote_freshness_table(decision_log):
+
+    decisions_df = _decision_dataframe(decision_log)
+    freshness_column = _first_existing(
+        decisions_df,
+        ["option_quote_freshness", "Option Quote Freshness"]
+    )
+
+    if decisions_df.empty or not freshness_column:
+
+        return pd.DataFrame()
+
+    freshness = (
+        decisions_df[freshness_column]
+        .fillna("missing")
+        .astype(str)
+        .str.strip()
+        .replace({"": "missing", "nan": "missing", "None": "missing"})
+        .str.upper()
+    )
+
+    return (
+        freshness.value_counts()
+        .rename_axis("quote_freshness")
+        .reset_index(name="count")
+    )
+
+
+def _value_counts_with_pct(series, label):
+
+    counts = series.fillna("missing").astype(str).str.strip().replace({"": "missing"}).value_counts()
+    total = int(counts.sum())
+
+    if total == 0:
+
+        return pd.DataFrame()
+
+    return pd.DataFrame(
+        [
+            {
+                label: key,
+                "count": int(value),
+                "pct": round((int(value) / total) * 100, 2),
+            }
+            for key, value in counts.items()
+        ]
+    )
+
+
+def build_signal_lifecycle_analysis(events_df, transitions_df, suggested_trade_state):
+
+    quote_freshness_df = pd.DataFrame()
+    review_metrics = {
+        "avg REVIEW_TV_CHART minutes": "N/A",
+        "median REVIEW_TV_CHART minutes": "N/A",
+        "max REVIEW_TV_CHART minutes": "N/A",
+        "count stuck > 15 min": 0,
+        "count stuck > 30 min": 0,
+    }
+    expiry_metrics = {
+        "expired in < 5 min": 0,
+        "expired in 5-15 min": 0,
+        "expired in 15-30 min": 0,
+        "expired after 30+ min": 0,
+        "expired while LIVE_QUOTE": 0,
+        "expired while RR >= 1.8": 0,
+        "expired while setup >= 70": 0,
+    }
+
+    if not events_df.empty:
+
+        window_df = events_df.copy()
+
+        if "is_auto_entry_window" in window_df.columns:
+
+            window_df = window_df[_truthy_series(window_df["is_auto_entry_window"])].copy()
+
+        elif "market_session" in window_df.columns:
+
+            window_df = window_df[window_df["market_session"].astype(str).str.upper().eq("AUTO_ENTRY_WINDOW")].copy()
+
+        freshness_column = _first_existing(
+            window_df,
+            ["option_quote_freshness", "Option Quote Freshness"]
+        )
+
+        if freshness_column:
+
+            quote_freshness_df = _value_counts_with_pct(
+                window_df[freshness_column],
+                "quote_freshness"
+            )
+
+    if not transitions_df.empty:
+
+        previous_state = transitions_df.get("previous_state", pd.Series(dtype=object)).astype(str)
+        durations = _safe_numeric(
+            transitions_df.loc[
+                previous_state.str.startswith("REVIEW_TV_CHART", na=False),
+                "duration_minutes"
+            ]
+        ).dropna()
+
+        if not durations.empty:
+
+            review_metrics = {
+                "avg REVIEW_TV_CHART minutes": round(durations.mean(), 2),
+                "median REVIEW_TV_CHART minutes": round(durations.median(), 2),
+                "max REVIEW_TV_CHART minutes": round(durations.max(), 2),
+                "count stuck > 15 min": int((durations > 15).sum()),
+                "count stuck > 30 min": int((durations > 30).sum()),
+            }
+
+    suggestions_df = (
+        pd.DataFrame(list(suggested_trade_state.values()))
+        if isinstance(suggested_trade_state, dict) and suggested_trade_state
+        else pd.DataFrame()
+    )
+
+    if not suggestions_df.empty and "status" in suggestions_df.columns:
+
+        expired_df = suggestions_df[
+            suggestions_df["status"].astype(str).str.upper().eq("EXPIRED_NOT_ENTERED")
+        ].copy()
+
+        if not expired_df.empty:
+
+            lifetime = _safe_numeric(expired_df.get("lifetime_minutes", pd.Series(dtype=object)))
+            setup = _safe_numeric(expired_df.get("current_setup_percent", pd.Series(dtype=object)))
+            rr = _safe_numeric(expired_df.get("current_rr", pd.Series(dtype=object)))
+            state_before = expired_df.get("last_state_before_expiry", pd.Series(dtype=object)).astype(str)
+            quote_freshness = expired_df.get("option_quote_freshness", pd.Series(dtype=object)).astype(str)
+            live_before_expiry = (
+                state_before.str.contains("LIVE_QUOTE", case=False, regex=False)
+                | quote_freshness.str.upper().eq("LIVE_QUOTE")
+            )
+            expiry_metrics = {
+                "expired in < 5 min": int((lifetime < 5).sum()),
+                "expired in 5-15 min": int(((lifetime >= 5) & (lifetime < 15)).sum()),
+                "expired in 15-30 min": int(((lifetime >= 15) & (lifetime < 30)).sum()),
+                "expired after 30+ min": int((lifetime >= 30).sum()),
+                "expired while LIVE_QUOTE": int(live_before_expiry.sum()),
+                "expired while RR >= 1.8": int((rr >= 1.8).sum()),
+                "expired while setup >= 70": int((setup >= 70).sum()),
+            }
+
+    return quote_freshness_df, review_metrics, expiry_metrics
 
 
 def build_replay_scorecard(telemetry_df):
@@ -995,12 +1210,21 @@ def render_report(
     data_health_warnings,
     trade_metrics,
     trades_df,
-    gate_metrics,
-    gate_reasons_df,
+    gate_metrics_full,
+    gate_reasons_full_df,
+    gate_metrics_auto_entry,
+    gate_reasons_auto_entry_df,
+    gate_metrics_after_close,
+    gate_reasons_after_close_df,
+    quote_freshness_auto_entry_df,
+    quote_freshness_after_close_df,
     skipped_df,
     replay_df,
     expectancy_reports,
     data_quality_df,
+    lifecycle_quote_freshness_df,
+    lifecycle_review_metrics,
+    lifecycle_expiry_metrics,
     suggestions,
     archived_files
 ):
@@ -1025,13 +1249,29 @@ def render_report(
         f"<li>{html.escape(warning)}</li>"
         for warning in data_health_warnings
     ) or "<li>No data-health warnings.</li>"
+    lifecycle_review_rows = "".join(
+        _metric_row(label, value)
+        for label, value in lifecycle_review_metrics.items()
+    )
+    lifecycle_expiry_rows = "".join(
+        _metric_row(label, value)
+        for label, value in lifecycle_expiry_metrics.items()
+    )
     metric_rows = "".join(
         _metric_row(label, value)
         for label, value in {"Date": report_date, **trade_metrics}.items()
     )
-    gate_rows = "".join(
+    gate_rows_full = "".join(
         _metric_row(label, value)
-        for label, value in gate_metrics.items()
+        for label, value in gate_metrics_full.items()
+    )
+    gate_rows_auto_entry = "".join(
+        _metric_row(label, value)
+        for label, value in gate_metrics_auto_entry.items()
+    )
+    gate_rows_after_close = "".join(
+        _metric_row(label, value)
+        for label, value in gate_metrics_after_close.items()
     )
     expectancy_sections = []
 
@@ -1079,10 +1319,26 @@ def render_report(
   <h3>Opened Trades</h3>
   {_html_table(build_opened_trades_table(trades_df), "No opened/closed trade rows found.")}
 
-  <h2>B. Gate Quality Scorecard</h2>
-  <table class="metric-table">{gate_rows}</table>
-  <h3>Top Block/Skip Reasons</h3>
-  {_html_table(gate_reasons_df, "No block/skip reasons found.")}
+    <h2>B. Gate Quality - Full Day</h2>
+    <table class="metric-table">{gate_rows_full}</table>
+    <h3>Top Block/Skip Reasons</h3>
+    {_html_table(gate_reasons_full_df, "No block/skip reasons found.")}
+
+    <h2>Gate Quality - Auto Entry Window Only</h2>
+    <table class="metric-table">{gate_rows_auto_entry}</table>
+    <h3>Top skip reasons during 09:45-15:30 ET only</h3>
+    {_html_table(gate_reasons_auto_entry_df, "No auto-entry-window skip reasons found.")}
+
+    <h2>Gate Quality - After Close Only</h2>
+    <table class="metric-table">{gate_rows_after_close}</table>
+    <h3>Top Block/Skip Reasons After Close</h3>
+    {_html_table(gate_reasons_after_close_df, "No after-close skip reasons found.")}
+
+    <h2>Quote Freshness - Auto Entry Window Only</h2>
+    {_html_table(quote_freshness_auto_entry_df, "No auto-entry-window quote freshness data found.")}
+
+    <h2>Quote Freshness - After Close Only</h2>
+    {_html_table(quote_freshness_after_close_df, "No after-close quote freshness data found.")}
 
   <h2>C. Replay Calibration Scorecard</h2>
   {_html_table(replay_df, "No replay telemetry found.")}
@@ -1095,6 +1351,14 @@ def render_report(
 
     <h2>F. Data Quality Checks</h2>
     {_html_table(data_quality_df, "No data quality checks available.")}
+
+    <h2>G. Signal Lifecycle Analysis</h2>
+    <h3>Quote Freshness During Auto Entry Window</h3>
+    {_html_table(lifecycle_quote_freshness_df, "No signal lifecycle quote freshness data found.")}
+    <h3>Review State Duration</h3>
+    <table class="metric-table">{lifecycle_review_rows}</table>
+    <h3>Suggestion Expiry</h3>
+    <table class="metric-table">{lifecycle_expiry_rows}</table>
 
   <h2>Best Skipped Opportunities</h2>
   {_html_table(skipped_df, "No skipped/block candidate data found.")}
@@ -1126,19 +1390,36 @@ def build_report(args):
     paper_events_df = _read_csv(input_paths["paper_trade_events"])
     paper_trade_state = _read_json(input_paths["paper_trade_state"], {})
     trade_state = _read_json(input_paths["trade_state"], {})
-    decision_log = _read_json(input_paths["auto_paper_decision_log"], [])
+    (
+        decision_log,
+        decision_source,
+        decision_source_path,
+        decision_source_warning,
+    ) = load_auto_paper_decisions(
+        report_date,
+        input_paths["auto_paper_decision_log"],
+    )
     suggested_trade_state = _read_json(input_paths["suggested_trade_state"], {})
     candidate_df = _read_candidate_snapshots(report_date)
+    lifecycle_events_df = _read_csv(daily_path(report_date, "signal_lifecycle_events.csv"))
+    lifecycle_transitions_df = _read_csv(daily_path(report_date, "signal_state_transitions.csv"))
     data_health, data_health_warnings = build_data_health(
         scanner_df,
         telemetry_df,
         paper_trade_state,
         trade_state,
         decision_log,
+        decision_source,
+        str(decision_source_path),
         suggested_trade_state,
         candidate_df,
         paper_events_df
     )
+
+    if decision_source_warning:
+
+        data_health_warnings.append(decision_source_warning)
+
     trade_source_df = choose_trade_score_source(
         paper_events_df,
         telemetry_df,
@@ -1146,7 +1427,13 @@ def build_report(args):
     )
 
     trade_metrics, trades_df = build_trade_scorecard(trade_source_df)
-    gate_metrics, gate_reasons_df = build_gate_scorecard(decision_log)
+    gate_metrics_full, gate_reasons_full_df = build_gate_scorecard(decision_log)
+    auto_entry_decisions = filter_decisions_by_bucket(decision_log, "AUTO_ENTRY_WINDOW")
+    after_close_decisions = filter_decisions_by_bucket(decision_log, "AFTER_CLOSE")
+    gate_metrics_auto_entry, gate_reasons_auto_entry_df = build_gate_scorecard(auto_entry_decisions)
+    gate_metrics_after_close, gate_reasons_after_close_df = build_gate_scorecard(after_close_decisions)
+    quote_freshness_auto_entry_df = build_quote_freshness_table(auto_entry_decisions)
+    quote_freshness_after_close_df = build_quote_freshness_table(after_close_decisions)
     replay_df = build_replay_scorecard(telemetry_df)
     expectancy_source = _normalize_telemetry(telemetry_df)
     expectancy_reports = (
@@ -1163,9 +1450,18 @@ def build_report(args):
         paper_events_df,
         paper_trade_state
     )
+    (
+        lifecycle_quote_freshness_df,
+        lifecycle_review_metrics,
+        lifecycle_expiry_metrics,
+    ) = build_signal_lifecycle_analysis(
+        lifecycle_events_df,
+        lifecycle_transitions_df,
+        suggested_trade_state,
+    )
     suggestions = build_rule_suggestions(
         trade_metrics,
-        gate_metrics,
+        gate_metrics_full,
         replay_df,
         expectancy_reports
     )
@@ -1207,12 +1503,21 @@ def build_report(args):
                 "Calls vs puts": "N/A",
             },
             trades_df,
-            gate_metrics or {"OPENED": 0, "BLOCKED": 0, "SKIPPED": 0},
-            gate_reasons_df,
+            gate_metrics_full or {"OPENED": 0, "BLOCKED": 0, "SKIPPED": 0},
+            gate_reasons_full_df,
+            gate_metrics_auto_entry or {"OPENED": 0, "BLOCKED": 0, "SKIPPED": 0},
+            gate_reasons_auto_entry_df,
+            gate_metrics_after_close or {"OPENED": 0, "BLOCKED": 0, "SKIPPED": 0},
+            gate_reasons_after_close_df,
+            quote_freshness_auto_entry_df,
+            quote_freshness_after_close_df,
             skipped_df,
             replay_df,
             expectancy_reports,
             data_quality_df,
+            lifecycle_quote_freshness_df,
+            lifecycle_review_metrics,
+            lifecycle_expiry_metrics,
             suggestions,
             archived_files
         ),

@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-07-02
+Last updated: 2026-07-06
 
 ## Project Purpose
 
@@ -70,7 +70,7 @@ At a high level, each scan does this per symbol:
 12. Projects target, stop, probability, expected option gain, and grade.
 13. Replays the projection over recent candles when possible.
 14. Adds explicit market regime, sector-reference strength, watchlist breadth, relative strength rankings versus QQQ and SPY, relative volume, ATR %, premarket gap %, top 5 strongest/weakest leaderboards, and top 3 bullish/bearish candidate tags.
-15. Stores normalized candidate snapshots for every scanner row so skipped, blocked, and opened setups can be reviewed later.
+15. Stores normalized candidate snapshots and signal lifecycle observations for every scanner row so skipped, blocked, stale-quote, review-only, and opened setups can be reviewed later.
 16. Optionally calls OpenAI for a trade summary on strong setups.
 17. Saves actionable scan telemetry and paper-trade outcome/context telemetry to CSV.
 18. Exports a scanner report to `scanner_output.xlsx`; stale/no-data/error symbols now still write dashboard-readable rows.
@@ -157,6 +157,8 @@ At a high level, each scan does this per symbol:
 ### Research, Expectancy, And Backtesting
 
 - `app/analytics/candidate_snapshot_writer.py` normalizes every scanner result row into a compact research schema and writes daily candidate snapshots under `data/daily/YYYY-MM-DD/`. It prefers parquet and falls back to CSV when no parquet engine is installed.
+- `app/storage/auto_paper_decision_store.py` appends full-day auto-paper decisions to `data/daily/YYYY-MM-DD/auto_paper_decisions.csv` while keeping `app/state/auto_paper_decision_log.json` capped to recent dashboard rows.
+- `app/storage/signal_lifecycle_store.py` appends one signal lifecycle event per observed candidate per scan and writes state transition rows whenever a candidate changes action/quote/readiness/block state. These files answer whether market-hours quotes are live often enough, whether candidates stay in `REVIEW_TV_CHART` too long, and whether suggestions expire before auto-paper can enter.
 - `app/analytics/expectancy_engine.py` exposes reusable expectancy table builders for grouped analysis by setup, direction, regime, candidate rank, option-quality bucket, spread bucket, expiration bucket, and other available fields.
 - `app/analytics/expectancy_report.py` builds grouped HTML-friendly expectancy reports and applies simple `KEEP`, `REVIEW`, `WATCH`, or `BLOCK/TIGHTEN` verdicts based on sample count and expectancy.
 - `app/backtesting/historical_dataset_builder.py` loads CSV or Polygon-style JSON candle datasets and normalizes OHLCV columns.
@@ -172,12 +174,17 @@ At a high level, each scan does this per symbol:
 - One trading day maps to one validation folder and one session id: `paper_validation_YYYY-MM-DD`.
 - Each scanner run gets a `scan_id` in the form `YYYY-MM-DD_HHMMSS` and updates the daily manifest instead of creating a new report universe.
 - Candidate snapshots append to `data/daily/YYYY-MM-DD/candidate_snapshots.parquet` or `.csv`.
+- Full auto-paper decisions append to `data/daily/YYYY-MM-DD/auto_paper_decisions.csv` from the Streamlit dashboard auto-paper path. The dashboard JSON at `app/state/auto_paper_decision_log.json` remains capped at 500 rows and is only a latest-state UI source.
+- Auto-paper decisions include market-session context: `trading_day`, `session_id`, `scan_id`, `scan_timestamp`, `market_session`, `decision_time_bucket`, `is_regular_market`, `is_auto_entry_window`, `is_after_close`, `minutes_from_open`, and `minutes_to_close`.
+- Signal lifecycle observations append to `data/daily/YYYY-MM-DD/signal_lifecycle_events.csv`; state changes append to `data/daily/YYYY-MM-DD/signal_state_transitions.csv`. Observation timestamps use current ET when scanner results are finalized while preserving the scan-start `scan_id`. The transient latest-state helper file is `app/state/signal_lifecycle_state.json` and is scoped by trading day internally.
 - Trade telemetry still writes to legacy `telemetry/trade_telemetry.csv` and also appends to `data/daily/YYYY-MM-DD/trade_telemetry.csv`.
 - Paper trade opens/closes append immutable events to `data/daily/YYYY-MM-DD/paper_trade_events.csv`. Event types include `OPEN`, `MANUAL_CLOSE`, and `AUTO_EXIT`, with trade key, symbol, direction, option ticker, prices, status, R multiple, and exit reason when available.
 - Scanner Excel output still writes to the configured legacy path for compatibility and mirrors to `data/live/scanner_output_latest.xlsx` plus `data/daily/YYYY-MM-DD/scanner_output_close.xlsx`.
 - The scanner writes fast CSV mirrors to `data/live/scanner_output_latest.csv` and `data/daily/YYYY-MM-DD/scanner_output_close.csv` before Excel output. The dashboard reads live CSV first, then live Excel, then legacy `scanner_output.xlsx`. Dashboard-triggered scanner runs use `data/live/scanner_run.lock` with stale-lock cleanup plus `data/live/scanner_run_status.json` cooldown tracking to prevent overlapping or back-to-back Streamlit refreshes from running the scanner.
-- `tools/daily_validation_report.py` prefers daily files, falls back to live/legacy files, writes `reports/daily_validation_YYYY-MM-DD.html`, copies the report to `data/daily/YYYY-MM-DD/daily_validation_report.html`, and can mark the manifest final with `--finalize`. It starts with a Validation Data Health section and uses paper trade events before telemetry/state for trade evidence.
+- `tools/daily_validation_report.py` prefers daily files, falls back to live/legacy files, writes `reports/daily_validation_YYYY-MM-DD.html`, copies the report to `data/daily/YYYY-MM-DD/daily_validation_report.html`, and can mark the manifest final with `--finalize`. It starts with a Validation Data Health section and uses paper trade events before telemetry/state for trade evidence. It reads full-day `auto_paper_decisions.csv` first and falls back to the capped auto-paper JSON with a warning.
 - The daily report includes `F. Data Quality Checks` with invalid price geometry, direction/option mismatch, high setup plus setup-threshold block, missing realtime-block reason, actual opened trade, and suggested-not-entered counts.
+- The daily report splits gate and quote diagnostics into full day, auto-entry window only, and after-close only, so after-close `DELAYED_QUOTE` or `STALE_QUOTE` noise does not distort regular-session strategy quality.
+- The daily report includes `G. Signal Lifecycle Analysis` with auto-entry-window quote freshness percentages, `REVIEW_TV_CHART` duration metrics, and suggestion-expiry buckets such as expired under 5 minutes, expired while `LIVE_QUOTE`, expired while RR >= 1.8, and expired while setup >= 70.
 - The Streamlit sidebar has a `Generate Daily Validation Report` control that runs the same daily report builder in-process, archives available inputs, optionally finalizes the manifest, and exposes a download button for the generated HTML report. This is the preferred Streamlit Cloud path because local terminals cannot see cloud-generated files.
 
 ### AI Summary
@@ -199,6 +206,9 @@ At a high level, each scan does this per symbol:
 - Neon persistence currently writes `alert_events`, `paper_trades`, `scanner_runs`, and `gate_decisions` only when `DB_WRITE_ENABLED=true`. Failed DB writes log warnings and do not block Telegram, scanner output, paper trade JSON state, or Streamlit dashboard rendering.
 - DB idempotency should stay narrow and intentional. `alert_events` may use deterministic Telegram alert dedupe keys so failed send attempts and later successful retries can update the same audit row, but broad constraints such as symbol/day/contract-only uniqueness are unsafe for scanner rows, paper trade lifecycles, re-entries, and refreshed option observations. Additional unique indexes should be added only with an explicit Neon migration and duplicate scanner/alert/paper-trade tests.
 - `data/daily/YYYY-MM-DD/candidate_snapshots.parquet` or `.csv` stores every scanner candidate row in a normalized research schema, including skipped and blocked setups.
+- `data/daily/YYYY-MM-DD/auto_paper_decisions.csv` stores every auto-paper decision for the full trading day. Use this as the report/audit source; `app/state/auto_paper_decision_log.json` is capped for dashboard speed.
+- `data/daily/YYYY-MM-DD/signal_lifecycle_events.csv` stores one row per observed candidate per scan, including final signal, action status/reason, realtime readiness, quote freshness/age, option quality/spread, expiration bucket, affordability status, option contract cost, setup/RR, prices, market/reference regime, top-candidate tag, and composite `state_label`.
+- `data/daily/YYYY-MM-DD/signal_state_transitions.csv` stores one row when a candidate's composite lifecycle state changes, including previous/new state, state start/end, duration minutes, from/to action status, from/to quote freshness, from/to realtime readiness, and transition reason.
 - `data/daily/YYYY-MM-DD/paper_trade_events.csv` stores immutable paper open/close events so reports can detect true paper activity even if JSON state is later cleared.
 - `data/daily/YYYY-MM-DD/manifest.json` tracks daily validation session status, first/last scan time, last scan id, and finalization state.
 - `data/live/scanner_output_latest.xlsx` mirrors the latest scanner output for live/dashboard-style review.
@@ -211,7 +221,7 @@ At a high level, each scan does this per symbol:
 - `tools/dump_header_history.py` prints the in-memory Polygon rate-limit header history.
 - `tools/get_suggested_rate.py` prints a suggested `POLYGON_RATE_LIMIT_PER_MINUTE` based on recent header observations.
 - `tools/diag_fetch.py` fetches raw 5m Polygon data, resamples to 15m, computes indicators correctly, and prints latest close / move diagnostics.
-- `tools/daily_validation_report.py` creates `reports/daily_validation_YYYY-MM-DD.html` from scanner output, trade telemetry, paper/live state JSON, auto-paper decision logs, and suggested-trade state. Use `--archive` to copy those source files into `daily_reviews/YYYY-MM-DD/`.
+- `tools/daily_validation_report.py` creates `reports/daily_validation_YYYY-MM-DD.html` from scanner output, trade telemetry, paper/live state JSON, full daily auto-paper decisions, signal lifecycle files, and suggested-trade state. Use `--archive` to copy available source files into `daily_reviews/YYYY-MM-DD/`.
 - `tools/test_db_connection.py` verifies the configured SQLAlchemy/Postgres connection by running `SELECT now()`.
 - `tools/test_db_insert.py` verifies inserts into `scanner_runs` using `manual_db_test_001`.
 - The dashboard sidebar can generate and download the daily validation report directly, which should be used for Streamlit Cloud sessions.

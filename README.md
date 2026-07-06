@@ -12,7 +12,7 @@ python -m app.main
 
 Run from the workspace root so package imports resolve correctly.
 
-Each scanner run also writes normalized candidate snapshots for research review. The preferred location is `data/daily/YYYY-MM-DD/candidate_snapshots.parquet`; if the local environment does not have a parquet engine such as `pyarrow` or `fastparquet`, the writer falls back to `data/daily/YYYY-MM-DD/candidate_snapshots.csv`.
+Each scanner run also writes normalized candidate snapshots and signal lifecycle observations for research review. Candidate snapshots prefer `data/daily/YYYY-MM-DD/candidate_snapshots.parquet`; if the local environment does not have a parquet engine such as `pyarrow` or `fastparquet`, the writer falls back to `data/daily/YYYY-MM-DD/candidate_snapshots.csv`. Lifecycle observations append to `data/daily/YYYY-MM-DD/signal_lifecycle_events.csv` and state changes append to `data/daily/YYYY-MM-DD/signal_state_transitions.csv`.
 
 ## Research And Backtesting
 
@@ -72,11 +72,40 @@ With `--archive`, it also copies the available daily inputs into `daily_reviews/
 
 The report summarizes daily paper-trade R, opened trades, auto-paper open/block/skip counts, top block reasons, best skipped opportunities, replay outcome by setup, rolling expectancy tables, and rule-change suggestions.
 
+Auto-paper decisions are stored in two places with different purposes:
+
+- `data/daily/YYYY-MM-DD/auto_paper_decisions.csv`: full-day append-only audit trail and primary report source.
+- `app/state/auto_paper_decision_log.json`: capped to the most recent 500 rows for fast dashboard display.
+
+Every auto-paper decision includes market-session fields such as `trading_day`, `session_id`, `scan_id`, `scan_timestamp`, `market_session`, `decision_time_bucket`, `is_auto_entry_window`, `is_after_close`, `minutes_from_open`, and `minutes_to_close`. The report reads the full daily CSV first and falls back to the capped JSON with a warning if the daily file is missing.
+
+Auto-paper decisions are emitted from the Streamlit dashboard auto-paper path, not from the standalone scanner loop. The dashboard writer appends the full-day CSV and then updates the capped dashboard JSON from the same decision row.
+
 The first section is `Validation Data Health`. It shows counts for scanner rows, candidate snapshots, telemetry rows, paper-trade state records, paper-trade event rows, auto-paper decisions, opened decisions, suggested trades, and trade state records. If no paper trades are found, the report explicitly warns that it is based on blocked/skipped candidates only.
 
 The report also includes `F. Data Quality Checks`, which counts invalid price geometry, option direction mismatches, high-setup rows blocked by setup threshold reasons, review rows missing realtime-block reasons, actual opened trades, and suggested-but-not-entered rows.
 
+The report splits gate and quote diagnostics by session:
+
+- `Gate Quality - Full Day`
+- `Gate Quality - Auto Entry Window Only`
+- `Gate Quality - After Close Only`
+- `Quote Freshness - Auto Entry Window Only`
+- `Quote Freshness - After Close Only`
+
+Use the auto-entry-window sections to judge whether auto-paper is too strict during 9:45-15:30 ET. Treat after-close stale or delayed quotes as diagnostic noise unless they also appear during the auto-entry window.
+
+The report also includes `G. Signal Lifecycle Analysis`, built from `signal_lifecycle_events.csv`, `signal_state_transitions.csv`, and `suggested_trade_state.json`. It answers:
+
+- During 9:45-15:30 ET, what percent of option observations were `LIVE_QUOTE`, `DELAYED_QUOTE`, `STALE_QUOTE`, or missing?
+- How long did candidates stay in `REVIEW_TV_CHART` before promotion, avoidance, wait, quote delay, or expiry?
+- Did valid-looking suggestions expire quickly, including while `LIVE_QUOTE`, while RR >= 1.8, or while setup >= 70?
+
+Lifecycle observation timestamps use the current ET time when scanner results are finalized, while `scan_id` remains tied to the scan start. Lifecycle event rows include debug context such as `final_signal`, `action_reason`, `option_quote_age_minutes`, `expiration_bucket`, `affordability_status`, `option_contract_cost`, `market_regime`, and `reference_regime`.
+
 Paper trade opens/closes also append to `data/daily/YYYY-MM-DD/paper_trade_events.csv`. The report uses this event log before falling back to telemetry or current paper-trade state, so a cleared JSON state file does not hide the fact that a paper trade opened earlier in the session.
+
+Suggestion expiry observability is stored on `app/state/suggested_trade_state.json` records with fields such as `expired_at`, `lifetime_minutes`, `valid_minutes`, `review_minutes`, `scans_seen`, `last_state_before_expiry`, `expiry_market_session`, and `expiry_reason`. Expiry also writes a lifecycle transition to `EXPIRED_NOT_ENTERED|NO_OPTION|NOT_READY|NOT_PRESENT` when the prior state is known.
 
 Current daily files live under `data/daily/YYYY-MM-DD/`; dashboard/latest mirrors live under `data/live/` while legacy root files remain for compatibility with the existing dashboard.
 
