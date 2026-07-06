@@ -135,9 +135,38 @@ def update_recent_auto_paper_log(
 
     rows.append(decision)
     rows = rows[-limit:]
-    tmp_path = state_path.with_suffix(".tmp")
-    tmp_path.write_text(
-        json.dumps(rows, indent=2, default=str),
-        encoding="utf-8",
+    payload = json.dumps(rows, indent=2, default=str)
+    tmp_path = state_path.with_name(
+        f".{state_path.name}.{datetime.now().strftime('%Y%m%d%H%M%S%f')}.tmp"
     )
-    tmp_path.replace(state_path)
+
+    try:
+
+        tmp_path.write_text(payload, encoding="utf-8")
+        tmp_path.replace(state_path)
+
+    except FileNotFoundError:
+
+        state_path.write_text(payload, encoding="utf-8")
+
+    except Exception:
+
+        try:
+
+            state_path.write_text(payload, encoding="utf-8")
+
+        except Exception:
+
+            pass
+
+    finally:
+
+        try:
+
+            if tmp_path.exists():
+
+                tmp_path.unlink()
+
+        except Exception:
+
+            pass
