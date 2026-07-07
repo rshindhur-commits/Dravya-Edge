@@ -95,7 +95,7 @@ The report splits gate and quote diagnostics by session:
 
 Use the auto-entry-window sections to judge whether auto-paper is too strict during 9:45-15:30 ET. Treat after-close stale or delayed quotes as diagnostic noise unless they also appear during the auto-entry window.
 
-The dashboard also adds research-only early-watch and shadow diagnostic columns to help review missed opportunities without changing execution behavior. These include `Early Watch Status`, `Early Watch Reason`, `Would Enter If RR 1.7`, `Would Enter If Setup 65`, `Would Enter If Review Allowed`, `Late Entry Risk`, and `Missed Move Type`. They are informational only: they do not change `Action Status`, auto-paper gates, Telegram alerts, affordability checks, option-quality checks, or exit rules.
+The dashboard also adds research-only early-watch and shadow diagnostic columns to help review missed opportunities without changing execution behavior. These include `Early Watch Status`, `Early Watch Reason`, `Would Pass Gate If RR 1.7`, `Would Pass Gate If Setup 65`, `Would Pass Gate If Review Allowed`, `Late Entry Risk`, and `Missed Move Type`. They are informational only: they do not change `Action Status`, auto-paper gates, Telegram alerts, affordability checks, option-quality checks, or exit rules.
 
 The report also includes `G. Signal Lifecycle Analysis`, built from `signal_lifecycle_events.csv`, `signal_state_transitions.csv`, and `suggested_trade_state.json`. It answers:
 
