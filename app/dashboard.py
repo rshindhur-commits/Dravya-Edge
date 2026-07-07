@@ -187,9 +187,9 @@ TRADE_COLUMNS = [
     "Expiration Risk",
     "Early Watch Status",
     "Early Watch Reason",
-    "Would Enter If RR 1.7",
-    "Would Enter If Setup 65",
-    "Would Enter If Review Allowed",
+    "Would Pass Gate If RR 1.7",
+    "Would Pass Gate If Setup 65",
+    "Would Pass Gate If Review Allowed",
     "Late Entry Risk",
     "Missed Move Type",
     "Option Quality Score",
@@ -627,9 +627,9 @@ def _add_shadow_diagnostics(df):
     output = df.copy()
     statuses = []
     reasons = []
-    would_enter_rr_17 = []
-    would_enter_setup_65 = []
-    would_enter_review_allowed = []
+    would_pass_gate_rr_17 = []
+    would_pass_gate_setup_65 = []
+    would_pass_gate_review_allowed = []
     late_entry_risks = []
     missed_move_types = []
 
@@ -642,9 +642,9 @@ def _add_shadow_diagnostics(df):
 
         statuses.append(status)
         reasons.append(reason)
-        would_enter_rr_17.append(_shadow_gate_allowed(row, min_rr=1.7, min_setup=70.0))
-        would_enter_setup_65.append(_shadow_gate_allowed(row, min_rr=DEFAULT_AUTO_PAPER_MIN_RR, min_setup=65.0))
-        would_enter_review_allowed.append(
+        would_pass_gate_rr_17.append(_shadow_gate_allowed(row, min_rr=1.7, min_setup=70.0))
+        would_pass_gate_setup_65.append(_shadow_gate_allowed(row, min_rr=DEFAULT_AUTO_PAPER_MIN_RR, min_setup=65.0))
+        would_pass_gate_review_allowed.append(
             action_status == "REVIEW_TV_CHART"
             and _shadow_gate_allowed(row)
             and _boolish(row.get("Realtime Ready"))
@@ -658,9 +658,9 @@ def _add_shadow_diagnostics(df):
 
     output["Early Watch Status"] = statuses
     output["Early Watch Reason"] = reasons
-    output["Would Enter If RR 1.7"] = would_enter_rr_17
-    output["Would Enter If Setup 65"] = would_enter_setup_65
-    output["Would Enter If Review Allowed"] = would_enter_review_allowed
+    output["Would Pass Gate If RR 1.7"] = would_pass_gate_rr_17
+    output["Would Pass Gate If Setup 65"] = would_pass_gate_setup_65
+    output["Would Pass Gate If Review Allowed"] = would_pass_gate_review_allowed
     output["Late Entry Risk"] = late_entry_risks
     output["Missed Move Type"] = missed_move_types
 
@@ -1362,9 +1362,9 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "expiration_bucket": row.get("Expiration Bucket") if row is not None else None,
         "early_watch_status": row.get("Early Watch Status") if row is not None else None,
         "early_watch_reason": row.get("Early Watch Reason") if row is not None else None,
-        "would_enter_if_rr_1_7": row.get("Would Enter If RR 1.7") if row is not None else None,
-        "would_enter_if_setup_65": row.get("Would Enter If Setup 65") if row is not None else None,
-        "would_enter_if_review_allowed": row.get("Would Enter If Review Allowed") if row is not None else None,
+        "would_pass_gate_if_rr_1_7": row.get("Would Pass Gate If RR 1.7") if row is not None else None,
+        "would_pass_gate_if_setup_65": row.get("Would Pass Gate If Setup 65") if row is not None else None,
+        "would_pass_gate_if_review_allowed": row.get("Would Pass Gate If Review Allowed") if row is not None else None,
         "late_entry_risk": row.get("Late Entry Risk") if row is not None else None,
         "missed_move_type": row.get("Missed Move Type") if row is not None else None
     }
@@ -3471,9 +3471,9 @@ def _new_calls_puts(df):
         "Option Quote Age Minutes",
         "Early Watch Status",
         "Early Watch Reason",
-        "Would Enter If RR 1.7",
-        "Would Enter If Setup 65",
-        "Would Enter If Review Allowed",
+        "Would Pass Gate If RR 1.7",
+        "Would Pass Gate If Setup 65",
+        "Would Pass Gate If Review Allowed",
         "Late Entry Risk",
         "Missed Move Type",
         "Realtime Ready",
@@ -4032,9 +4032,9 @@ def _last_seen_candidates(df):
         "Expiration Bucket",
         "Early Watch Status",
         "Early Watch Reason",
-        "Would Enter If RR 1.7",
-        "Would Enter If Setup 65",
-        "Would Enter If Review Allowed",
+        "Would Pass Gate If RR 1.7",
+        "Would Pass Gate If Setup 65",
+        "Would Pass Gate If Review Allowed",
         "Late Entry Risk",
         "Missed Move Type",
         "Next Condition"
@@ -4095,9 +4095,9 @@ def _last_seen_candidates(df):
         "Expiration Bucket",
         "Early Watch Status",
         "Early Watch Reason",
-        "Would Enter If RR 1.7",
-        "Would Enter If Setup 65",
-        "Would Enter If Review Allowed",
+        "Would Pass Gate If RR 1.7",
+        "Would Pass Gate If Setup 65",
+        "Would Pass Gate If Review Allowed",
         "Late Entry Risk",
         "Missed Move Type",
         "Next Condition"
