@@ -823,6 +823,29 @@ def _sync_suggested_trades(df):
         )
 
 
+def _parse_suggestion_timestamp(value):
+
+    try:
+
+        timestamp = datetime.fromisoformat(str(value))
+
+    except Exception:
+
+        try:
+
+            timestamp = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+
+        except Exception:
+
+            return None
+
+    if timestamp.tzinfo is None:
+
+        timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
+
+    return timestamp.astimezone(ZoneInfo("America/New_York"))
+
+
 def _load_suggested_trades_df():
 
     try:
@@ -846,10 +869,15 @@ def _load_suggested_trades_df():
 
         try:
 
+            timestamp = _parse_suggestion_timestamp(value)
+
+            if timestamp is None:
+
+                return None
+
             return round(
                 (
-                    now.replace(tzinfo=None)
-                    - datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+                    now - timestamp
                 ).total_seconds() / 60,
                 2
             )
@@ -1113,11 +1141,12 @@ def _save_auto_paper_decision_log(entries):
     )
 
 
-def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None):
+def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, controls=None):
 
     decision_time = _current_et()
     trading_day = get_trading_day(decision_time)
     scan_timestamp = decision_time.strftime("%Y-%m-%d %H:%M:%S")
+    controls = controls or {}
     entry = {
         "timestamp": scan_timestamp,
         "trading_day": trading_day,
@@ -1125,6 +1154,9 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None):
         "scan_id": get_scan_id(trading_day, decision_time),
         "scan_timestamp": scan_timestamp,
         **classify_decision_time(decision_time),
+        "gate_mode": "auto_paper",
+        "min_rr_used": controls.get("min_rr"),
+        "min_setup_used": controls.get("min_setup"),
         "symbol": symbol,
         "decision": decision,
         "reason": reason,
@@ -2709,7 +2741,8 @@ def _run_auto_paper_entries(df, controls):
                 _record_auto_paper_decision(
                     "SYSTEM",
                     "SKIPPED",
-                    "auto paper enabled; scanner output empty"
+                    "auto paper enabled; scanner output empty",
+                    controls=controls
                 )
 
                 return []
@@ -2742,7 +2775,8 @@ def _run_auto_paper_entries(df, controls):
                             row.get("Symbol"),
                             "SKIPPED",
                             "market closed",
-                            row
+                            row,
+                            controls=controls
                         )
 
                 else:
@@ -2750,7 +2784,8 @@ def _run_auto_paper_entries(df, controls):
                     _record_auto_paper_decision(
                         "SYSTEM",
                         "SKIPPED",
-                        "auto paper enabled; market closed but no symbol rows found"
+                        "auto paper enabled; market closed but no symbol rows found",
+                        controls=controls
                     )
 
                 return []
@@ -2763,7 +2798,8 @@ def _run_auto_paper_entries(df, controls):
                         row.get("Symbol"),
                         "SKIPPED",
                         _scanner_block_reason(row),
-                        row
+                        row,
+                        controls=controls
                     )
 
                 return []
@@ -2771,7 +2807,8 @@ def _run_auto_paper_entries(df, controls):
             _record_auto_paper_decision(
                 "SYSTEM",
                 "SKIPPED",
-                "auto paper enabled; no eligible entry candidates and no symbol rows found"
+                "auto paper enabled; no eligible entry candidates and no symbol rows found",
+                controls=controls
             )
 
             return []
@@ -2784,7 +2821,8 @@ def _run_auto_paper_entries(df, controls):
                     row.get("Symbol"),
                     "SKIPPED",
                     "auto paper disabled",
-                    row
+                    row,
+                    controls=controls
                 )
 
             return []
@@ -2792,7 +2830,8 @@ def _run_auto_paper_entries(df, controls):
         _record_auto_paper_decision(
             "SYSTEM",
             "SKIPPED",
-            "auto paper disabled; no current candidates and no symbol rows found"
+            "auto paper disabled; no current candidates and no symbol rows found",
+            controls=controls
         )
 
         return []
@@ -2805,7 +2844,8 @@ def _run_auto_paper_entries(df, controls):
                 row.get("Symbol"),
                 "SKIPPED",
                 "auto paper disabled",
-                row
+                row,
+                controls=controls
             )
 
         return []
@@ -2826,7 +2866,8 @@ def _run_auto_paper_entries(df, controls):
                 row.get("Symbol"),
                 "BLOCKED",
                 reason,
-                row
+                row,
+                controls=controls
             )
 
             continue
@@ -2881,7 +2922,8 @@ def _run_auto_paper_entries(df, controls):
             row.get("Symbol"),
             "TELEGRAM_ENTRY_ALERT",
             telegram_entry_result.get("reason"),
-            row
+            row,
+            controls=controls
         )
 
         _record_auto_paper_decision(
@@ -2889,7 +2931,8 @@ def _run_auto_paper_entries(df, controls):
             "OPENED",
             reason,
             row,
-            trade=opened_trade
+            trade=opened_trade,
+            controls=controls
         )
 
         if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
@@ -3238,7 +3281,7 @@ def _new_calls_puts(df):
     return output[[column for column in columns if column in output.columns]]
 
 
-def _still_valid_suggestions():
+def _suggestions_with_status(status_filter):
 
     suggestions = _load_suggested_trades_df()
 
@@ -3246,18 +3289,9 @@ def _still_valid_suggestions():
 
         return pd.DataFrame()
 
-    active_statuses = [
-        "NEW_CALL",
-        "NEW_PUT",
-        "STILL_VALID_CALL",
-        "STILL_VALID_PUT",
-        "WATCH_WEAKENING",
-        "EXPIRED_NOT_ENTERED",
-        "DO_NOT_CHASE",
-        "CONTRACT_CHANGED"
-    ]
+    status = suggestions["status"].fillna("").astype(str).str.upper()
     rows = suggestions[
-        suggestions["status"].isin(active_statuses)
+        status_filter(status)
     ].copy()
 
     if rows.empty:
@@ -3292,6 +3326,20 @@ def _still_valid_suggestions():
         "option_quote_freshness"
     ]
     return rows[[column for column in columns if column in rows.columns]]
+
+
+def _still_valid_suggestions():
+
+    return _suggestions_with_status(
+        lambda status: status.str.startswith("STILL_VALID")
+    )
+
+
+def _expired_not_entered_suggestions():
+
+    return _suggestions_with_status(
+        lambda status: status.eq("EXPIRED_NOT_ENTERED")
+    )
 
 
 def _exit_now_alerts(df, controls):
@@ -4373,12 +4421,26 @@ def main():
     still_valid = _still_valid_suggestions()
     if still_valid.empty:
 
-        st.info("No persisted suggested trades yet.")
+        st.info("No still-valid persisted suggested trades right now.")
 
     else:
 
         st.dataframe(
             _display_safe_dataframe(still_valid),
+            width="stretch",
+            hide_index=True
+        )
+
+    st.subheader("Expired / Not Entered Suggestions")
+    expired_not_entered = _expired_not_entered_suggestions()
+    if expired_not_entered.empty:
+
+        st.info("No expired suggested trades right now.")
+
+    else:
+
+        st.dataframe(
+            _display_safe_dataframe(expired_not_entered),
             width="stretch",
             hide_index=True
         )

@@ -77,7 +77,7 @@ Auto-paper decisions are stored in two places with different purposes:
 - `data/daily/YYYY-MM-DD/auto_paper_decisions.csv`: full-day append-only audit trail and primary report source.
 - `app/state/auto_paper_decision_log.json`: capped to the most recent 500 rows for fast dashboard display.
 
-Every auto-paper decision includes market-session fields such as `trading_day`, `session_id`, `scan_id`, `scan_timestamp`, `market_session`, `decision_time_bucket`, `is_auto_entry_window`, `is_after_close`, `minutes_from_open`, and `minutes_to_close`. The report reads the full daily CSV first and falls back to the capped JSON with a warning if the daily file is missing.
+Every auto-paper decision includes market-session fields such as `trading_day`, `session_id`, `scan_id`, `scan_timestamp`, `market_session`, `decision_time_bucket`, `is_auto_entry_window`, `is_after_close`, `minutes_from_open`, and `minutes_to_close`. Starting from the latest fixes, each decision also logs the active gate thresholds at decision time: `gate_mode` (always `"auto_paper"`), `min_rr_used`, and `min_setup_used`. This makes it possible to tell whether a skip reason like `RR_BELOW_THRESHOLD` was caused by the actual threshold in use at that moment, or by a gate mismatch. The report reads the full daily CSV first and falls back to the capped JSON with a warning if the daily file is missing.
 
 Auto-paper decisions are emitted from the Streamlit dashboard auto-paper path, not from the standalone scanner loop. The dashboard writer appends the full-day CSV and then updates the capped dashboard JSON from the same decision row.
 
@@ -105,7 +105,7 @@ Lifecycle observation timestamps use the current ET time when scanner results ar
 
 Paper trade opens/closes also append to `data/daily/YYYY-MM-DD/paper_trade_events.csv`. The report uses this event log before falling back to telemetry or current paper-trade state, so a cleared JSON state file does not hide the fact that a paper trade opened earlier in the session.
 
-Suggestion expiry observability is stored on `app/state/suggested_trade_state.json` records with fields such as `expired_at`, `lifetime_minutes`, `valid_minutes`, `review_minutes`, `scans_seen`, `last_state_before_expiry`, `expiry_market_session`, and `expiry_reason`. Expiry also writes a lifecycle transition to `EXPIRED_NOT_ENTERED|NO_OPTION|NOT_READY|NOT_PRESENT` when the prior state is known.
+Suggestion expiry observability is stored on `app/state/suggested_trade_state.json` records with fields such as `expired_at`, `lifetime_minutes`, `valid_minutes`, `review_minutes`, `scans_seen`, `last_state_before_expiry`, `expiry_market_session`, and `expiry_reason`. All suggested-trade timestamps (`first_seen_at`, `last_seen_at`, `last_valid_at`, `expired_at`) are stored as timezone-aware ET ISO-8601 strings (e.g., `2026-07-07T10:22:11-04:00`) to ensure consistent lifetime calculations. Expiry also writes a lifecycle transition to `EXPIRED_NOT_ENTERED|NO_OPTION|NOT_READY|NOT_PRESENT` when the prior state is known.
 
 Current daily files live under `data/daily/YYYY-MM-DD/`; dashboard/latest mirrors live under `data/live/` while legacy root files remain for compatibility with the existing dashboard.
 

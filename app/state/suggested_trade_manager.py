@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from app.gates import price_geometry_error
 from app.storage.signal_lifecycle_store import record_signal_expiry_transition
@@ -10,6 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 SUGGESTED_TRADE_STATE_FILE = str(
     ROOT_DIR / "app" / "state" / "suggested_trade_state.json"
 )
+ET = ZoneInfo("America/New_York")
 
 ACTIVE_STATUSES = {
     "NEW_CALL",
@@ -19,6 +21,15 @@ ACTIVE_STATUSES = {
     "WATCH_WEAKENING",
     "EXPIRED_NOT_ENTERED",
     "DO_NOT_CHASE",
+    "CONTRACT_CHANGED"
+}
+
+PROMOTABLE_STATUSES = {
+    "NEW_CALL",
+    "NEW_PUT",
+    "STILL_VALID_CALL",
+    "STILL_VALID_PUT",
+    "WATCH_WEAKENING",
     "CONTRACT_CHANGED"
 }
 
@@ -39,9 +50,46 @@ def save_suggestions(state):
     )
 
 
+def _now_et():
+
+    return datetime.now(ET)
+
+
+def _timestamp_text(value):
+
+    if value.tzinfo is None:
+
+        value = value.replace(tzinfo=ET)
+
+    return value.astimezone(ET).isoformat(timespec="seconds")
+
+
 def _now_str():
 
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return _timestamp_text(_now_et())
+
+
+def _parse_timestamp(value):
+
+    try:
+
+        parsed = datetime.fromisoformat(str(value))
+
+    except Exception:
+
+        try:
+
+            parsed = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+
+        except Exception:
+
+            return None
+
+    if parsed.tzinfo is None:
+
+        parsed = parsed.replace(tzinfo=ET)
+
+    return parsed.astimezone(ET)
 
 
 def _safe_float(value, default=None):
@@ -231,11 +279,13 @@ def mark_suggestion_expired(suggestion_id, reason="not present in latest scan"):
 
         return suggestion
 
+    expired_at_dt = _now_et()
+    expired_at = _timestamp_text(expired_at_dt)
     expiry = record_signal_expiry_transition(
         suggestion,
-        reason=reason
+        reason=reason,
+        expired_at=expired_at_dt
     )
-    expired_at = expiry.get("expired_at")
     first_seen_at = suggestion.get("first_seen_at")
     last_valid_at = suggestion.get("last_valid_at")
     review_minutes = None
@@ -267,15 +317,14 @@ def mark_suggestion_expired(suggestion_id, reason="not present in latest scan"):
 
 def _minutes_between(start_value, end_value):
 
-    try:
+    start = _parse_timestamp(start_value)
+    end = _parse_timestamp(end_value)
 
-        start = datetime.strptime(str(start_value), "%Y-%m-%d %H:%M:%S")
-        end = datetime.strptime(str(end_value), "%Y-%m-%d %H:%M:%S")
-        return round((end - start).total_seconds() / 60, 2)
-
-    except Exception:
+    if not start or not end:
 
         return None
+
+    return round((end - start).total_seconds() / 60, 2)
 
 
 def promote_suggestion_to_paper_trade(symbol):
@@ -284,7 +333,7 @@ def promote_suggestion_to_paper_trade(symbol):
 
     for suggestion_id, suggestion in state.items():
 
-        if suggestion.get("symbol") == symbol and suggestion.get("status") in ACTIVE_STATUSES:
+        if suggestion.get("symbol") == symbol and suggestion.get("status") in PROMOTABLE_STATUSES:
 
             suggestion["status"] = "ENTERED_PAPER"
             suggestion["validity_reason"] = "promoted to paper trade"
@@ -326,20 +375,15 @@ def sync_suggestions_from_scan(rows):
 def cleanup_old_suggestions(max_age_days=5):
 
     state = load_suggestions()
-    cutoff = datetime.now() - timedelta(days=max_age_days)
+    cutoff = _now_et() - timedelta(days=max_age_days)
 
     for suggestion_id, suggestion in list(state.items()):
 
         last_seen = suggestion.get("last_seen_at") or suggestion.get("first_seen_at")
 
-        try:
+        last_seen_dt = _parse_timestamp(last_seen)
 
-            last_seen_dt = datetime.strptime(
-                last_seen,
-                "%Y-%m-%d %H:%M:%S"
-            )
-
-        except Exception:
+        if not last_seen_dt:
 
             continue
 
