@@ -185,6 +185,13 @@ TRADE_COLUMNS = [
     "Option Moneyness",
     "Expiration Bucket",
     "Expiration Risk",
+    "Early Watch Status",
+    "Early Watch Reason",
+    "Would Enter If RR 1.7",
+    "Would Enter If Setup 65",
+    "Would Enter If Review Allowed",
+    "Late Entry Risk",
+    "Missed Move Type",
     "Option Quality Score",
     "Option Liquidity Grade",
     "Setup Grade",
@@ -481,6 +488,185 @@ def _option_moneyness(direction, underlying_price, strike):
     return None
 
 
+def _boolish(value):
+
+    if isinstance(value, bool):
+
+        return value
+
+    return str(value).strip().lower() in {"true", "1", "yes"}
+
+
+def _shadow_gate_allowed(row, min_rr=DEFAULT_AUTO_PAPER_MIN_RR, min_setup=70.0):
+
+    try:
+
+        gate_allowed, _ = evaluate_entry_gate(
+            row,
+            EntryGateConfig(
+                min_rr=min_rr,
+                min_setup_percent=min_setup,
+                min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY,
+                max_spread_pct=DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT
+            ),
+            mode="paper"
+        )
+        return bool(gate_allowed)
+
+    except Exception:
+
+        return False
+
+
+def _price_move_from_entry(row):
+
+    price = _safe_float(row.get("Price"), None)
+    entry = _safe_float(row.get("Candidate Entry Price"), None)
+
+    if price is None or entry in [None, 0]:
+
+        return None
+
+    return abs(price - entry) / entry * 100
+
+
+def _r_progress_from_row(row):
+
+    direction = str(row.get("Candidate Direction") or "").upper()
+    price = _safe_float(row.get("Price"), None)
+    entry = _safe_float(row.get("Candidate Entry Price"), None)
+    stop = _safe_float(row.get("Candidate Stop Price"), None)
+
+    if direction not in ["CALL", "PUT"] or price is None or entry is None or stop is None:
+
+        return None
+
+    risk = abs(entry - stop)
+
+    if risk <= 0:
+
+        return None
+
+    progress = price - entry if direction == "CALL" else entry - price
+    return progress / risk
+
+
+def _missed_move_type(row):
+
+    direction = str(row.get("Candidate Direction") or "").upper()
+    price = _safe_float(row.get("Price"), None)
+    target = _safe_float(row.get("Candidate Target Price"), None)
+    r_progress = _r_progress_from_row(row)
+
+    if direction == "CALL" and price is not None and target is not None and price >= target:
+
+        return "TARGET_ALREADY_TOUCHED"
+
+    if direction == "PUT" and price is not None and target is not None and price <= target:
+
+        return "TARGET_ALREADY_TOUCHED"
+
+    if r_progress is not None and r_progress >= 1:
+
+        return "MOVED_1R_WITHOUT_ENTRY"
+
+    return None
+
+
+def _early_watch_status_reason(row):
+
+    direction = str(row.get("Candidate Direction") or "").upper()
+    entry_type = str(row.get("Entry") or "").upper()
+    signal = str(row.get("Signal") or row.get("Final Signal") or "").upper()
+    setup = _safe_float(row.get("Setup %"), 0)
+    rr = _safe_float(row.get("RR"), _safe_float(row.get("Risk Reward"), 0))
+    move_from_entry = _price_move_from_entry(row)
+    missed_move = _missed_move_type(row)
+
+    if missed_move:
+
+        return "MISSED_MOVE_DIAGNOSTIC", missed_move
+
+    if move_from_entry is not None and move_from_entry >= 0.75:
+
+        return "LATE_CHASE_RISK", f"price moved {round(move_from_entry, 2)}% from candidate entry"
+
+    if direction == "CALL" and "VWAP" in entry_type:
+
+        return "WATCH_VWAP_RECLAIM", "CALL setup near VWAP reclaim/rejection family"
+
+    if direction == "PUT" and "VWAP" in entry_type:
+
+        return "WATCH_VWAP_LOSS", "PUT setup near VWAP loss/rejection family"
+
+    if direction == "CALL" and (
+        "BREAKOUT" in entry_type
+        or "BULLISH" in signal
+        or setup >= 65
+    ):
+
+        return "WATCH_BREAKOUT_BUILDING", f"CALL setup building with setup={setup}, rr={rr}"
+
+    if direction == "PUT" and (
+        "BREAKDOWN" in entry_type
+        or "BEARISH" in signal
+        or setup >= 65
+    ):
+
+        return "WATCH_BREAKDOWN_BUILDING", f"PUT setup building with setup={setup}, rr={rr}"
+
+    return None, None
+
+
+def _add_shadow_diagnostics(df):
+
+    if df.empty:
+
+        return df
+
+    output = df.copy()
+    statuses = []
+    reasons = []
+    would_enter_rr_17 = []
+    would_enter_setup_65 = []
+    would_enter_review_allowed = []
+    late_entry_risks = []
+    missed_move_types = []
+
+    for _, row in output.iterrows():
+
+        status, reason = _early_watch_status_reason(row)
+        missed_move = _missed_move_type(row)
+        action_status = str(row.get("Action Status") or "").upper()
+        move_from_entry = _price_move_from_entry(row)
+
+        statuses.append(status)
+        reasons.append(reason)
+        would_enter_rr_17.append(_shadow_gate_allowed(row, min_rr=1.7, min_setup=70.0))
+        would_enter_setup_65.append(_shadow_gate_allowed(row, min_rr=DEFAULT_AUTO_PAPER_MIN_RR, min_setup=65.0))
+        would_enter_review_allowed.append(
+            action_status == "REVIEW_TV_CHART"
+            and _shadow_gate_allowed(row)
+            and _boolish(row.get("Realtime Ready"))
+        )
+        late_entry_risks.append(
+            "LATE_CHASE_RISK"
+            if move_from_entry is not None and move_from_entry >= 0.75
+            else None
+        )
+        missed_move_types.append(missed_move)
+
+    output["Early Watch Status"] = statuses
+    output["Early Watch Reason"] = reasons
+    output["Would Enter If RR 1.7"] = would_enter_rr_17
+    output["Would Enter If Setup 65"] = would_enter_setup_65
+    output["Would Enter If Review Allowed"] = would_enter_review_allowed
+    output["Late Entry Risk"] = late_entry_risks
+    output["Missed Move Type"] = missed_move_types
+
+    return output
+
+
 def _recommended_option_label(row):
 
     direction = row.get("Candidate Direction")
@@ -763,6 +949,7 @@ def _load_scanner_output():
     df = _backfill_affordability_columns(df)
     df["Trend Phase"] = df["Signal"].apply(_trend_from_signal)
     df["Volume Score"] = df.get("Relative Volume", "N/A")
+    df = _add_shadow_diagnostics(df)
 
     return df
 
@@ -1172,7 +1359,14 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "option_quality_score": row.get("Option Quality Score") if row is not None else None,
         "option_spread_pct": row.get("Option Spread %") if row is not None else None,
         "option_quote_freshness": row.get("Option Quote Freshness") if row is not None else None,
-        "expiration_bucket": row.get("Expiration Bucket") if row is not None else None
+        "expiration_bucket": row.get("Expiration Bucket") if row is not None else None,
+        "early_watch_status": row.get("Early Watch Status") if row is not None else None,
+        "early_watch_reason": row.get("Early Watch Reason") if row is not None else None,
+        "would_enter_if_rr_1_7": row.get("Would Enter If RR 1.7") if row is not None else None,
+        "would_enter_if_setup_65": row.get("Would Enter If Setup 65") if row is not None else None,
+        "would_enter_if_review_allowed": row.get("Would Enter If Review Allowed") if row is not None else None,
+        "late_entry_risk": row.get("Late Entry Risk") if row is not None else None,
+        "missed_move_type": row.get("Missed Move Type") if row is not None else None
     }
     try:
 
@@ -3275,6 +3469,13 @@ def _new_calls_puts(df):
         "Affordability Status",
         "Affordable",
         "Option Quote Age Minutes",
+        "Early Watch Status",
+        "Early Watch Reason",
+        "Would Enter If RR 1.7",
+        "Would Enter If Setup 65",
+        "Would Enter If Review Allowed",
+        "Late Entry Risk",
+        "Missed Move Type",
         "Realtime Ready",
         "Action Status"
     ]
@@ -3829,6 +4030,13 @@ def _last_seen_candidates(df):
         "Option Quality Score",
         "Option Quote Freshness",
         "Expiration Bucket",
+        "Early Watch Status",
+        "Early Watch Reason",
+        "Would Enter If RR 1.7",
+        "Would Enter If Setup 65",
+        "Would Enter If Review Allowed",
+        "Late Entry Risk",
+        "Missed Move Type",
         "Next Condition"
     ]
 
@@ -3885,6 +4093,13 @@ def _last_seen_candidates(df):
         "Option Quality Score",
         "Option Quote Freshness",
         "Expiration Bucket",
+        "Early Watch Status",
+        "Early Watch Reason",
+        "Would Enter If RR 1.7",
+        "Would Enter If Setup 65",
+        "Would Enter If Review Allowed",
+        "Late Entry Risk",
+        "Missed Move Type",
         "Next Condition"
     ]
 

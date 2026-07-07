@@ -42,6 +42,13 @@ AUTO_PAPER_DECISION_FIELDS = [
     "option_spread_pct",
     "option_quote_freshness",
     "expiration_bucket",
+    "early_watch_status",
+    "early_watch_reason",
+    "would_enter_if_rr_1_7",
+    "would_enter_if_setup_65",
+    "would_enter_if_review_allowed",
+    "late_entry_risk",
+    "missed_move_type",
 ]
 
 
