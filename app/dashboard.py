@@ -1358,6 +1358,18 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "top_candidate": row.get("Top Candidate") if row is not None else None,
         "setup_percent": row.get("Setup %") if row is not None else None,
         "rr": row.get("RR") if row is not None else None,
+        "setup_valid": row.get("Setup Valid") if row is not None else None,
+        "execution_ready": row.get("Execution Ready") if row is not None else None,
+        "realtime_ready": row.get("Realtime Ready") if row is not None else None,
+        "affordable": row.get("Affordable") if row is not None else None,
+        "price_geometry_ok": price_geometry_error(row) is None if row is not None else None,
+        "price_geometry_error": price_geometry_error(row) if row is not None else None,
+        "scanner_output_age_minutes": _scanner_output_age_minutes(),
+        "allow_review_tv_chart_auto_paper": _allow_review_tv_chart_auto_paper(),
+        "review_validation_candidate": (
+            str(row.get("Action Status") or "").upper() == "REVIEW_TV_CHART"
+            and _allow_review_tv_chart_auto_paper()
+        ) if row is not None else None,
         "action_status": row.get("Action Status") if row is not None else None,
         "blocked_by": row.get("Blocked By") if row is not None else None,
         "action_reason": row.get("Action Reason") if row is not None else None,
@@ -2738,6 +2750,25 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
         return False, gate_reason
 
+    if review_validation_candidate:
+
+        if now_et.time() >= time(14, 45):
+
+            return False, "REVIEW_VALIDATION_TOO_LATE_IN_DAY"
+
+        if str(row.get("Late Entry Risk") or "").upper() == "LATE_CHASE_RISK":
+
+            return False, "REVIEW_VALIDATION_LATE_CHASE_RISK"
+
+        missed_move_type = str(row.get("Missed Move Type") or "").strip()
+        if missed_move_type and missed_move_type.lower() not in ["nan", "none"]:
+
+            return False, "REVIEW_VALIDATION_MISSED_MOVE_ALREADY_HAPPENED"
+
+        if row.get("Top Candidate") not in AUTO_PAPER_TOP_CANDIDATES:
+
+            return False, "REVIEW_VALIDATION_NOT_TOP_CANDIDATE"
+
     if not realtime_ready and not review_validation_candidate:
 
         return False, row.get("Realtime Block Reason") or "realtime not ready"
@@ -2746,11 +2777,11 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
         return False, "missing option bid/ask"
 
-    if bool(row.get("Event Blocked")):
+    if _boolish(row.get("Event Blocked")):
 
         return False, "event blocked"
 
-    if bool(row.get("Regime Blocked")):
+    if _boolish(row.get("Regime Blocked")):
 
         return False, "regime blocked"
 
@@ -4066,6 +4097,10 @@ def _last_seen_candidates(df):
         "Setup Grade",
         "Setup %",
         "RR",
+        "Setup Valid",
+        "Execution Ready",
+        "Realtime Ready",
+        "Affordable",
         "Action Status",
         "Blocked By",
         "Recommended Option",
@@ -4128,6 +4163,10 @@ def _last_seen_candidates(df):
         "Setup Grade",
         "Setup %",
         "RR",
+        "Setup Valid",
+        "Execution Ready",
+        "Realtime Ready",
+        "Affordable",
         "Action Status",
         "Blocked By",
         "Watch Reason",
