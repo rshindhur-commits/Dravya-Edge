@@ -44,6 +44,7 @@ AUTO_PAPER_DECISION_FIELDS = [
     "review_validation_candidate",
     "real_trading_enabled",
     "real_alerts_only",
+    "paper_trade_opened",
     "real_trade_readiness",
     "real_review_scan_count",
     "real_entry_checklist",
