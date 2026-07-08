@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import sys
 from datetime import datetime, time
+from html import escape
 from zoneinfo import ZoneInfo
 import json
 from io import BytesIO
@@ -4145,43 +4146,219 @@ def _paper_trade_counts():
     return open_count, _auto_paper_trade_count_today(paper_trades)
 
 
+def _compact_value(value, max_len=28):
+
+    if value is None:
+
+        return "-"
+
+    text = str(value)
+
+    if text.lower() in ["nan", "none", ""]:
+
+        return "-"
+
+    return text if len(text) <= max_len else text[: max_len - 1] + "..."
+
+
+def _short_datetime(value):
+
+    try:
+
+        timestamp = pd.to_datetime(value)
+
+        if pd.isna(timestamp):
+
+            return _compact_value(value)
+
+        return timestamp.strftime("%m/%d %H:%M ET")
+
+    except Exception:
+
+        return _compact_value(value)
+
+
+def _status_tone(value):
+
+    text = str(value or "").upper()
+
+    if text in ["ON", "BULLISH", "LIVE", "REVIEW ONLY", "REVIEW_ONLY"]:
+
+        return "ok"
+
+    if text in ["OFF", "CLOSED", "AFTERHOURS", "AFTER_HOURS"]:
+
+        return "neutral"
+
+    if text in ["BEARISH", "STALE", "BLOCKED"]:
+
+        return "bad"
+
+    if "RANGE" in text or "WAIT" in text:
+
+        return "warn"
+
+    return "neutral"
+
+
+def _inject_compact_dashboard_css():
+
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.3rem;
+        }
+
+        h1 {
+            font-size: 2.1rem !important;
+            margin-bottom: 0.3rem !important;
+        }
+
+        h2, h3 {
+            font-size: 1.35rem !important;
+            margin-top: 1.15rem !important;
+            margin-bottom: 0.55rem !important;
+        }
+
+        .compact-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+            gap: 0.55rem;
+            margin: 0.35rem 0 1.1rem 0;
+        }
+
+        .compact-card {
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 10px;
+            padding: 0.55rem 0.7rem;
+            background: rgba(255, 255, 255, 0.035);
+            min-height: 64px;
+        }
+
+        .compact-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: rgba(229, 231, 235, 0.70);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .compact-value {
+            font-size: 1.02rem;
+            line-height: 1.25;
+            font-weight: 700;
+            margin-top: 0.18rem;
+            color: rgba(255, 255, 255, 0.94);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .compact-ok {
+            border-left: 4px solid #22c55e;
+        }
+
+        .compact-warn {
+            border-left: 4px solid #f59e0b;
+        }
+
+        .compact-bad {
+            border-left: 4px solid #ef4444;
+        }
+
+        .compact-neutral {
+            border-left: 4px solid #64748b;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+def _render_compact_card_grid(cards):
+
+    html = ['<div class="compact-grid">']
+
+    for label, value in cards:
+
+        compact_value = _compact_value(value)
+        tone = _status_tone(compact_value)
+        html.append(
+            f"""
+            <div class="compact-card compact-{tone}">
+                <div class="compact-label">{escape(str(label))}</div>
+                <div class="compact-value" title="{escape(str(compact_value))}">
+                    {escape(str(compact_value))}
+                </div>
+            </div>
+            """
+        )
+
+    html.append("</div>")
+    st.markdown(
+        "\n".join(html),
+        unsafe_allow_html=True
+    )
+
+
 def _render_compact_status_cards(df, auto_paper_controls):
 
+    latest_run = _latest_scanner_run(df)
     open_paper_count, today_opened_count = _paper_trade_counts()
+    real_mode = (
+        "REAL ON"
+        if _real_trading_enabled()
+        else "REVIEW ONLY"
+        if _real_alerts_only()
+        else "OFF"
+    )
     cards = [
         ("Market Session", _dashboard_market_session()),
-        ("Last Scanner Run", _latest_scanner_run(df)),
+        ("Last Run", _short_datetime(latest_run)),
         ("Auto Paper", "ON" if auto_paper_controls.get("auto_paper_enabled") else "OFF"),
         ("Review Paper", "ON" if _allow_review_tv_chart_auto_paper() else "OFF"),
         ("EOD Close", "ON" if auto_paper_controls.get("eod_close_enabled") else "OFF"),
-        ("Real Mode", "REVIEW_ONLY" if _real_alerts_only() else "DISABLED"),
+        ("Real Mode", real_mode),
         ("Open Paper", open_paper_count),
         ("Today Opened", today_opened_count),
     ]
-    cols = st.columns(len(cards))
-
-    for column, (label, value) in zip(cols, cards):
-
-        column.metric(label, value)
+    _render_compact_card_grid(cards)
 
 
 def _render_compact_market_health(df):
 
     health = _market_health(df)
     st.subheader("Market Health")
-    cols = st.columns(6)
-    compact = [
-        ("SPY Trend", health.get("SPY Trend")),
-        ("QQQ Trend", health.get("QQQ Trend")),
+    spy = health.get("SPY Trend")
+    qqq = health.get("QQQ Trend")
+    breadth = health.get("Market Breadth")
+    regime = health.get("Reference Regime")
+    above_vwap = health.get("Above VWAP %")
+    bull_bear = f"{health.get('Bullish Symbols')} / {health.get('Bearish Symbols')}"
+
+    if spy == "Bullish" and qqq == "Bullish" and breadth == "Bullish":
+
+        bias = "BULLISH"
+
+    elif spy == "Bearish" and qqq == "Bearish" and breadth == "Bearish":
+
+        bias = "BEARISH"
+
+    else:
+
+        bias = "MIXED"
+
+    cards = [
+        ("Market Bias", bias),
+        ("SPY / QQQ", f"{spy} / {qqq}"),
         ("Breadth", health.get("Market Breadth")),
-        ("Regime", health.get("Reference Regime")),
-        ("Above VWAP %", health.get("Above VWAP %")),
-        ("Bull/Bear", f"{health.get('Bullish Symbols')} / {health.get('Bearish Symbols')}"),
+        ("Regime", regime),
+        ("Above VWAP", f"{above_vwap}%"),
+        ("Bull / Bear", bull_bear),
     ]
-
-    for column, (label, value) in zip(cols, compact):
-
-        column.metric(label, value)
+    _render_compact_card_grid(cards)
 
 
 def _real_review_candidates(df):
@@ -5203,6 +5380,8 @@ def main():
         page_title="Dravya Wallstreet Edge",
         layout="wide"
     )
+
+    _inject_compact_dashboard_css()
 
     st.title("Dravya Wallstreet Edge")
     st.caption("Decision dashboard only. Full engine diagnostics stay in Excel/backend.")
