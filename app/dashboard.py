@@ -142,6 +142,41 @@ def _env_bool(name, default=False):
     ]
 
 
+def _env_float(name, default):
+
+    value = os.getenv(name)
+
+    if value is None:
+
+        return default
+
+    try:
+
+        return float(str(value).strip())
+
+    except Exception:
+
+        return default
+
+
+def _env_time(name, default_value):
+
+    value = os.getenv(name)
+
+    if value is None:
+
+        return default_value
+
+    try:
+
+        hour, minute = str(value).strip().split(":", 1)
+        return time(int(hour), int(minute))
+
+    except Exception:
+
+        return default_value
+
+
 def _manual_paper_entries_enabled():
 
     return _env_bool(
@@ -174,6 +209,22 @@ def _allow_review_tv_chart_auto_paper():
     )
 
 
+def _real_trading_enabled():
+
+    return _env_bool(
+        "REAL_TRADING_ENABLED",
+        False
+    )
+
+
+def _real_alerts_only():
+
+    return _env_bool(
+        "REAL_ALERTS_ONLY",
+        True
+    )
+
+
 TRADE_COLUMNS = [
     "Symbol",
     "Suggestion Status",
@@ -200,6 +251,9 @@ TRADE_COLUMNS = [
     "Would Pass Gate If Review Allowed",
     "Late Entry Risk",
     "Missed Move Type",
+    "Real Trade Readiness",
+    "Real Review Scan Count",
+    "Real Entry Checklist",
     "Option Quality Score",
     "Option Liquidity Grade",
     "Setup Grade",
@@ -1017,6 +1071,163 @@ def _sync_suggested_trades(df):
         )
 
 
+def _real_review_scan_count(row):
+
+    symbol = str(row.get("Symbol") or "")
+    direction = str(row.get("Candidate Direction") or "")
+    setup_type = str(row.get("Entry") or "")
+
+    if not symbol or not direction or not setup_type:
+
+        return 0
+
+    try:
+
+        from app.state.suggested_trade_manager import suggestions_as_list
+
+        suggestions = suggestions_as_list()
+
+    except Exception:
+
+        suggestions = []
+
+    scan_count = 0
+
+    for suggestion in suggestions:
+
+        if str(suggestion.get("symbol") or "") != symbol:
+
+            continue
+
+        if str(suggestion.get("direction") or "") != direction:
+
+            continue
+
+        if str(suggestion.get("setup_type") or "") != setup_type:
+
+            continue
+
+        status = str(suggestion.get("status") or "").upper()
+
+        if status in ["EXPIRED_NOT_ENTERED", "CLOSED"]:
+
+            continue
+
+        scan_count = max(
+            scan_count,
+            int(suggestion.get("times_seen", 0) or 0)
+        )
+
+    return scan_count
+
+
+def _real_entry_checklist(row):
+
+    if row.get("Real Trade Readiness") != "A_PLUS_REAL_REVIEW":
+
+        return None
+
+    return (
+        "Real review only - no auto order; "
+        "Confirm 5m candle close; "
+        "Confirm price above/below VWAP/EMA; "
+        "Confirm bid/ask still live; "
+        "Confirm spread <= 8%; "
+        "Confirm no late chase; "
+        "Suggested max risk: $25-$50"
+    )
+
+
+def _real_trade_readiness(row):
+
+    action_status = str(row.get("Action Status") or "").upper()
+    top_candidate = row.get("Top Candidate")
+    setup = _safe_float(row.get("Setup %"), 0)
+    rr = _safe_float(row.get("RR"), 0)
+    option_quality = _safe_float(row.get("Option Quality Score"), 0)
+    spread = _safe_float(row.get("Option Spread %"), 999)
+    quote_freshness = str(row.get("Option Quote Freshness") or "").upper()
+    quote_age = _safe_float(row.get("Option Quote Age Minutes"), 999)
+
+    if action_status not in ["ENTER", "ENTER_PAPER", "REVIEW_TV_CHART"]:
+
+        return "NOT_REAL_READY"
+
+    if top_candidate not in ["BULLISH_TOP_1", "BEARISH_TOP_1"]:
+
+        return "PAPER_ONLY"
+
+    if setup < _env_float("REAL_MIN_SETUP", 88.0):
+
+        return "PAPER_ONLY"
+
+    if rr < _env_float("REAL_MIN_RR", 2.0):
+
+        return "PAPER_ONLY"
+
+    if option_quality < _env_float("REAL_MIN_OPTION_QUALITY", 90.0):
+
+        return "PAPER_ONLY"
+
+    if spread > _env_float("REAL_MAX_SPREAD_PCT", 8.0):
+
+        return "PAPER_ONLY"
+
+    if (
+        quote_freshness != "LIVE_QUOTE"
+        or quote_age > _env_float("REAL_MAX_QUOTE_AGE_MINUTES", 3.0)
+    ):
+
+        return "PAPER_ONLY"
+
+    if str(row.get("Late Entry Risk") or "").upper() == "LATE_CHASE_RISK":
+
+        return "PAPER_ONLY"
+
+    missed_move_type = str(row.get("Missed Move Type") or "").strip()
+
+    if missed_move_type and missed_move_type.lower() not in ["nan", "none"]:
+
+        return "PAPER_ONLY"
+
+    if _boolish(row.get("Event Blocked")) or _boolish(row.get("Regime Blocked")):
+
+        return "PAPER_ONLY"
+
+    if _real_review_scan_count(row) < 2:
+
+        return "PAPER_ONLY"
+
+    if _current_et().time() >= _env_time("REAL_ENTRY_CUTOFF_ET", time(14, 30)):
+
+        return "PAPER_ONLY"
+
+    return "A_PLUS_REAL_REVIEW"
+
+
+def _add_real_trade_readiness(df):
+
+    if df.empty:
+
+        return df
+
+    output = df.copy()
+    output["Real Review Scan Count"] = output.apply(
+        _real_review_scan_count,
+        axis=1
+    )
+    output["Real Trade Readiness"] = output.apply(
+        _real_trade_readiness,
+        axis=1
+    )
+    output["Real Entry Checklist"] = output.apply(
+        _real_entry_checklist,
+        axis=1
+    )
+
+    return output
+
+
 def _parse_suggestion_timestamp(value):
 
     try:
@@ -1370,6 +1581,11 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
             str(row.get("Action Status") or "").upper() == "REVIEW_TV_CHART"
             and _allow_review_tv_chart_auto_paper()
         ) if row is not None else None,
+        "real_trading_enabled": _real_trading_enabled(),
+        "real_alerts_only": _real_alerts_only(),
+        "real_trade_readiness": row.get("Real Trade Readiness") if row is not None else None,
+        "real_review_scan_count": row.get("Real Review Scan Count") if row is not None else None,
+        "real_entry_checklist": row.get("Real Entry Checklist") if row is not None else None,
         "action_status": row.get("Action Status") if row is not None else None,
         "blocked_by": row.get("Blocked By") if row is not None else None,
         "action_reason": row.get("Action Reason") if row is not None else None,
@@ -3536,6 +3752,9 @@ def _new_calls_puts(df):
         "Would Pass Gate If Review Allowed",
         "Late Entry Risk",
         "Missed Move Type",
+        "Real Trade Readiness",
+        "Real Review Scan Count",
+        "Real Entry Checklist",
         "Realtime Ready",
         "Action Status"
     ]
@@ -4114,6 +4333,9 @@ def _last_seen_candidates(df):
         "Would Pass Gate If Review Allowed",
         "Late Entry Risk",
         "Missed Move Type",
+        "Real Trade Readiness",
+        "Real Review Scan Count",
+        "Real Entry Checklist",
         "Next Condition"
     ]
 
@@ -4181,6 +4403,9 @@ def _last_seen_candidates(df):
         "Would Pass Gate If Review Allowed",
         "Late Entry Risk",
         "Missed Move Type",
+        "Real Trade Readiness",
+        "Real Review Scan Count",
+        "Real Entry Checklist",
         "Next Condition"
     ]
 
@@ -4610,6 +4835,7 @@ def main():
         return
 
     _sync_suggested_trades(df)
+    df = _add_real_trade_readiness(df)
     df = _enrich_with_suggestion_lifecycle(df)
 
     latest_time = df.get("Current ET")
