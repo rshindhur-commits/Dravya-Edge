@@ -166,6 +166,14 @@ def _allow_manual_paper_close():
     )
 
 
+def _allow_review_tv_chart_auto_paper():
+
+    return _env_bool(
+        "ALLOW_REVIEW_TV_CHART_AUTO_PAPER",
+        False
+    )
+
+
 TRADE_COLUMNS = [
     "Symbol",
     "Suggestion Status",
@@ -647,7 +655,6 @@ def _add_shadow_diagnostics(df):
         would_pass_gate_review_allowed.append(
             action_status == "REVIEW_TV_CHART"
             and _shadow_gate_allowed(row)
-            and _boolish(row.get("Realtime Ready"))
         )
         late_entry_risks.append(
             "LATE_CHASE_RISK"
@@ -2699,6 +2706,10 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         action_status in ["ENTER", "ENTER_PAPER"]
         and realtime_ready
     )
+    review_validation_candidate = (
+        action_status == "REVIEW_TV_CHART"
+        and _allow_review_tv_chart_auto_paper()
+    )
 
     if (
         row.get("Top Candidate") not in AUTO_PAPER_TOP_CANDIDATES
@@ -2727,7 +2738,7 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
         return False, gate_reason
 
-    if not realtime_ready:
+    if not realtime_ready and not review_validation_candidate:
 
         return False, row.get("Realtime Block Reason") or "realtime not ready"
 
@@ -2823,6 +2834,10 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
 
         return False, "DAILY_AUTO_PAPER_LIMIT_REACHED"
+
+    if review_validation_candidate:
+
+        return True, "REVIEW_TV_CHART_VALIDATION_ELIGIBLE"
 
     return True, gate_reason
 
@@ -3078,6 +3093,20 @@ def _run_auto_paper_entries(df, controls):
             promote_suggestion_to_paper_trade = None
 
         scanner_context = _scanner_context_from_row(row)
+        is_review_validation = (
+            str(row.get("Action Status") or "").strip().upper() == "REVIEW_TV_CHART"
+            and _allow_review_tv_chart_auto_paper()
+        )
+        entry_source = (
+            "AUTO_PAPER_REVIEW_VALIDATION"
+            if is_review_validation
+            else "AUTO_PAPER"
+        )
+        notes_prefix = (
+            "Auto paper review validation entry"
+            if is_review_validation
+            else "Auto paper entry"
+        )
         spread_note = (
             "; missing spread allowed for paper"
             if _safe_float(row.get("Option Spread %"), None) is None
@@ -3093,11 +3122,11 @@ def _run_auto_paper_entries(df, controls):
             option_ticker=row.get("Option Ticker"),
             option_bid=row.get("Option Bid"),
             option_ask=row.get("Option Ask"),
-            notes=f"Auto paper entry: {reason}{spread_note}",
+            notes=f"{notes_prefix}: {reason}{spread_note}",
             scanner_context=scanner_context,
-            entry_source="AUTO_PAPER",
+            entry_source=entry_source,
             trade_mode="PAPER",
-            include_in_strategy_stats=True
+            include_in_strategy_stats=not is_review_validation
         )
         paper_trades = load_paper_trades()
         opened.append(row.get("Symbol"))
@@ -3109,7 +3138,7 @@ def _run_auto_paper_entries(df, controls):
         telegram_entry_result = maybe_send_paper_entry_alert(
             opened_trade,
             scanner_context,
-            reason=f"Auto paper entry: {reason}"
+            reason=f"{notes_prefix}: {reason}"
         )
 
         _record_auto_paper_decision(
@@ -3978,18 +4007,31 @@ def _paper_trade_candidates(df):
 
         return pd.DataFrame()
 
+    allowed_statuses = ["ENTER", "ENTER_PAPER"]
+
+    if _allow_review_tv_chart_auto_paper():
+
+        allowed_statuses.append("REVIEW_TV_CHART")
+
     candidates = df[
         (df["Setup Valid"] == True)
         & (df["Candidate Direction"].isin(["CALL", "PUT"]))
-        & (df["Action Status"].isin(["ENTER", "ENTER_PAPER"]))
+        & (df["Action Status"].isin(allowed_statuses))
         & (df.get("Affordable", True) == True)
     ].copy()
 
     if "Realtime Ready" in candidates.columns:
 
-        candidates = candidates[
+        realtime_ready = (
             candidates["Realtime Ready"].astype(str).str.lower().isin(["true", "1", "yes"])
             | (candidates["Realtime Ready"] == True)
+        )
+        review_validation = (
+            _allow_review_tv_chart_auto_paper()
+            & candidates["Action Status"].astype(str).str.upper().eq("REVIEW_TV_CHART")
+        )
+        candidates = candidates[
+            realtime_ready | review_validation
         ].copy()
 
     if not candidates.empty:
