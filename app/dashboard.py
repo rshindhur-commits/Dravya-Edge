@@ -4231,13 +4231,13 @@ def _inject_compact_dashboard_css():
         .compact-card {
             border: 1px solid rgba(148, 163, 184, 0.25);
             border-radius: 10px;
-            padding: 0.55rem 0.7rem;
+            padding: 0.45rem 0.6rem;
             background: rgba(255, 255, 255, 0.035);
-            min-height: 64px;
+            min-height: 52px;
         }
 
         .compact-label {
-            font-size: 0.75rem;
+            font-size: 0.70rem;
             font-weight: 600;
             color: rgba(229, 231, 235, 0.70);
             white-space: nowrap;
@@ -4246,7 +4246,7 @@ def _inject_compact_dashboard_css():
         }
 
         .compact-value {
-            font-size: 1.02rem;
+            font-size: 0.92rem;
             line-height: 1.25;
             font-weight: 700;
             margin-top: 0.18rem;
@@ -4279,26 +4279,26 @@ def _inject_compact_dashboard_css():
 
 def _render_compact_card_grid(cards):
 
-    html = ['<div class="compact-grid">']
+    parts = ['<div class="compact-grid">']
 
     for label, value in cards:
 
         compact_value = _compact_value(value)
         tone = _status_tone(compact_value)
-        html.append(
-            f"""
-            <div class="compact-card compact-{tone}">
-                <div class="compact-label">{escape(str(label))}</div>
-                <div class="compact-value" title="{escape(str(compact_value))}">
-                    {escape(str(compact_value))}
-                </div>
-            </div>
-            """
+        parts.append(
+            '<div class="compact-card compact-{tone}">'
+            '<div class="compact-label">{label}</div>'
+            '<div class="compact-value" title="{value}">{value}</div>'
+            '</div>'.format(
+                tone=escape(str(tone)),
+                label=escape(str(label)),
+                value=escape(str(compact_value)),
+            )
         )
 
-    html.append("</div>")
+    parts.append("</div>")
     st.markdown(
-        "\n".join(html),
+        "".join(parts),
         unsafe_allow_html=True
     )
 
