@@ -3560,7 +3560,7 @@ def _run_auto_paper_exits(df, controls):
     return closed
 
 
-def _render_auto_paper_decision_log():
+def _render_auto_paper_decision_log(show_full_expander=True):
 
     entries = _load_auto_paper_decision_log()
 
@@ -3611,15 +3611,25 @@ def _render_auto_paper_decision_log():
             hide_index=True
         )
 
-    with st.expander("Full auto-paper decision log", expanded=False):
+    recent = pd.DataFrame(entries[-50:])
 
-        recent = pd.DataFrame(entries[-50:])
+    if show_full_expander:
 
-        st.dataframe(
-            _display_safe_dataframe(recent.iloc[::-1]),
-            width="stretch",
-            hide_index=True
-        )
+        with st.expander("Full auto-paper decision log", expanded=False):
+
+            st.dataframe(
+                _display_safe_dataframe(recent.iloc[::-1]),
+                width="stretch",
+                hide_index=True
+            )
+
+        return
+
+    st.dataframe(
+        _display_safe_dataframe(recent.iloc[::-1]),
+        width="stretch",
+        hide_index=True
+    )
 
 
 def _build_trade_opportunities(df):
@@ -4029,6 +4039,345 @@ def _market_health(df):
         "Bullish Symbols": bullish_count,
         "Bearish Symbols": bearish_count
     }
+
+
+def _paper_trade_counts():
+
+    try:
+
+        from app.state.paper_trade_manager import load_paper_trades
+
+        paper_trades = load_paper_trades()
+
+    except Exception:
+
+        paper_trades = {}
+
+    open_count = sum(
+        1 for trade in paper_trades.values()
+        if trade.get("status") == "OPEN"
+    )
+
+    return open_count, _auto_paper_trade_count_today(paper_trades)
+
+
+def _render_compact_status_cards(df, auto_paper_controls):
+
+    open_paper_count, today_opened_count = _paper_trade_counts()
+    cards = [
+        ("Market Session", _dashboard_market_session()),
+        ("Last Scanner Run", _latest_scanner_run(df)),
+        ("Auto Paper", "ON" if auto_paper_controls.get("auto_paper_enabled") else "OFF"),
+        ("Review Paper", "ON" if _allow_review_tv_chart_auto_paper() else "OFF"),
+        ("Real Mode", "REVIEW_ONLY" if _real_alerts_only() else "DISABLED"),
+        ("Open Paper", open_paper_count),
+        ("Today Opened", today_opened_count),
+    ]
+    cols = st.columns(len(cards))
+
+    for column, (label, value) in zip(cols, cards):
+
+        column.metric(label, value)
+
+
+def _render_compact_market_health(df):
+
+    health = _market_health(df)
+    st.subheader("Market Health")
+    cols = st.columns(6)
+    compact = [
+        ("SPY Trend", health.get("SPY Trend")),
+        ("QQQ Trend", health.get("QQQ Trend")),
+        ("Breadth", health.get("Market Breadth")),
+        ("Regime", health.get("Reference Regime")),
+        ("Above VWAP %", health.get("Above VWAP %")),
+        ("Bull/Bear", f"{health.get('Bullish Symbols')} / {health.get('Bearish Symbols')}"),
+    ]
+
+    for column, (label, value) in zip(cols, compact):
+
+        column.metric(label, value)
+
+
+def _real_review_candidates(df):
+
+    if df.empty or "Real Trade Readiness" not in df.columns:
+
+        return pd.DataFrame()
+
+    rows = df[
+        df["Real Trade Readiness"].astype(str).str.upper().eq("A_PLUS_REAL_REVIEW")
+    ].copy()
+    columns = [
+        "Symbol",
+        "Top Candidate",
+        "Candidate Direction",
+        "Setup Grade",
+        "Setup %",
+        "RR",
+        "Option Quality Score",
+        "Option Spread %",
+        "Option Quote Freshness",
+        "Option Quote Age Minutes",
+        "Real Review Scan Count",
+        "Real Entry Checklist",
+    ]
+
+    return rows[[column for column in columns if column in rows.columns]]
+
+
+def _eligible_auto_paper_candidates(df):
+
+    candidates = _paper_trade_candidates(df)
+
+    if candidates.empty:
+
+        return candidates
+
+    columns = [
+        "Symbol",
+        "Top Candidate",
+        "Candidate Direction",
+        "Setup Grade",
+        "Setup %",
+        "RR",
+        "Action Status",
+        "Real Trade Readiness",
+        "Option Quality Score",
+        "Option Quote Freshness",
+        "Expiration Bucket",
+        "Next Condition",
+    ]
+
+    return candidates[[column for column in columns if column in candidates.columns]]
+
+
+def _render_action_center(df, auto_paper_controls):
+
+    st.subheader("Action Center")
+    real_review = _real_review_candidates(df)
+    auto_paper_candidates = _eligible_auto_paper_candidates(df)
+    active_trades = _active_trades(df)
+    exit_alerts = _exit_now_alerts(
+        df,
+        auto_paper_controls
+    )
+    has_action = any(
+        not frame.empty
+        for frame in [real_review, auto_paper_candidates, active_trades, exit_alerts]
+    )
+
+    if not has_action:
+
+        st.info("No action needed right now.")
+        return
+
+    if not real_review.empty:
+
+        st.markdown("**A+ Real Review Candidates**")
+        st.dataframe(
+            _display_safe_dataframe(real_review),
+            width="stretch",
+            hide_index=True
+        )
+
+    if not auto_paper_candidates.empty:
+
+        st.markdown("**Eligible Auto-Paper Candidates**")
+        st.dataframe(
+            _display_safe_dataframe(auto_paper_candidates),
+            width="stretch",
+            hide_index=True
+        )
+
+    if not active_trades.empty:
+
+        st.markdown("**Active Paper Trades**")
+        st.dataframe(
+            _display_safe_dataframe(active_trades),
+            width="stretch",
+            hide_index=True
+        )
+
+    if not exit_alerts.empty:
+
+        st.markdown("**Exit Now Alerts**")
+        st.dataframe(
+            _display_safe_dataframe(exit_alerts),
+            width="stretch",
+            hide_index=True
+        )
+
+
+def _scanner_watchlist(df, limit=10):
+
+    if df.empty:
+
+        return pd.DataFrame()
+
+    columns = [
+        "Symbol",
+        "Signal",
+        "Top Candidate",
+        "Real Trade Readiness",
+        "Setup Grade",
+        "RR",
+        "Action Status",
+        "Blocked By",
+        "Next Trigger",
+    ]
+    rows = df[[column for column in columns if column in df.columns]].copy()
+    top_priority = {
+        "BULLISH_TOP_1": 1,
+        "BEARISH_TOP_1": 1,
+        "BULLISH_TOP_2": 2,
+        "BEARISH_TOP_2": 2,
+        "BULLISH_TOP_3": 3,
+        "BEARISH_TOP_3": 3,
+    }
+    rows["_top_priority"] = rows.get(
+        "Top Candidate",
+        pd.Series(dtype=object)
+    ).map(top_priority).fillna(99)
+
+    if "RR" in rows.columns:
+
+        rows["_rr_sort"] = pd.to_numeric(rows["RR"], errors="coerce").fillna(-1)
+
+    else:
+
+        rows["_rr_sort"] = -1
+
+    rows = rows.sort_values(
+        by=["_top_priority", "_rr_sort"],
+        ascending=[True, False],
+        na_position="last"
+    )
+    rows = rows.drop(
+        columns=["_top_priority", "_rr_sort"],
+        errors="ignore"
+    )
+
+    return rows.head(limit)
+
+
+def _render_scanner_watchlist(df):
+
+    st.subheader("Scanner Watchlist")
+    watchlist = _scanner_watchlist(df)
+
+    if watchlist.empty:
+
+        st.info("No scanner watchlist rows right now.")
+        return
+
+    st.dataframe(
+        _display_safe_dataframe(watchlist),
+        width="stretch",
+        hide_index=True
+    )
+
+
+def _latest_decisions_df(minutes=30):
+
+    entries = _load_auto_paper_decision_log()
+
+    if not entries:
+
+        return pd.DataFrame()
+
+    decisions = pd.DataFrame(entries)
+
+    if "trading_day" in decisions.columns:
+
+        decisions = decisions[
+            decisions["trading_day"].astype(str).eq(_current_trading_day())
+        ].copy()
+
+    if decisions.empty or "timestamp" not in decisions.columns:
+
+        return decisions
+
+    timestamps = pd.to_datetime(
+        decisions["timestamp"],
+        errors="coerce"
+    )
+    cutoff = pd.Timestamp(_current_et().replace(tzinfo=None)) - pd.Timedelta(minutes=minutes)
+
+    return decisions[
+        timestamps >= cutoff
+    ].copy()
+
+
+def _render_compact_auto_paper_summary():
+
+    st.subheader("Paper / Real Validation Summary")
+    decisions = _latest_decisions_df(minutes=30)
+
+    if decisions.empty or "decision" not in decisions.columns:
+
+        st.info("No recent auto-paper decisions in the latest 30 minutes.")
+        return
+
+    counts = (
+        decisions["decision"]
+        .fillna("UNKNOWN")
+        .astype(str)
+        .str.upper()
+        .value_counts()
+    )
+    cols = st.columns(4)
+    cols[0].metric("Opened", int(counts.get("OPENED", 0)))
+    cols[1].metric("Blocked", int(counts.get("BLOCKED", 0)))
+    cols[2].metric("Skipped", int(counts.get("SKIPPED", 0)))
+
+    reason = "N/A"
+
+    if "reason" in decisions.columns and not decisions["reason"].dropna().empty:
+
+        reason = decisions["reason"].fillna("UNKNOWN").astype(str).value_counts().index[0]
+
+    cols[3].metric("Top Reason", reason)
+
+
+def _render_suggestion_lifecycle(df):
+
+    st.markdown("**New Suggested Calls / Puts - Review Only**")
+    new_calls_puts = _new_calls_puts(df)
+
+    if not new_calls_puts.empty:
+
+        st.dataframe(
+            _display_safe_dataframe(new_calls_puts),
+            width="stretch",
+            hide_index=True
+        )
+
+    st.markdown("**Still Valid Suggested Trades**")
+    still_valid = _still_valid_suggestions()
+
+    if not still_valid.empty:
+
+        st.dataframe(
+            _display_safe_dataframe(still_valid),
+            width="stretch",
+            hide_index=True
+        )
+
+    st.markdown("**Expired / Not Entered Suggestions**")
+    expired_not_entered = _expired_not_entered_suggestions()
+
+    if not expired_not_entered.empty:
+
+        st.dataframe(
+            _display_safe_dataframe(expired_not_entered),
+            width="stretch",
+            hide_index=True
+        )
+
+    if new_calls_puts.empty and still_valid.empty and expired_not_entered.empty:
+
+        st.info("No suggestion lifecycle rows right now.")
 
 
 def _infer_trade_direction(entry_type):
@@ -4682,35 +5031,6 @@ def _daily_candidate_snapshot_count(trading_day):
     return _file_row_count(csv_path, pd.read_csv)
 
 
-def _render_system_status(df, refresh_state, auto_paper_controls):
-
-    st.subheader("System Status")
-    telegram_enabled = _env_bool("TELEGRAM_ALERTS_ENABLED", False)
-    status = {
-        "App": "Dravya Wallstreet Edge",
-        "Trading Day": _current_trading_day(),
-        "Market Session": _dashboard_market_session(),
-        "Last Scanner Run": _latest_scanner_run(df),
-        "Auto Refresh": "ON" if refresh_state.get("enabled") else "OFF",
-        "Scanner Cadence": f"{refresh_state.get('scanner_cadence_minutes')} min",
-        "Market Data Mode": "MOCK" if settings.use_mock_market_data else "LIVE",
-        "Options Mode": "MOCK" if settings.use_mock_options else "LIVE",
-        "AI Summary": "ON" if settings.scanner_ai_summary_enabled else "OFF",
-        "Auto Paper": "ON" if auto_paper_controls.get("auto_paper_enabled") else "OFF",
-        "Telegram Alerts": "ON" if telegram_enabled else "OFF",
-        "Manual Paper Entry": "ON" if _manual_paper_entries_enabled() else "OFF",
-    }
-    status_df = pd.DataFrame(
-        list(status.items()),
-        columns=["Metric", "Value"]
-    )
-    st.dataframe(
-        _display_safe_dataframe(status_df),
-        width="stretch",
-        hide_index=True
-    )
-
-
 def _render_validation_data_health(df):
 
     st.subheader("Validation Data Health")
@@ -4846,24 +5166,6 @@ def main():
         latest_scanner_run = latest_time.iloc[0]
         st.caption(f"Last scanner run: {latest_scanner_run}")
 
-    st.subheader("System Status")
-    system_status = {
-        "Last Scanner Run": latest_scanner_run,
-        "Scanner Running": "YES" if _scanner_is_running() else "NO",
-        "Auto Refresh": "ON" if refresh_state.get("enabled") else "OFF"
-    }
-
-    st.dataframe(
-        _display_safe_dataframe(
-            pd.DataFrame(
-                list(system_status.items()),
-                columns=["Metric", "Value"]
-            )
-        ),
-        width="stretch",
-        hide_index=True
-    )
-
     auto_closed = _run_auto_paper_exits(
         df,
         auto_paper_controls
@@ -4890,120 +5192,39 @@ def main():
         )
         st.rerun()
 
-    _render_system_status(
-        df,
-        refresh_state,
-        auto_paper_controls
-    )
-
-    health = _market_health(df)
-
-    st.subheader("Market Health")
-
-    market_df = pd.DataFrame(
-        list(health.items()),
-        columns=["Metric", "Value"]
-    )
-
-    market_df = _display_safe_dataframe(
-        market_df
-    )
-
-    st.dataframe(
-        market_df,
-        width="stretch",
-        hide_index=True
-    )
-
-    st.subheader("Top Scanner Opportunities")
-    opportunities = _build_trade_opportunities(df)
-
-    st.dataframe(
-        _style_opportunities(opportunities),
-        width="stretch",
-        hide_index=True
-    )
-
-    st.subheader("New Suggested Calls / Puts - Review Only")
-    st.caption("REVIEW ONLY - NOT ENTERED. These are scanner ideas, not opened paper trades.")
-    new_calls_puts = _new_calls_puts(df)
-    if new_calls_puts.empty:
-
-        st.info("No fresh review-only suggested calls/puts right now.")
-
-    else:
-
-        st.dataframe(
-            _display_safe_dataframe(new_calls_puts),
-            width="stretch",
-            hide_index=True
-        )
-
-    st.subheader("Still Valid Suggested Trades")
-    still_valid = _still_valid_suggestions()
-    if still_valid.empty:
-
-        st.info("No still-valid persisted suggested trades right now.")
-
-    else:
-
-        st.dataframe(
-            _display_safe_dataframe(still_valid),
-            width="stretch",
-            hide_index=True
-        )
-
-    st.subheader("Expired / Not Entered Suggestions")
-    expired_not_entered = _expired_not_entered_suggestions()
-    if expired_not_entered.empty:
-
-        st.info("No expired suggested trades right now.")
-
-    else:
-
-        st.dataframe(
-            _display_safe_dataframe(expired_not_entered),
-            width="stretch",
-            hide_index=True
-        )
-
-    st.subheader("Paper Trade Setup - Eligible Candidates")
-    _render_paper_trade_controls(df)
-
-    st.subheader("Active Paper Trades - Actually Opened")
-    active_trades = _active_trades(df)
-
-    st.dataframe(
-        _display_safe_dataframe(active_trades),
-        width="stretch",
-        hide_index=True
-    )
-
-    st.subheader("Exit Now Alerts")
-    exit_alerts = _exit_now_alerts(
+    _render_compact_status_cards(
         df,
         auto_paper_controls
     )
-    if exit_alerts.empty:
 
-        st.info("No exit-now alerts.")
+    _render_compact_market_health(df)
 
-    else:
+    _render_action_center(
+        df,
+        auto_paper_controls
+    )
 
-        st.dataframe(
-            _display_safe_dataframe(exit_alerts),
-            width="stretch",
-            hide_index=True
-        )
+    _render_scanner_watchlist(df)
 
     _render_paper_exit_controls(df)
 
-    st.subheader("Auto Paper Decision Summary")
-    _render_auto_paper_decision_log()
+    _render_compact_auto_paper_summary()
 
-    _render_validation_data_health(df)
+    with st.expander("Suggestion Lifecycle", expanded=False):
 
-    _render_daily_validation_report_panel()
+        _render_suggestion_lifecycle(df)
+
+    with st.expander("Full Auto-Paper Decision Log", expanded=False):
+
+        _render_auto_paper_decision_log(show_full_expander=False)
+
+    with st.expander("Validation Data Health", expanded=False):
+
+        _render_validation_data_health(df)
+
+    with st.expander("Daily Report", expanded=False):
+
+        _render_daily_validation_report_panel()
 
     with st.expander("Telemetry & Debug", expanded=False):
 
