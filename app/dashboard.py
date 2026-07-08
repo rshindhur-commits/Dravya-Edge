@@ -251,6 +251,7 @@ TRADE_COLUMNS = [
     "Would Pass Gate If Review Allowed",
     "Late Entry Risk",
     "Missed Move Type",
+    "Paper Trade Opened",
     "Real Trade Readiness",
     "Real Review Scan Count",
     "Real Entry Checklist",
@@ -1153,6 +1154,10 @@ def _real_trade_readiness(row):
 
         return "NOT_REAL_READY"
 
+    if not _boolish(row.get("Paper Trade Opened")):
+
+        return "PAPER_ONLY"
+
     if top_candidate not in ["BULLISH_TOP_1", "BEARISH_TOP_1"]:
 
         return "PAPER_ONLY"
@@ -1223,6 +1228,41 @@ def _add_real_trade_readiness(df):
     output["Real Entry Checklist"] = output.apply(
         _real_entry_checklist,
         axis=1
+    )
+
+    return output
+
+
+def _active_paper_symbols():
+
+    try:
+
+        from app.state.paper_trade_manager import load_paper_trades
+
+        paper_trades = load_paper_trades()
+
+    except Exception:
+
+        paper_trades = {}
+
+    return {
+        str(trade.get("symbol") or "").strip()
+        for trade in paper_trades.values()
+        if trade.get("status") == "OPEN"
+        and trade.get("symbol")
+    }
+
+
+def _add_paper_trade_opened(df):
+
+    if df.empty or "Symbol" not in df.columns:
+
+        return df
+
+    output = df.copy()
+    active_symbols = _active_paper_symbols()
+    output["Paper Trade Opened"] = output["Symbol"].map(
+        lambda symbol: str(symbol).strip() in active_symbols
     )
 
     return output
@@ -1583,6 +1623,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         ) if row is not None else None,
         "real_trading_enabled": _real_trading_enabled(),
         "real_alerts_only": _real_alerts_only(),
+        "paper_trade_opened": row.get("Paper Trade Opened") if row is not None else None,
         "real_trade_readiness": row.get("Real Trade Readiness") if row is not None else None,
         "real_review_scan_count": row.get("Real Review Scan Count") if row is not None else None,
         "real_entry_checklist": row.get("Real Entry Checklist") if row is not None else None,
@@ -2382,10 +2423,10 @@ def _auto_refresh_defaults():
 
     if "auto_paper_eod_close_enabled" not in st.session_state:
 
-        st.session_state["auto_paper_eod_close_enabled"] = bool(
+        st.session_state["auto_paper_eod_close_enabled"] = _boolish(
             saved_auto_settings.get(
                 "auto_paper_eod_close_enabled",
-                True
+                False
             )
         )
 
@@ -3387,12 +3428,16 @@ def _run_auto_paper_entries(df, controls):
             scanner_context,
             reason=f"{notes_prefix}: {reason}"
         )
+        opened_log_row = row.copy()
+        opened_log_row["Paper Trade Opened"] = True
+        opened_log_row["Real Trade Readiness"] = _real_trade_readiness(opened_log_row)
+        opened_log_row["Real Entry Checklist"] = _real_entry_checklist(opened_log_row)
 
         _record_auto_paper_decision(
             row.get("Symbol"),
             "TELEGRAM_ENTRY_ALERT",
             telegram_entry_result.get("reason"),
-            row,
+            opened_log_row,
             controls=controls
         )
 
@@ -3400,7 +3445,7 @@ def _run_auto_paper_entries(df, controls):
             row.get("Symbol"),
             "OPENED",
             reason,
-            row,
+            opened_log_row,
             trade=opened_trade,
             controls=controls
         )
@@ -3410,6 +3455,41 @@ def _run_auto_paper_entries(df, controls):
             break
 
     return opened
+
+
+def _is_swing_hold_eligible(trade, scanner_row):
+
+    if scanner_row is None:
+
+        return False
+
+    expiration_bucket = str(scanner_row.get("Expiration Bucket") or "").upper()
+    setup = _safe_float(scanner_row.get("Setup %"), 0)
+    rr = _safe_float(scanner_row.get("RR"), 0)
+    option_quality = _safe_float(scanner_row.get("Option Quality Score"), 0)
+
+    if expiration_bucket not in ["PREFERRED_14_30", "LONGER_DTE"]:
+
+        return False
+
+    if setup < 80 or rr < 1.8 or option_quality < 75:
+
+        return False
+
+    if str(scanner_row.get("Late Entry Risk") or "").upper() == "LATE_CHASE_RISK":
+
+        return False
+
+    missed_move = str(scanner_row.get("Missed Move Type") or "").strip()
+    if missed_move and missed_move.lower() not in ["nan", "none"]:
+
+        return False
+
+    if _boolish(scanner_row.get("Live Exit Signal")):
+
+        return False
+
+    return True
 
 
 def _auto_exit_reason(trade, current_price, scanner_row, controls):
@@ -3454,7 +3534,7 @@ def _auto_exit_reason(trade, current_price, scanner_row, controls):
 
     if scanner_row is not None:
 
-        if bool(scanner_row.get("Live Exit Signal")):
+        if _boolish(scanner_row.get("Live Exit Signal")):
 
             return "Auto paper exit: live exit signal"
 
@@ -3483,6 +3563,10 @@ def _auto_exit_reason(trade, current_price, scanner_row, controls):
         controls["eod_close_enabled"]
         and _current_et().time() >= AUTO_PAPER_EOD_CLOSE
     ):
+
+        if _is_swing_hold_eligible(trade, scanner_row):
+
+            return None
 
         return "Auto paper exit: end-of-day close"
 
@@ -4069,6 +4153,7 @@ def _render_compact_status_cards(df, auto_paper_controls):
         ("Last Scanner Run", _latest_scanner_run(df)),
         ("Auto Paper", "ON" if auto_paper_controls.get("auto_paper_enabled") else "OFF"),
         ("Review Paper", "ON" if _allow_review_tv_chart_auto_paper() else "OFF"),
+        ("EOD Close", "ON" if auto_paper_controls.get("eod_close_enabled") else "OFF"),
         ("Real Mode", "REVIEW_ONLY" if _real_alerts_only() else "DISABLED"),
         ("Open Paper", open_paper_count),
         ("Today Opened", today_opened_count),
@@ -4119,6 +4204,7 @@ def _real_review_candidates(df):
         "Option Spread %",
         "Option Quote Freshness",
         "Option Quote Age Minutes",
+        "Paper Trade Opened",
         "Real Review Scan Count",
         "Real Entry Checklist",
     ]
@@ -5155,6 +5241,7 @@ def main():
         return
 
     _sync_suggested_trades(df)
+    df = _add_paper_trade_opened(df)
     df = _add_real_trade_readiness(df)
     df = _enrich_with_suggestion_lifecycle(df)
 
