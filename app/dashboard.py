@@ -3428,12 +3428,16 @@ def _run_auto_paper_entries(df, controls):
             scanner_context,
             reason=f"{notes_prefix}: {reason}"
         )
+        opened_log_row = row.copy()
+        opened_log_row["Paper Trade Opened"] = True
+        opened_log_row["Real Trade Readiness"] = _real_trade_readiness(opened_log_row)
+        opened_log_row["Real Entry Checklist"] = _real_entry_checklist(opened_log_row)
 
         _record_auto_paper_decision(
             row.get("Symbol"),
             "TELEGRAM_ENTRY_ALERT",
             telegram_entry_result.get("reason"),
-            row,
+            opened_log_row,
             controls=controls
         )
 
@@ -3441,7 +3445,7 @@ def _run_auto_paper_entries(df, controls):
             row.get("Symbol"),
             "OPENED",
             reason,
-            row,
+            opened_log_row,
             trade=opened_trade,
             controls=controls
         )
