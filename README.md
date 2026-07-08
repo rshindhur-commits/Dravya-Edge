@@ -113,6 +113,8 @@ Current daily files live under `data/daily/YYYY-MM-DD/`; dashboard/latest mirror
 
 The dashboard reads `data/live/scanner_output_latest.csv` first, then `data/live/scanner_output_latest.xlsx`, then falls back to `scanner_output.xlsx`. Scanner execution is protected by a stale-aware lock at `data/live/scanner_run.lock` and a persistent cooldown/status file at `data/live/scanner_run_status.json`, so Streamlit refreshes or multiple browser sessions do not start overlapping or back-to-back scanner runs. Polygon aggregate requests use the short `POLYGON_CACHE_TTL` cache to avoid duplicate candle requests during rapid refreshes.
 
+The main Streamlit page is organized as an operator dashboard: compact status cards, compact market health, Action Center, Scanner Watchlist, and Paper / Real Validation Summary. Diagnostic surfaces such as suggestion lifecycle, full auto-paper decision logs, validation data health, daily report downloads, telemetry, and last-seen candidates live under collapsed expanders so the live page focuses on whether there is something to do right now.
+
 If the dashboard is running locally on the same machine, the terminal command can read the same files directly. If the dashboard is running on Streamlit Cloud, generate the report inside the dashboard instead: use the sidebar `Generate Daily Validation Report` button, then download `daily_validation_report.html` from the same sidebar. That keeps report generation in the same filesystem where Streamlit created scanner output, telemetry, and state files.
 
 ## Neon Persistence
