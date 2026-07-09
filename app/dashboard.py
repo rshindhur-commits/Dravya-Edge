@@ -1123,6 +1123,77 @@ def _real_review_scan_count(row):
     return scan_count
 
 
+def _daily_realized_real_pnl():
+
+    try:
+
+        from app.state.paper_trade_manager import load_paper_trades
+
+        trades = load_paper_trades()
+
+    except Exception:
+
+        trades = {}
+
+    trading_day = _current_trading_day()
+    total = 0.0
+
+    for trade in trades.values():
+
+        if str(trade.get("trade_mode") or "").upper() != "REAL":
+
+            continue
+
+        if str(trade.get("status") or "").upper() != "CLOSED":
+
+            continue
+
+        closed_at = str(trade.get("closed_at") or "")
+
+        if not closed_at.startswith(trading_day):
+
+            continue
+
+        realized = None
+
+        for field in ["realized_pnl", "pnl_dollars", "option_pl_dollars"]:
+
+            if trade.get(field) is not None:
+
+                realized = _safe_float(trade.get(field), None)
+                break
+
+        if realized is None:
+
+            risk_at_stop = _safe_float(
+                (trade.get("scanner_context") or {}).get("Option Risk At Stop"),
+                None
+            )
+            r_multiple = _safe_float(trade.get("r_multiple"), None)
+            contracts = _safe_float(trade.get("option_contracts"), 1) or 1
+
+            if risk_at_stop is not None and r_multiple is not None:
+
+                realized = risk_at_stop * r_multiple * contracts
+
+        if realized is not None:
+
+            total += realized
+
+    return round(total, 2)
+
+
+def _real_loss_limit_reached():
+
+    limit = _env_float("MAX_DAILY_REAL_LOSS", 1000.0)
+
+    if limit <= 0:
+
+        return False
+
+    return _daily_realized_real_pnl() <= -abs(limit)
+
+
 def _real_entry_checklist(row):
 
     if row.get("Real Trade Readiness") != "A_PLUS_REAL_REVIEW":
@@ -1154,6 +1225,10 @@ def _real_trade_readiness(row):
     if action_status not in ["ENTER", "ENTER_PAPER", "REVIEW_TV_CHART"]:
 
         return "NOT_REAL_READY"
+
+    if _real_loss_limit_reached():
+
+        return "PAPER_ONLY"
 
     if not _boolish(row.get("Paper Trade Opened")):
 
@@ -4418,6 +4493,13 @@ def _eligible_auto_paper_candidates(df):
 def _render_action_center(df, auto_paper_controls):
 
     st.subheader("Action Center")
+
+    if _real_loss_limit_reached():
+
+        st.warning(
+            "Daily real loss limit reached. No more real-review candidates today."
+        )
+
     real_review = _real_review_candidates(df)
     auto_paper_candidates = _eligible_auto_paper_candidates(df)
     active_trades = _active_trades(df)

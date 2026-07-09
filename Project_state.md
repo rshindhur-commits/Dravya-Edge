@@ -116,7 +116,7 @@ At a high level, each scan does this per symbol:
 - `app/risk/risk_manager.py` calculates entry price, stop loss, take profit, risk/reward, trade allow/deny state, and max risk percentage.
 - Long and short setups use different ATR-based stop/target logic.
 - `app/risk/position_sizing.py` estimates contracts, max risk, estimated loss, estimated profit, and aggressiveness for options sizing.
-- Current position sizing in `app/main.py` assumes an account size of 25000 and risk percent of 2.
+- Current position sizing defaults to `DAILY_START_CAPITAL` and `OPTION_MAX_RISK_PER_TRADE_PCT` when legacy `ACCOUNT_SIZE` / `RISK_PERCENT` are not set. It uses `OPTION_STOP_LOSS_PCT` for estimated option loss so sizing and affordability risk math stay aligned. Current example settings use `ACCOUNT_SIZE=2000`, `RISK_PERCENT=10`, and `MAX_CONTRACTS_PER_TRADE=1`.
 
 ### Options
 
@@ -349,9 +349,9 @@ Known environment variables used by the code:
 - Premarket real-time mode surfaces strong candidates as `PREMARKET_WATCH` but does not mark them execution-ready. The scanner waits for opening-range confirmation from 9:30-9:45 ET and only allows `ENTER`/`ENTER_PAPER` after 9:45 ET when all gates pass.
 - Delayed-data mode remains acceptable for scanning and paper trading with manual confirmation. Real-time mode blocks truly stale stock aggregates and missing/stale/delayed option quotes.
 - Current option gate defaults: minimum volume 100, minimum open interest 500, max spread 10%, minimum option quality score 65, delayed quote threshold 10 minutes, stale quote threshold 30 minutes, 0DTE disabled, 1DTE disabled.
-- Current affordability defaults: `OPTION_AFFORDABILITY_MODE=HARD`, `OPTION_CAPITAL_PROFILE=SMALL_ACCOUNT`, `DAILY_START_CAPITAL=1000`, `OPTION_STOP_LOSS_PCT=0.20`, `OPTION_MAX_RISK_PER_TRADE_PCT=0.12`, `OPTION_MIN_CONTRACT_COST=100`, `OPTION_PREFERRED_MAX_CONTRACT_COST=500`, `OPTION_MAX_CONTRACT_COST=650`, and `OPTION_MIN_AFFORDABLE_DELTA=0.25`.
+- Current affordability defaults: `OPTION_AFFORDABILITY_MODE=HARD`, `OPTION_CAPITAL_PROFILE=SMALL_ACCOUNT`, `DAILY_START_CAPITAL=2000`, `OPTION_STOP_LOSS_PCT=0.20`, `OPTION_MAX_RISK_PER_TRADE_PCT=0.10`, `OPTION_MIN_CONTRACT_COST=100`, `OPTION_PREFERRED_MAX_CONTRACT_COST=400`, `OPTION_MAX_CONTRACT_COST=500`, `MAX_CONTRACTS_PER_TRADE=1`, and `OPTION_MIN_AFFORDABLE_DELTA=0.25`. The effective max contract cost is risk-capped to `DAILY_START_CAPITAL * OPTION_MAX_RISK_PER_TRADE_PCT / OPTION_STOP_LOSS_PCT`, so the current $2,000 small-account profile has a $1,000 risk-based cap and the static $500 contract max controls.
 - Affordability modes: `OFF` preserves original best-quality-only behavior, `SOFT` keeps best-quality review visible while dashboard paper/suggested-trade gates still require affordability, and `HARD` also blocks unaffordable contracts from actionable scanner statuses.
-- Capital profiles: `SMALL_ACCOUNT` is the current $1,000/day profile, `GROWTH_ACCOUNT` widens contract-cost limits for larger buying power, and `BEST_QUALITY` effectively removes affordability limits while keeping metadata visible.
+- Capital profiles: `SMALL_ACCOUNT` is the current $2,000/day profile, `GROWTH_ACCOUNT` widens contract-cost limits for larger buying power, and `BEST_QUALITY` effectively removes affordability limits while keeping metadata visible.
 - Current DTE preference defaults: minimum 10 DTE, preferred 14-30 DTE, max fallback 45 DTE. The ranker heavily penalizes 2-6 DTE, allows 7-13 DTE as lower-priority short swing/fallback, favors 14-30 DTE, treats 31-45 DTE as acceptable fallback, and de-prioritizes 46+ DTE unless otherwise justified.
 - Event blocker is configurable and enabled by default through environment settings.
 - Polygon aggregate cache lookup and cache set are enabled in `app/utils/polygon_client.py` using the short `POLYGON_CACHE_TTL` setting to reduce duplicate aggregate requests during rapid refreshes.

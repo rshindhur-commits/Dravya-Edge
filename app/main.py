@@ -3162,7 +3162,11 @@ def run_scanner():
 
                         option_price=option_price,
 
-                        projection=projection
+                        projection=projection,
+
+                        max_contracts=settings.max_contracts_per_trade,
+
+                        option_stop_loss_pct=settings.option_stop_loss_pct
 
                     )
 

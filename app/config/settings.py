@@ -89,6 +89,8 @@ class RuntimeSettings:
     polygon_base_url: str
     account_size: float
     risk_percent: float
+    max_contracts_per_trade: int
+    option_stop_loss_pct: float
     event_blocker_enabled: bool
     event_blocker_dates: str
     event_blocker_days_before: int
@@ -186,11 +188,25 @@ def get_settings():
         ).rstrip("/"),
         account_size=get_float_env(
             "ACCOUNT_SIZE",
-            25000
+            get_float_env(
+                "DAILY_START_CAPITAL",
+                2000
+            )
         ),
         risk_percent=get_float_env(
             "RISK_PERCENT",
-            2
+            get_float_env(
+                "OPTION_MAX_RISK_PER_TRADE_PCT",
+                0.10
+            ) * 100
+        ),
+        max_contracts_per_trade=get_int_env(
+            "MAX_CONTRACTS_PER_TRADE",
+            1
+        ),
+        option_stop_loss_pct=get_float_env(
+            "OPTION_STOP_LOSS_PCT",
+            0.20
         ),
         event_blocker_enabled=get_bool_env(
             "EVENT_BLOCKER_ENABLED",
