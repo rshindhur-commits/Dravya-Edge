@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import re
 import sys
 from datetime import datetime, time
 from html import escape
@@ -124,6 +125,7 @@ AUTO_PAPER_EOD_CLOSE = time(15, 55)
 DEFAULT_AUTO_PAPER_MIN_RR = 1.8
 DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0
 DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 10.0
+ET_TZ = "America/New_York"
 
 
 def _env_bool(name, default=False):
@@ -4236,11 +4238,50 @@ def _compact_value(value, max_len=28):
     return text if len(text) <= max_len else text[: max_len - 1] + "..."
 
 
+def parse_market_timestamp(value):
+
+    if value is None or pd.isna(value):
+
+        return pd.NaT
+
+    if isinstance(value, pd.Timestamp):
+
+        timestamp = value
+
+    else:
+
+        text = str(value).strip()
+        text = re.sub(
+            r"\s+(EDT|EST)$",
+            "",
+            text,
+            flags=re.IGNORECASE
+        )
+        timestamp = pd.to_datetime(
+            text,
+            errors="coerce"
+        )
+
+    if pd.isna(timestamp):
+
+        return pd.NaT
+
+    if timestamp.tzinfo is None:
+
+        return timestamp.tz_localize(
+            ET_TZ,
+            ambiguous="NaT",
+            nonexistent="shift_forward"
+        )
+
+    return timestamp.tz_convert(ET_TZ)
+
+
 def _short_datetime(value):
 
     try:
 
-        timestamp = pd.to_datetime(value)
+        timestamp = parse_market_timestamp(value)
 
         if pd.isna(timestamp):
 
