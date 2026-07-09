@@ -1,11 +1,11 @@
 CAPITAL_PROFILES = {
     "SMALL_ACCOUNT": {
-        "daily_start_capital": 1000.0,
+        "daily_start_capital": 2000.0,
         "option_stop_loss_pct": 0.20,
-        "max_risk_per_trade_pct": 0.12,
+        "max_risk_per_trade_pct": 0.10,
         "min_contract_cost": 100.0,
-        "preferred_max_contract_cost": 500.0,
-        "max_contract_cost": 650.0,
+        "preferred_max_contract_cost": 400.0,
+        "max_contract_cost": 500.0,
         "aggressive_max_contract_cost": 750.0,
         "min_affordable_delta": 0.25,
         "max_active_trades": 1,

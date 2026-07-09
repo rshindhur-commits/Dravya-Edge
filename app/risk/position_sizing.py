@@ -8,7 +8,9 @@ def calculate_position_size(
     entry_price,
     stop_loss,
     option_price,
-    projection=None
+    projection=None,
+    max_contracts=None,
+    option_stop_loss_pct=0.20
 
 ):
 
@@ -28,11 +30,17 @@ def calculate_position_size(
         # Account risk
         # =========================
 
+        effective_risk_percent = (
+            risk_percent * 100
+            if risk_percent <= 1
+            else risk_percent
+        )
+
         max_risk_amount = (
 
             account_size *
 
-            (risk_percent / 100)
+            (effective_risk_percent / 100)
 
         )
 
@@ -56,7 +64,7 @@ def calculate_position_size(
 
         estimated_option_risk = (
 
-            option_price * 0.35
+            option_price * option_stop_loss_pct
 
         )
 
@@ -76,6 +84,13 @@ def calculate_position_size(
             contracts,
             1
         )
+
+        if max_contracts is not None:
+
+            contracts = min(
+                contracts,
+                max(1, int(max_contracts))
+            )
 
         # =========================
         # Estimated max loss

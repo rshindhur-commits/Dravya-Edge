@@ -80,8 +80,9 @@ def add_affordability_metrics(contract, current_capital=None, config=None):
         0.25
     )
 
+    max_allowed_risk = current_capital * max_risk_pct
     max_cost_by_risk = (
-        current_capital * max_risk_pct / stop_loss_pct
+        max_allowed_risk / stop_loss_pct
         if stop_loss_pct > 0
         else hard_max_cost
     )
@@ -89,21 +90,29 @@ def add_affordability_metrics(contract, current_capital=None, config=None):
         hard_max_cost,
         max_cost_by_risk
     )
+    effective_preferred_max_cost = min(
+        preferred_max_cost,
+        max_allowed_cost
+    )
     risk_at_stop = contract_cost * stop_loss_pct
     delta = abs(_float_value(contract.get("delta")))
     delta_ok = delta >= min_delta
-    cost_ok = min_cost <= contract_cost <= max_allowed_cost
+    risk_ok = risk_at_stop <= max_allowed_risk
+    cost_ok = min_cost <= contract_cost <= max_allowed_cost and risk_ok
 
     contract["contract_cost"] = round(contract_cost, 2)
     contract["risk_at_stop"] = round(risk_at_stop, 2)
+    contract["max_allowed_risk"] = round(max_allowed_risk, 2)
     contract["current_capital"] = round(current_capital, 2)
     contract["max_allowed_contract_cost"] = round(max_allowed_cost, 2)
+    contract["risk_based_max_contract_cost"] = round(max_cost_by_risk, 2)
     contract["preferred_max_contract_cost"] = round(preferred_max_cost, 2)
     contract["affordability_mode"] = config.get("mode", "HARD")
     contract["capital_profile"] = config.get("profile_name", "SMALL_ACCOUNT")
     contract["affordable"] = cost_ok and delta_ok
     contract["preferred_affordable"] = (
-        min_cost <= contract_cost <= preferred_max_cost
+        min_cost <= contract_cost <= effective_preferred_max_cost
+        and risk_ok
         and delta_ok
     )
 
@@ -119,7 +128,7 @@ def add_affordability_metrics(contract, current_capital=None, config=None):
 
         status = "DELTA_TOO_LOW_FOR_AFFORDABLE_TRADE"
 
-    elif contract_cost <= preferred_max_cost:
+    elif contract_cost <= effective_preferred_max_cost:
 
         status = "PREFERRED_AFFORDABLE"
 

@@ -18,6 +18,7 @@ from app.storage.session_manager import (
     get_session_id,
     get_trading_day
 )
+from app.config.settings import get_int_env
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -420,7 +421,8 @@ def open_paper_trade(
     scanner_context=None,
     entry_source="MANUAL_PAPER",
     trade_mode="PAPER",
-    include_in_strategy_stats=False
+    include_in_strategy_stats=False,
+    option_contracts=None
 ):
 
     state = load_paper_trades()
@@ -435,6 +437,23 @@ def open_paper_trade(
         return existing
 
     option_mid = None
+    max_contracts = get_int_env(
+        "MAX_CONTRACTS_PER_TRADE",
+        1
+    )
+
+    try:
+
+        option_contracts = int(option_contracts or 1)
+
+    except Exception:
+
+        option_contracts = 1
+
+    option_contracts = max(
+        1,
+        min(option_contracts, max_contracts)
+    )
 
     try:
 
@@ -462,6 +481,7 @@ def open_paper_trade(
         "option_bid": option_bid,
         "option_ask": option_ask,
         "option_mid": option_mid,
+        "option_contracts": option_contracts,
         "scanner_context": scanner_context or {},
         "planned_rr": (
             scanner_context or {}
