@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-07-06
+Last updated: 2026-07-09
 
 ## Project Purpose
 
@@ -131,7 +131,7 @@ At a high level, each scan does this per symbol:
 - `app/options/options_filter.py` hard-rejects unavailable bid/ask, crossed markets, stale/delayed quotes, low open interest, low volume, wide spread, disabled 0DTE/1DTE contracts, low option quality score, and unaffordable contracts when `OPTION_AFFORDABILITY_MODE=HARD`.
 - `app/options/options_recommender.py` returns a best-quality `primary` contract, a best affordable `affordable` contract when available, and an actionable `active` contract. `active` uses the affordable contract in `SOFT`/`HARD` modes when one exists; otherwise it falls back to the best-quality primary.
 - `app/main.py` marks high-quality unaffordable setups as `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER`. Cheap contracts that fail the minimum cost/delta affordability rules can surface as `NO_TRADE_LOW_OPTION_QUALITY`.
-- Dashboard paper-trade and suggested-trade candidate lists require `Affordable=True` when affordability fields are present, while still showing best-quality contract information for read-only review.
+- Dashboard suggested-trade lifecycle and paper-validation candidate lists can ignore affordability for research visibility through `SUGGESTIONS_IGNORE_AFFORDABILITY=true` and `PAPER_IGNORE_AFFORDABILITY=true`, while preserving original affordability metadata and keeping real-trade readiness affordability-gated by default.
 
 ### Market References, Regime, And Breadth
 
@@ -350,7 +350,7 @@ Known environment variables used by the code:
 - Delayed-data mode remains acceptable for scanning and paper trading with manual confirmation. Real-time mode blocks truly stale stock aggregates and missing/stale/delayed option quotes.
 - Current option gate defaults: minimum volume 100, minimum open interest 500, max spread 10%, minimum option quality score 65, delayed quote threshold 10 minutes, stale quote threshold 30 minutes, 0DTE disabled, 1DTE disabled.
 - Current affordability defaults: `OPTION_AFFORDABILITY_MODE=HARD`, `OPTION_CAPITAL_PROFILE=SMALL_ACCOUNT`, `DAILY_START_CAPITAL=2000`, `OPTION_STOP_LOSS_PCT=0.20`, `OPTION_MAX_RISK_PER_TRADE_PCT=0.10`, `OPTION_MIN_CONTRACT_COST=100`, `OPTION_PREFERRED_MAX_CONTRACT_COST=400`, `OPTION_MAX_CONTRACT_COST=500`, `MAX_CONTRACTS_PER_TRADE=1`, and `OPTION_MIN_AFFORDABLE_DELTA=0.25`. The effective max contract cost is risk-capped to `DAILY_START_CAPITAL * OPTION_MAX_RISK_PER_TRADE_PCT / OPTION_STOP_LOSS_PCT`, so the current $2,000 small-account profile has a $1,000 risk-based cap and the static $500 contract max controls.
-- Affordability modes: `OFF` preserves original best-quality-only behavior, `SOFT` keeps best-quality review visible while dashboard paper/suggested-trade gates still require affordability, and `HARD` also blocks unaffordable contracts from actionable scanner statuses.
+- Affordability modes: `OFF` preserves original best-quality-only behavior, `SOFT` keeps best-quality review visible while selecting affordable alternates, and `HARD` blocks unaffordable contracts from actionable scanner statuses. Dashboard research visibility can still include expensive technical setups when `SUGGESTIONS_IGNORE_AFFORDABILITY=true` / `PAPER_IGNORE_AFFORDABILITY=true`; real readiness remains strict with `REAL_REQUIRE_AFFORDABILITY=true`.
 - Capital profiles: `SMALL_ACCOUNT` is the current $2,000/day profile, `GROWTH_ACCOUNT` widens contract-cost limits for larger buying power, and `BEST_QUALITY` effectively removes affordability limits while keeping metadata visible.
 - Current DTE preference defaults: minimum 10 DTE, preferred 14-30 DTE, max fallback 45 DTE. The ranker heavily penalizes 2-6 DTE, allows 7-13 DTE as lower-priority short swing/fallback, favors 14-30 DTE, treats 31-45 DTE as acceptable fallback, and de-prioritizes 46+ DTE unless otherwise justified.
 - Event blocker is configurable and enabled by default through environment settings.
@@ -661,6 +661,23 @@ When starting a fresh GPT session:
 
 ## Recent Major Changes
 
+2026-07-09
+- Added invalid fresh-entry filtering in the dashboard so `ACTIVE_TRADE`, `PAPER_TRADE`, `OPEN_TRADE`, `NO_ENTRY`, `NO_SETUP`, and blank/null entry states cannot appear as new suggested-trade or paper-entry candidates.
+- Separated affordability behavior by workflow: suggested-trade lifecycle and paper validation can ignore affordability by default for research visibility, while real-trade readiness requires affordability by default through `REAL_REQUIRE_AFFORDABILITY=true`.
+- Paper validation entries that bypass affordability are tagged with `Paper Affordability Override` plus original affordability status/cost fields in scanner context.
+- Auto-paper decision logs now include affordability override fields, and shadow gate diagnostics use the paper-validation affordability row so expensive validation candidates do not show false gate failures.
+- Added a narrow paper-only high-quality index/ETF review-validation exception for SPY/QQQ `REVIEW_TV_CHART` rows. The exception is limited to safe setup types, live option quotes, strong setup/RR/option-quality thresholds, tight spread/quote-age/scans requirements, no late-chase/missed-move flags, no event/regime blocks, and valid price geometry. It does not loosen non-top-candidate gates for single names such as SMCI.
+- Dashboard manual and auto paper-entry promotion now passes full suggestion identity: symbol, direction, setup type, option ticker, opened timestamp, and paper trade key.
+- Suggested trade promotion now marks matched records as `PROMOTED_TO_PAPER`, stores `promoted_at` and `paper_trade_key`, clears stale expiry/realtime block reasons, and protects both legacy `ENTERED_PAPER` and new `PROMOTED_TO_PAPER` statuses from later expiry/cleanup.
+- Paper trade opens now use America/New_York timestamps for the backward-compatible `opened_at` trade key text and also store explicit `opened_at_et` and `opened_at_utc` ISO timestamps to avoid ET/UTC ambiguity.
+- Daily validation reports now include a Missed Opportunity Replay section. Expired suggestions are classified with available daily candle files as `MISSED_WINNER_TARGET_FIRST`, `CORRECT_SKIP_STOP_FIRST`, `AMBIGUOUS_SAME_CANDLE`, `INCONCLUSIVE_NO_TARGET_OR_STOP`, or data/level/schema fallback statuses. Promoted/opened suggestions are shown as `PROMOTED_TO_PAPER` instead of fake missed opportunities.
+- Scanner runs now append normalized 5-minute candle rows to `data/daily/YYYY-MM-DD/candles_5m.csv` so daily missed-opportunity replay has local high/low data to classify expired suggestions.
+- Added optional `INDEX_REVIEW_MIN_SETUP`, `INDEX_REVIEW_MIN_RR`, `INDEX_REVIEW_MIN_OPTION_QUALITY`, `INDEX_REVIEW_MAX_SPREAD_PCT`, `INDEX_REVIEW_MAX_QUOTE_AGE_MINUTES`, and `INDEX_REVIEW_MIN_SCANS` settings to `.env.example` and README Streamlit secrets examples.
+- Hardened promoted suggestion lifecycle so `upsert_suggestion_from_scan()` preserves existing `PROMOTED_TO_PAPER` / legacy `ENTERED_PAPER` records when the same scanner row appears again.
+- Paper trade close timestamps and paper event log timestamps now use America/New_York time and store explicit ET/UTC ISO fields, matching open-trade timestamp behavior.
+- Daily validation data-quality checks now count actual opened trades from unique `OPEN` paper events instead of all event rows, so an `OPEN` plus `AUTO_EXIT` pair counts as one opened trade.
+- Quote freshness summaries now filter to option-bearing decision rows before counting missing/live/stale quote states, avoiding false missing-quote noise from rows with no option contract.
+
 2026-07-01
 - Added optional Neon/Postgres persistence with SQLAlchemy for Telegram alert attempts, paper trade opens/closes, scanner run summaries, and gate decision summaries. DB writes are best-effort and gated by `DB_WRITE_ENABLED=true` plus `DATABASE_URL`, preserving JSON/CSV/Excel fallback behavior for Streamlit.
 - Added hard CALL/PUT price-geometry validation and regression tests so reversed PUT stop/target structures are blocked before suggestion display or paper/alert entry.
@@ -678,7 +695,7 @@ When starting a fresh GPT session:
 - Scanner now keeps the best-quality option contract visible while selecting an affordable `active` contract when available.
 - Added contract cost, risk-at-stop, current capital, max allowed contract cost, affordability status, and best-quality/affordable alternate fields to scanner output and dashboard context.
 - `HARD` affordability mode blocks expensive contracts from actionable statuses and marks high-quality expensive setups as `QUALITY_BUT_TOO_EXPENSIVE`.
-- Dashboard suggested-trade sync, Paper Trade Setup, and auto-paper entry gates now require `Affordable=True` when affordability fields are present.
+- Dashboard suggested-trade sync, Paper Trade Setup, and paper-validation gates originally required `Affordable=True`; this was later split so research/paper validation can include expensive technical setups with explicit override tagging while real readiness remains affordability-gated.
 - Added opt-in Telegram entry, exit, and partial-profit alerts for high-conviction actionable/reviewable option setups and managed trade exits, with Streamlit Secrets/env credential loading and JSON duplicate protection.
 
 2026-06-30

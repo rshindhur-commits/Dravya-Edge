@@ -119,6 +119,24 @@ AI_TOP_CANDIDATES = {
 }
 
 AUTO_PAPER_TOP_CANDIDATES = AI_TOP_CANDIDATES
+INVALID_NEW_ENTRY_TYPES = {
+    "",
+    "NAN",
+    "NONE",
+    "NO_ENTRY",
+    "NO_SETUP",
+    "ACTIVE_TRADE",
+    "PAPER_TRADE",
+    "OPEN_TRADE"
+}
+INDEX_REVIEW_VALIDATION_SYMBOLS = {"SPY", "QQQ"}
+REVIEW_VALIDATION_ENTRY_TYPES = {
+    "EMA_PULLBACK",
+    "VWAP_RECLAIM",
+    "BREAKOUT",
+    "COILED_BREAKOUT",
+    "HIGHER_LOW_CONTINUATION"
+}
 AUTO_PAPER_ENTRY_START = time(9, 45)
 AUTO_PAPER_ENTRY_END = time(15, 30)
 AUTO_PAPER_EOD_CLOSE = time(15, 55)
@@ -126,6 +144,13 @@ DEFAULT_AUTO_PAPER_MIN_RR = 1.8
 DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0
 DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 10.0
 ET_TZ = "America/New_York"
+
+
+def _is_valid_new_entry_type(value):
+
+    entry_type = str(value or "").strip().upper()
+
+    return entry_type not in INVALID_NEW_ENTRY_TYPES
 
 
 def _env_bool(name, default=False):
@@ -210,6 +235,169 @@ def _allow_review_tv_chart_auto_paper():
         "ALLOW_REVIEW_TV_CHART_AUTO_PAPER",
         False
     )
+
+
+def _ignore_affordability_for_suggestions():
+
+    return _env_bool(
+        "SUGGESTIONS_IGNORE_AFFORDABILITY",
+        True
+    )
+
+
+def _ignore_affordability_for_paper_validation():
+
+    return _env_bool(
+        "PAPER_IGNORE_AFFORDABILITY",
+        True
+    )
+
+
+def _require_affordability_for_real_readiness():
+
+    return _env_bool(
+        "REAL_REQUIRE_AFFORDABILITY",
+        True
+    )
+
+
+def _affordability_mask(df, ignore_affordability):
+
+    if ignore_affordability or "Affordable" not in df.columns:
+
+        return pd.Series(True, index=df.index)
+
+    return (
+        df["Affordable"].astype(str).str.lower().isin(["true", "1", "yes"])
+        | (df["Affordable"] == True)
+    )
+
+
+def _paper_affordability_override_needed(row):
+
+    if not _ignore_affordability_for_paper_validation():
+
+        return False
+
+    if "Affordable" not in row.index:
+
+        return False
+
+    return not _boolish(row.get("Affordable"))
+
+
+def _annotate_paper_affordability_override(row):
+
+    if not _paper_affordability_override_needed(row):
+
+        return row
+
+    row = row.copy()
+    row["Paper Affordability Override"] = True
+    row["Original Affordable"] = row.get("Affordable")
+    row["Original Affordability Status"] = row.get("Affordability Status")
+    row["Original Option Contract Cost"] = row.get("Option Contract Cost")
+    row["Original Max Allowed Contract Cost"] = row.get("Max Allowed Contract Cost")
+
+    return row
+
+
+def _paper_gate_row(row):
+
+    if not _paper_affordability_override_needed(row):
+
+        return row
+
+    gate_row = row.copy()
+    gate_row["Paper Affordability Override"] = True
+    gate_row["Original Affordable"] = row.get("Affordable")
+    gate_row["Original Affordability Status"] = row.get("Affordability Status")
+    gate_row["Affordable"] = True
+    gate_row["Affordability Status"] = "IGNORED_FOR_PAPER_VALIDATION"
+
+    return gate_row
+
+
+def _high_quality_index_review_exception(row):
+
+    symbol = str(row.get("Symbol") or "").strip().upper()
+    entry_type = str(row.get("Entry") or "").strip().upper()
+    action_status = str(row.get("Action Status") or "").strip().upper()
+    quote_freshness = str(row.get("Option Quote Freshness") or "").strip().upper()
+
+    if symbol not in INDEX_REVIEW_VALIDATION_SYMBOLS:
+
+        return False
+
+    if action_status != "REVIEW_TV_CHART":
+
+        return False
+
+    if entry_type not in REVIEW_VALIDATION_ENTRY_TYPES:
+
+        return False
+
+    if not _is_valid_new_entry_type(entry_type):
+
+        return False
+
+    if quote_freshness != "LIVE_QUOTE":
+
+        return False
+
+    setup = _safe_float(row.get("Setup %"), 0)
+    rr = _safe_float(
+        row.get("RR"),
+        _safe_float(row.get("Candidate RR"), 0)
+    )
+    option_quality = _safe_float(row.get("Option Quality Score"), 0)
+    spread = _safe_float(row.get("Option Spread %"), None)
+    quote_age = _safe_float(row.get("Option Quote Age Minutes"), 999)
+    review_scan_count = _safe_float(row.get("Real Review Scan Count"), 0)
+
+    if setup < _env_float("INDEX_REVIEW_MIN_SETUP", 82.0):
+
+        return False
+
+    if rr < _env_float("INDEX_REVIEW_MIN_RR", 1.8):
+
+        return False
+
+    if option_quality < _env_float("INDEX_REVIEW_MIN_OPTION_QUALITY", 90.0):
+
+        return False
+
+    if spread is not None and spread > _env_float("INDEX_REVIEW_MAX_SPREAD_PCT", 3.0):
+
+        return False
+
+    if quote_age > _env_float("INDEX_REVIEW_MAX_QUOTE_AGE_MINUTES", 3.0):
+
+        return False
+
+    if review_scan_count < _env_float("INDEX_REVIEW_MIN_SCANS", 2):
+
+        return False
+
+    if str(row.get("Late Entry Risk") or "").strip().upper() == "LATE_CHASE_RISK":
+
+        return False
+
+    missed_move_type = str(row.get("Missed Move Type") or "").strip()
+
+    if missed_move_type and missed_move_type.lower() not in {"nan", "none"}:
+
+        return False
+
+    if _boolish(row.get("Event Blocked")) or _boolish(row.get("Regime Blocked")):
+
+        return False
+
+    if price_geometry_error(row) is not None:
+
+        return False
+
+    return True
 
 
 def _real_trading_enabled():
@@ -567,8 +755,10 @@ def _shadow_gate_allowed(row, min_rr=DEFAULT_AUTO_PAPER_MIN_RR, min_setup=70.0):
 
     try:
 
+        gate_row = _paper_gate_row(row)
+
         gate_allowed, _ = evaluate_entry_gate(
-            row,
+            gate_row,
             EntryGateConfig(
                 min_rr=min_rr,
                 min_setup_percent=min_setup,
@@ -1035,11 +1225,20 @@ def _candidate_rows_for_suggestions(df):
 
         return []
 
+    affordability_ok = _affordability_mask(
+        df,
+        _ignore_affordability_for_suggestions()
+    )
+
     rows = df[
         (df["Setup Valid"] == True)
         & (df["Candidate Direction"].isin(["CALL", "PUT"]))
         & (df["Action Status"].isin(["REVIEW_TV_CHART", "ENTER", "ENTER_PAPER"]))
-        & (df.get("Affordable", True) == True)
+        & affordability_ok
+    ].copy()
+
+    rows = rows[
+        rows["Entry"].map(_is_valid_new_entry_type)
     ].copy()
 
     if not rows.empty:
@@ -1251,6 +1450,10 @@ def _real_trade_readiness(row):
     if option_quality < _env_float("REAL_MIN_OPTION_QUALITY", 90.0):
 
         return "PAPER_ONLY"
+
+    if _require_affordability_for_real_readiness() and not _boolish(row.get("Affordable")):
+
+        return "PAPER_ONLY_UNAFFORDABLE"
 
     if spread > _env_float("REAL_MAX_SPREAD_PCT", 8.0):
 
@@ -1691,6 +1894,11 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "execution_ready": row.get("Execution Ready") if row is not None else None,
         "realtime_ready": row.get("Realtime Ready") if row is not None else None,
         "affordable": row.get("Affordable") if row is not None else None,
+        "paper_affordability_override": row.get("Paper Affordability Override") if row is not None else None,
+        "original_affordable": row.get("Original Affordable") if row is not None else None,
+        "original_affordability_status": row.get("Original Affordability Status") if row is not None else None,
+        "original_option_contract_cost": row.get("Original Option Contract Cost") if row is not None else None,
+        "original_max_allowed_contract_cost": row.get("Original Max Allowed Contract Cost") if row is not None else None,
         "price_geometry_ok": price_geometry_error(row) is None if row is not None else None,
         "price_geometry_error": price_geometry_error(row) if row is not None else None,
         "scanner_output_age_minutes": _scanner_output_age_minutes(),
@@ -2882,6 +3090,11 @@ def _scanner_context_from_row(row):
         "Best Quality Affordability Status",
         "Affordable Option Ticker",
         "Affordable Option Contract Cost",
+        "Paper Affordability Override",
+        "Original Affordable",
+        "Original Affordability Status",
+        "Original Option Contract Cost",
+        "Original Max Allowed Contract Cost",
         "Event Blocked",
         "Event Block Reason",
         "Action Status",
@@ -2913,18 +3126,19 @@ def _open_paper_trade_from_row(row):
 
         promote_suggestion_to_paper_trade = None
 
-    scanner_context = _scanner_context_from_row(row)
+    row_for_trade = _annotate_paper_affordability_override(row)
+    scanner_context = _scanner_context_from_row(row_for_trade)
 
     opened_trade = open_paper_trade(
-        symbol=row.get("Symbol"),
-        direction=row.get("Candidate Direction"),
-        entry_price=row.get("Candidate Entry Price"),
-        stop_loss=row.get("Candidate Stop Price"),
-        take_profit=row.get("Candidate Target Price"),
-        entry_type=row.get("Entry"),
-        option_ticker=row.get("Option Ticker"),
-        option_bid=row.get("Option Bid"),
-        option_ask=row.get("Option Ask"),
+        symbol=row_for_trade.get("Symbol"),
+        direction=row_for_trade.get("Candidate Direction"),
+        entry_price=row_for_trade.get("Candidate Entry Price"),
+        stop_loss=row_for_trade.get("Candidate Stop Price"),
+        take_profit=row_for_trade.get("Candidate Target Price"),
+        entry_type=row_for_trade.get("Entry"),
+        option_ticker=row_for_trade.get("Option Ticker"),
+        option_bid=row_for_trade.get("Option Bid"),
+        option_ask=row_for_trade.get("Option Ask"),
         scanner_context=scanner_context,
         entry_source="MANUAL_PAPER",
         trade_mode="PAPER",
@@ -2933,7 +3147,14 @@ def _open_paper_trade_from_row(row):
 
     if promote_suggestion_to_paper_trade:
 
-        promote_suggestion_to_paper_trade(row.get("Symbol"))
+        promote_suggestion_to_paper_trade(
+            symbol=row_for_trade.get("Symbol"),
+            direction=row_for_trade.get("Candidate Direction"),
+            setup_type=row_for_trade.get("Entry"),
+            option_ticker=row_for_trade.get("Option Ticker"),
+            opened_at=opened_trade.get("opened_at"),
+            trade_key=opened_trade.get("trade_key")
+        )
 
     maybe_send_paper_entry_alert(
         opened_trade,
@@ -3058,20 +3279,23 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         and _allow_review_tv_chart_auto_paper()
     )
 
-    if (
-        row.get("Top Candidate") not in AUTO_PAPER_TOP_CANDIDATES
-        and not execution_ready
-    ):
+    top_candidate = row.get("Top Candidate")
 
-        return False, "not top candidate"
+    if top_candidate not in AUTO_PAPER_TOP_CANDIDATES:
+
+        if not _high_quality_index_review_exception(row):
+
+            return False, "not top candidate"
 
     if _safe_float(row.get("Setup %"), None) is None:
 
         row = row.copy()
         row["Setup %"] = _compute_setup_percent(row)
 
+    gate_row = _paper_gate_row(row)
+
     gate_allowed, gate_reason = evaluate_entry_gate(
-        row,
+        gate_row,
         EntryGateConfig(
             min_rr=controls["min_rr"],
             min_setup_percent=controls["min_setup"],
@@ -3100,7 +3324,7 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
 
             return False, "REVIEW_VALIDATION_MISSED_MOVE_ALREADY_HAPPENED"
 
-        if row.get("Top Candidate") not in AUTO_PAPER_TOP_CANDIDATES:
+        if top_candidate not in AUTO_PAPER_TOP_CANDIDATES and not _high_quality_index_review_exception(row):
 
             return False, "REVIEW_VALIDATION_NOT_TOP_CANDIDATE"
 
@@ -3458,9 +3682,10 @@ def _run_auto_paper_entries(df, controls):
 
             promote_suggestion_to_paper_trade = None
 
-        scanner_context = _scanner_context_from_row(row)
+        row_for_trade = _annotate_paper_affordability_override(row)
+        scanner_context = _scanner_context_from_row(row_for_trade)
         is_review_validation = (
-            str(row.get("Action Status") or "").strip().upper() == "REVIEW_TV_CHART"
+            str(row_for_trade.get("Action Status") or "").strip().upper() == "REVIEW_TV_CHART"
             and _allow_review_tv_chart_auto_paper()
         )
         entry_source = (
@@ -3479,15 +3704,15 @@ def _run_auto_paper_entries(df, controls):
             else ""
         )
         opened_trade = open_paper_trade(
-            symbol=row.get("Symbol"),
-            direction=row.get("Candidate Direction"),
-            entry_price=row.get("Candidate Entry Price"),
-            stop_loss=row.get("Candidate Stop Price"),
-            take_profit=row.get("Candidate Target Price"),
-            entry_type=row.get("Entry"),
-            option_ticker=row.get("Option Ticker"),
-            option_bid=row.get("Option Bid"),
-            option_ask=row.get("Option Ask"),
+            symbol=row_for_trade.get("Symbol"),
+            direction=row_for_trade.get("Candidate Direction"),
+            entry_price=row_for_trade.get("Candidate Entry Price"),
+            stop_loss=row_for_trade.get("Candidate Stop Price"),
+            take_profit=row_for_trade.get("Candidate Target Price"),
+            entry_type=row_for_trade.get("Entry"),
+            option_ticker=row_for_trade.get("Option Ticker"),
+            option_bid=row_for_trade.get("Option Bid"),
+            option_ask=row_for_trade.get("Option Ask"),
             notes=f"{notes_prefix}: {reason}{spread_note}",
             scanner_context=scanner_context,
             entry_source=entry_source,
@@ -3499,14 +3724,21 @@ def _run_auto_paper_entries(df, controls):
 
         if promote_suggestion_to_paper_trade:
 
-            promote_suggestion_to_paper_trade(row.get("Symbol"))
+            promote_suggestion_to_paper_trade(
+                symbol=row_for_trade.get("Symbol"),
+                direction=row_for_trade.get("Candidate Direction"),
+                setup_type=row_for_trade.get("Entry"),
+                option_ticker=row_for_trade.get("Option Ticker"),
+                opened_at=opened_trade.get("opened_at"),
+                trade_key=opened_trade.get("trade_key")
+            )
 
         telegram_entry_result = maybe_send_paper_entry_alert(
             opened_trade,
             scanner_context,
             reason=f"{notes_prefix}: {reason}"
         )
-        opened_log_row = row.copy()
+        opened_log_row = row_for_trade.copy()
         opened_log_row["Paper Trade Opened"] = True
         opened_log_row["Real Trade Readiness"] = _real_trade_readiness(opened_log_row)
         opened_log_row["Real Entry Checklist"] = _real_entry_checklist(opened_log_row)
@@ -4998,11 +5230,20 @@ def _paper_trade_candidates(df):
 
         allowed_statuses.append("REVIEW_TV_CHART")
 
+    affordability_ok = _affordability_mask(
+        df,
+        _ignore_affordability_for_paper_validation()
+    )
+
     candidates = df[
         (df["Setup Valid"] == True)
         & (df["Candidate Direction"].isin(["CALL", "PUT"]))
         & (df["Action Status"].isin(allowed_statuses))
-        & (df.get("Affordable", True) == True)
+        & affordability_ok
+    ].copy()
+
+    candidates = candidates[
+        candidates["Entry"].map(_is_valid_new_entry_type)
     ].copy()
 
     if "Realtime Ready" in candidates.columns:

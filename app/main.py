@@ -191,6 +191,74 @@ def _safe_metric(df, column):
         return None
 
 
+def _append_daily_candles(symbol, candles_df, trading_day, scan_id, interval="5m"):
+
+    try:
+
+        if candles_df is None or candles_df.empty:
+
+            return 0
+
+        output = candles_df.copy()
+        output = output.reset_index()
+        rename_map = {}
+
+        for column in output.columns:
+
+            normalized = str(column).strip().lower()
+
+            if normalized in {"index", "datetime", "date", "time", "timestamp"}:
+
+                rename_map[column] = "timestamp"
+            elif normalized == "open":
+
+                rename_map[column] = "open"
+            elif normalized == "high":
+
+                rename_map[column] = "high"
+            elif normalized == "low":
+
+                rename_map[column] = "low"
+            elif normalized == "close":
+
+                rename_map[column] = "close"
+            elif normalized == "volume":
+
+                rename_map[column] = "volume"
+
+        output = output.rename(columns=rename_map)
+
+        required = ["timestamp", "open", "high", "low", "close"]
+
+        if any(column not in output.columns for column in required):
+
+            return 0
+
+        output = output[required + (["volume"] if "volume" in output.columns else [])].copy()
+        output.insert(0, "symbol", symbol)
+        output.insert(1, "interval", interval)
+        output["trading_day"] = trading_day
+        output["scan_id"] = scan_id
+        output["timestamp"] = output["timestamp"].astype(str)
+
+        path = daily_path(trading_day, "candles_5m.csv")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not path.exists() or path.stat().st_size == 0
+        output.to_csv(
+            path,
+            mode="a",
+            header=write_header,
+            index=False
+        )
+
+        return len(output)
+
+    except Exception as exc:
+
+        print(f"[DAILY CANDLE WARNING] {symbol}: {exc}")
+        return 0
+
+
 def _calculate_premarket_gap_pct(df):
 
     try:
@@ -1960,6 +2028,14 @@ def run_scanner():
                 )
 
                 continue
+
+            _append_daily_candles(
+                symbol,
+                df_5m_raw,
+                trading_day,
+                scan_id,
+                interval="5m"
+            )
 
             market_data_status = get_market_data_status(
                 df_5m_raw

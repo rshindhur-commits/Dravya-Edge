@@ -189,7 +189,7 @@ The scanner keeps two option concepts separate:
 - Best quality contract: the strongest technical/liquidity contract, even if it is too expensive for the active account profile.
 - Active affordable contract: the best contract that still passes quality gates and fits the configured capital profile.
 
-In `OPTION_AFFORDABILITY_MODE=HARD`, a high-quality but expensive option is marked `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER`. The dashboard still shows the best-quality contract for review, but Paper Trade Setup and suggested-trade sync require `Affordable=True`.
+In `OPTION_AFFORDABILITY_MODE=HARD`, a high-quality but expensive option is marked `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER` at the scanner action layer. The dashboard still shows the best-quality contract for review, and research visibility can ignore affordability through `SUGGESTIONS_IGNORE_AFFORDABILITY=true` and `PAPER_IGNORE_AFFORDABILITY=true`. Paper entries opened under that override are tagged with `Paper Affordability Override` and original affordability/cost fields. Real-trade readiness remains affordability-gated by default through `REAL_REQUIRE_AFFORDABILITY=true`.
 
 Small-account defaults are documented in [.env.example](.env.example) and [.streamlit/secrets.toml.example](.streamlit/secrets.toml.example):
 
@@ -240,7 +240,16 @@ TELEGRAM_MAX_MIDDAY_ENTRY_ALERTS = "1"
 TELEGRAM_MAX_AFTERNOON_ENTRY_ALERTS = "1"
 TELEGRAM_EXIT_PRICE_MISMATCH_PCT = "0.03"
 AUTO_PAPER_ENABLED = "true"
+SUGGESTIONS_IGNORE_AFFORDABILITY = "true"
+PAPER_IGNORE_AFFORDABILITY = "true"
+REAL_REQUIRE_AFFORDABILITY = "true"
 ALLOW_REVIEW_TV_CHART_AUTO_PAPER = "false"
+INDEX_REVIEW_MIN_SETUP = "82"
+INDEX_REVIEW_MIN_RR = "1.8"
+INDEX_REVIEW_MIN_OPTION_QUALITY = "90"
+INDEX_REVIEW_MAX_SPREAD_PCT = "3"
+INDEX_REVIEW_MAX_QUOTE_AGE_MINUTES = "3"
+INDEX_REVIEW_MIN_SCANS = "2"
 REAL_TRADING_ENABLED = "false"
 REAL_ALERTS_ONLY = "true"
 REAL_MAX_TRADES_PER_DAY = "1"
@@ -262,6 +271,8 @@ chat_id = "YOUR_TELEGRAM_CHAT_ID"
 The scanner sends entry alerts only for high-conviction `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART` option setups that are not marked unaffordable and are within the configured top-candidate limit. Entry alerts are scored after the full scan is ranked, then attempted strongest-first in the same scan; the system does not wait for a later time bucket to compare future candidates. Auto paper entries send entry alerts at the exact moment a system paper trade opens, as long as the opened row is realtime-ready, affordable, has sufficient setup/RR, fresh quote, acceptable spread, and option quality. `ALLOW_REVIEW_TV_CHART_AUTO_PAPER=false` by default; when enabled, high-quality `REVIEW_TV_CHART` rows can enter paper-only validation as `entry_source=AUTO_PAPER_REVIEW_VALIDATION`, `trade_mode=PAPER`, and `include_in_strategy_stats=false` after the same strict paper gates, top-candidate filter, bid/ask, quote freshness, affordability, event/regime, cooldown, duplicate, and daily-cap checks pass. Review-validation entries are additionally blocked at or after 14:45 ET, when `Late Entry Risk` is `LATE_CHASE_RISK`, when `Missed Move Type` is populated, or when the row is not a configured top candidate. Manual paper entry buttons are hidden by default (`ENABLE_MANUAL_PAPER_ENTRIES=false`, `SHOW_MANUAL_PAPER_BUTTONS=false`) to keep validation telemetry clean; manual close/correction remains available by default. The default entry buckets are max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 A+ style alert from 13:30-14:45 ET, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect the daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and no-late-entry cutoff. Exit alerts send only when confirmed paper/real trades close manually or automatically; scanner-managed `trade_state.json` exits remain dashboard-only. Exit-alert price validation resolves the current underlying price from the freshest available same-symbol source in this order: `latest_quote`, `df_5m_latest_close`, then `df_15m_latest_close`. Alerts are blocked if that resolved price differs from the same-symbol expected close by more than `TELEGRAM_EXIT_PRICE_MISMATCH_PCT` (default 3%). Sent alert keys are stored in `app/state/telegram_alert_state.json`, which is ignored by Git.
 
 Real-trade readiness is dashboard guidance only. `REAL_TRADING_ENABLED=false` and `REAL_ALERTS_ONLY=true` keep the app in manual-review mode; no real orders are placed. Rows marked `A_PLUS_REAL_REVIEW` must already have an active paper trade open for the same symbol, be `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART`, be `BULLISH_TOP_1` or `BEARISH_TOP_1`, meet the real thresholds, have a live quote age within `REAL_MAX_QUOTE_AGE_MINUTES`, avoid late/chase and missed-move flags, avoid event/regime blocks, appear in at least two consecutive suggested-trade scans, remain under `MAX_DAILY_REAL_LOSS`, and occur before `REAL_ENTRY_CUTOFF_ET`. The dashboard shows `Paper Trade Opened`, `Real Trade Readiness`, `Real Review Scan Count`, and `Real Entry Checklist` for manual tiny-trade review only.
+
+Affordability is intentionally split by workflow: suggested-trade lifecycle and paper validation can include technically valid expensive setups for research when the ignore flags are enabled, but real-trade readiness and real/Telegram safety checks remain affordability-gated. Auto paper entries normally respect setup, RR, quote freshness, bid/ask, spread, option quality, event/regime, cooldown, duplicate, and daily-cap checks. When `PAPER_IGNORE_AFFORDABILITY=true`, affordability can be bypassed for paper validation only and the trade is tagged with `Paper Affordability Override`. Telegram and real-trade readiness may remain stricter.
 
 Paper auto-exits still honor stop, target, live exit signal, momentum/VWAP/EMA invalidation, failed-breakout/breakdown invalidation, and profit-threshold exits before any end-of-day rule. End-of-day close is conditional: weak, short-dated, late/chase, missed-move, or exit-signal rows still close at `AUTO_PAPER_EOD_CLOSE`, while strong `PREFERRED_14_30` or `LONGER_DTE` paper trades with setup >= 80, RR >= 1.8, option quality >= 75, no late chase, no missed move, and no live exit signal can hold overnight for swing validation.
 

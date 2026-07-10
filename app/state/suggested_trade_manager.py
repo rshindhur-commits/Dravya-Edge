@@ -33,6 +33,11 @@ PROMOTABLE_STATUSES = {
     "CONTRACT_CHANGED"
 }
 
+PAPER_PROMOTED_STATUSES = {
+    "ENTERED_PAPER",
+    "PROMOTED_TO_PAPER"
+}
+
 
 def load_suggestions():
 
@@ -171,6 +176,21 @@ def upsert_suggestion_from_scan(row):
     now = _now_str()
     existing = state.get(suggestion_id, {})
     is_new = not bool(existing)
+    existing_status = str(existing.get("status") or "").strip().upper()
+
+    if existing_status in PAPER_PROMOTED_STATUSES:
+
+        existing["last_seen_at"] = now
+        existing["current_price"] = row.get("Price")
+        existing["current_setup_percent"] = row.get("Setup %")
+        existing["current_rr"] = _row_get(row, "RR", "Candidate RR", "Risk Reward")
+        existing["current_action_status"] = row.get("Action Status")
+        existing["option_quote_freshness"] = row.get("Option Quote Freshness")
+        existing["validity_reason"] = "already promoted to paper trade"
+        state[suggestion_id] = existing
+        save_suggestions(state)
+
+        return existing
 
     original_entry = _safe_float(
         existing.get("entry_price"),
@@ -275,7 +295,7 @@ def mark_suggestion_expired(suggestion_id, reason="not present in latest scan"):
 
     suggestion = state[suggestion_id]
 
-    if suggestion.get("status") == "ENTERED_PAPER":
+    if str(suggestion.get("status") or "").strip().upper() in PAPER_PROMOTED_STATUSES:
 
         return suggestion
 
@@ -327,19 +347,63 @@ def _minutes_between(start_value, end_value):
     return round((end - start).total_seconds() / 60, 2)
 
 
-def promote_suggestion_to_paper_trade(symbol):
+def promote_suggestion_to_paper_trade(
+    symbol,
+    direction=None,
+    setup_type=None,
+    option_ticker=None,
+    opened_at=None,
+    trade_key=None
+):
 
     state = load_suggestions()
+    promoted = False
+
+    symbol = str(symbol or "").strip()
+    direction = str(direction or "").strip().upper() if direction else None
+    setup_type = str(setup_type or "").strip().upper() if setup_type else None
+    option_ticker = str(option_ticker or "").strip() if option_ticker else None
 
     for suggestion_id, suggestion in state.items():
 
-        if suggestion.get("symbol") == symbol and suggestion.get("status") in PROMOTABLE_STATUSES:
+        if str(suggestion.get("symbol") or "").strip() != symbol:
 
-            suggestion["status"] = "ENTERED_PAPER"
+            continue
+
+        if direction and str(suggestion.get("direction") or "").strip().upper() != direction:
+
+            continue
+
+        if setup_type and str(suggestion.get("setup_type") or "").strip().upper() != setup_type:
+
+            continue
+
+        if option_ticker and str(suggestion.get("option_ticker") or "").strip() != option_ticker:
+
+            continue
+
+        current_status = str(suggestion.get("status") or "").strip().upper()
+
+        if current_status in PAPER_PROMOTED_STATUSES | {"OPENED", "CLOSED"}:
+
+            continue
+
+        if current_status in PROMOTABLE_STATUSES:
+
+            suggestion["status"] = "PROMOTED_TO_PAPER"
             suggestion["validity_reason"] = "promoted to paper trade"
+            suggestion["promoted_at"] = opened_at
+            suggestion["paper_trade_key"] = trade_key
+            suggestion["realtime_block_reason"] = None
+            suggestion["expiry_reason"] = None
             state[suggestion_id] = suggestion
+            promoted = True
 
-    save_suggestions(state)
+    if promoted:
+
+        save_suggestions(state)
+
+    return promoted
 
 
 def sync_suggestions_from_scan(rows):
@@ -358,7 +422,7 @@ def sync_suggestions_from_scan(rows):
 
             continue
 
-        if suggestion.get("status") == "ENTERED_PAPER":
+        if str(suggestion.get("status") or "").strip().upper() in PAPER_PROMOTED_STATUSES:
 
             continue
 
@@ -387,7 +451,9 @@ def cleanup_old_suggestions(max_age_days=5):
 
             continue
 
-        if last_seen_dt < cutoff and suggestion.get("status") not in ["ENTERED_PAPER"]:
+        current_status = str(suggestion.get("status") or "").strip().upper()
+
+        if last_seen_dt < cutoff and current_status not in PAPER_PROMOTED_STATUSES:
 
             del state[suggestion_id]
 
