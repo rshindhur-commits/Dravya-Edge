@@ -182,6 +182,130 @@ def _read_candidate_snapshots(report_date):
     return _read_csv(csv_path)
 
 
+def _read_parquet(path):
+
+    try:
+
+        if not path.exists() or path.stat().st_size == 0:
+
+            return pd.DataFrame()
+
+        return pd.read_parquet(path)
+
+    except Exception as exc:
+
+        print(f"[REPORT WARNING] Could not read {path}: {exc}")
+        return pd.DataFrame()
+
+
+def _read_daily_candles(report_date):
+
+    daily_dir = get_daily_dir(report_date)
+    frames = []
+
+    for pattern in ["*candles*.csv", "*candles*.parquet", "*aggs*.csv", "*aggs*.parquet"]:
+
+        for path in daily_dir.glob(pattern):
+
+            frame = _read_parquet(path) if path.suffix == ".parquet" else _read_csv(path)
+
+            if frame.empty:
+
+                continue
+
+            if "symbol" not in {str(column).lower() for column in frame.columns}:
+
+                inferred_symbol = path.stem.split("_")[0].upper()
+                frame = frame.copy()
+                frame["symbol"] = inferred_symbol
+
+            frames.append(frame)
+
+    if not frames:
+
+        return pd.DataFrame()
+
+    candles = pd.concat(frames, ignore_index=True, sort=False)
+    normalized_columns = {
+        str(column).strip().lower(): column
+        for column in candles.columns
+    }
+    symbol_column = normalized_columns.get("symbol")
+    timestamp_column = _first_existing(
+        candles,
+        ["timestamp", "time", "datetime", "date", "t"]
+    )
+
+    if symbol_column and timestamp_column:
+
+        candles = candles.drop_duplicates(
+            subset=[symbol_column, timestamp_column],
+            keep="last"
+        )
+
+    return candles
+
+
+def classify_expired_suggestion_with_candles(suggestion, candles):
+
+    direction = str(suggestion.get("direction") or "").upper()
+
+    try:
+
+        float(suggestion.get("entry_price"))
+        stop = float(suggestion.get("stop_loss"))
+        target = float(suggestion.get("take_profit"))
+
+    except Exception:
+
+        return "MISSING_LEVELS"
+
+    if candles is None or candles.empty:
+
+        return "NO_CANDLES"
+
+    if not {"high", "low"}.issubset(set(candles.columns)):
+
+        return "MISSING_CANDLE_HIGH_LOW"
+
+    for _, candle in candles.iterrows():
+
+        try:
+
+            high = float(candle["high"])
+            low = float(candle["low"])
+
+        except Exception:
+
+            continue
+
+        if direction == "CALL":
+
+            stop_hit = low <= stop
+            target_hit = high >= target
+        elif direction == "PUT":
+
+            stop_hit = high >= stop
+            target_hit = low <= target
+        else:
+
+            return "UNKNOWN_DIRECTION"
+
+        if stop_hit and target_hit:
+
+            return "AMBIGUOUS_SAME_CANDLE"
+
+        if target_hit:
+
+            return "MISSED_WINNER_TARGET_FIRST"
+
+        if stop_hit:
+
+            return "CORRECT_SKIP_STOP_FIRST"
+
+    return "INCONCLUSIVE_NO_TARGET_OR_STOP"
+
+
 def _json_record_count(data):
 
     if isinstance(data, dict):
@@ -310,6 +434,105 @@ def _html_table(df, empty_message="No data available"):
         return f"<p>{html.escape(empty_message)}</p>"
 
     return df.to_html(index=False, escape=True, border=0)
+
+
+def _normalize_candle_columns(candles_df):
+
+    if candles_df.empty:
+
+        return candles_df
+
+    normalized = candles_df.copy()
+    normalized.columns = [str(column).strip().lower() for column in normalized.columns]
+
+    return normalized
+
+
+def _candles_for_suggestion(suggestion, candles_df):
+
+    candles = _normalize_candle_columns(candles_df)
+
+    if candles.empty:
+
+        return candles
+
+    symbol = str(suggestion.get("symbol") or "").strip().upper()
+
+    if symbol and "symbol" in candles.columns:
+
+        candles = candles[
+            candles["symbol"].astype(str).str.strip().str.upper().eq(symbol)
+        ].copy()
+
+    time_column = _first_existing(
+        candles,
+        ["timestamp", "time", "datetime", "date", "t"]
+    )
+
+    if time_column:
+
+        candles = candles.copy()
+        candles["_timestamp"] = pd.to_datetime(
+            candles[time_column],
+            errors="coerce",
+            utc=True
+        )
+        first_seen = pd.to_datetime(
+            suggestion.get("first_seen_at"),
+            errors="coerce",
+            utc=True
+        )
+
+        if pd.notna(first_seen):
+
+            candles = candles[candles["_timestamp"] >= first_seen]
+
+        candles = candles.sort_values("_timestamp")
+
+    return candles
+
+
+def build_missed_opportunity_replay(suggested_trade_state, candles_df):
+
+    if not isinstance(suggested_trade_state, dict) or not suggested_trade_state:
+
+        return pd.DataFrame()
+
+    rows = []
+
+    for suggestion in suggested_trade_state.values():
+
+        status = str(suggestion.get("status") or "").strip().upper()
+
+        if status not in {"EXPIRED_NOT_ENTERED", "ENTERED_PAPER", "PROMOTED_TO_PAPER"}:
+
+            continue
+
+        if status in {"ENTERED_PAPER", "PROMOTED_TO_PAPER"} or suggestion.get("paper_trade_key"):
+
+            replay_classification = "PROMOTED_TO_PAPER"
+        else:
+
+            replay_classification = classify_expired_suggestion_with_candles(
+                suggestion,
+                _candles_for_suggestion(suggestion, candles_df)
+            )
+
+        rows.append({
+            "Symbol": suggestion.get("symbol"),
+            "Direction": suggestion.get("direction"),
+            "Setup": suggestion.get("setup_type"),
+            "Status": status,
+            "Replay Classification": replay_classification,
+            "Entry": suggestion.get("entry_price"),
+            "Stop": suggestion.get("stop_loss"),
+            "Target": suggestion.get("take_profit"),
+            "First Seen": suggestion.get("first_seen_at"),
+            "Expired At": suggestion.get("expired_at"),
+            "Paper Trade Key": suggestion.get("paper_trade_key")
+        })
+
+    return pd.DataFrame(rows)
 
 
 def _is_blank(value):
@@ -553,9 +776,28 @@ def build_data_quality_checks(
             .isin(["EXPIRED_NOT_ENTERED", "DO_NOT_CHASE", "WATCH_WEAKENING"])
             .sum()
         )
+    opened_event_count = 0
+
+    if not paper_events_df.empty:
+
+        events = paper_events_df.copy()
+
+        if "event_type" in events.columns:
+
+            events = events[
+                events["event_type"].astype(str).str.upper().eq("OPEN")
+            ].copy()
+
+        if "trade_key" in events.columns:
+
+            opened_event_count = int(events["trade_key"].dropna().nunique())
+        else:
+
+            opened_event_count = len(events)
+
     actual_opened = max(
         opened_decisions,
-        len(paper_events_df) if not paper_events_df.empty else 0,
+        opened_event_count,
         _json_record_count(paper_trade_state)
     )
     checks = {
@@ -794,6 +1036,27 @@ def build_quote_freshness_table(decision_log):
     if decisions_df.empty or not freshness_column:
 
         return pd.DataFrame()
+
+    option_column = _first_existing(
+        decisions_df,
+        ["option_ticker", "Option Ticker", "active_option_ticker", "Active Option Ticker"]
+    )
+
+    if option_column:
+
+        decisions_df = decisions_df[
+            decisions_df[option_column]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .ne("")
+        ].copy()
+
+    if decisions_df.empty:
+
+        return pd.DataFrame(
+            [{"quote_freshness": "NO_OPTION_ROWS", "count": 0}]
+        )
 
     freshness = (
         decisions_df[freshness_column]
@@ -1225,6 +1488,7 @@ def render_report(
     lifecycle_quote_freshness_df,
     lifecycle_review_metrics,
     lifecycle_expiry_metrics,
+    missed_opportunity_replay_df,
     suggestions,
     archived_files
 ):
@@ -1360,6 +1624,9 @@ def render_report(
     <h3>Suggestion Expiry</h3>
     <table class="metric-table">{lifecycle_expiry_rows}</table>
 
+        <h2>Missed Opportunity Replay</h2>
+        {_html_table(missed_opportunity_replay_df, "No expired/promoted suggestions found for candle replay.")}
+
   <h2>Best Skipped Opportunities</h2>
   {_html_table(skipped_df, "No skipped/block candidate data found.")}
 
@@ -1401,6 +1668,7 @@ def build_report(args):
     )
     suggested_trade_state = _read_json(input_paths["suggested_trade_state"], {})
     candidate_df = _read_candidate_snapshots(report_date)
+    candles_df = _read_daily_candles(report_date)
     lifecycle_events_df = _read_csv(daily_path(report_date, "signal_lifecycle_events.csv"))
     lifecycle_transitions_df = _read_csv(daily_path(report_date, "signal_state_transitions.csv"))
     data_health, data_health_warnings = build_data_health(
@@ -1458,6 +1726,10 @@ def build_report(args):
         lifecycle_events_df,
         lifecycle_transitions_df,
         suggested_trade_state,
+    )
+    missed_opportunity_replay_df = build_missed_opportunity_replay(
+        suggested_trade_state,
+        candles_df
     )
     suggestions = build_rule_suggestions(
         trade_metrics,
@@ -1518,6 +1790,7 @@ def build_report(args):
             lifecycle_quote_freshness_df,
             lifecycle_review_metrics,
             lifecycle_expiry_metrics,
+            missed_opportunity_replay_df,
             suggestions,
             archived_files
         ),

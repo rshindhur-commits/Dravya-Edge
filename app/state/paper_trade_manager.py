@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 import csv
+from zoneinfo import ZoneInfo
 
 from app.utils.json_store import (
     load_json_file,
@@ -25,6 +26,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 PAPER_TRADE_STATE_FILE = str(
     ROOT_DIR / "app" / "state" / "paper_trade_state.json"
 )
+ET_TZ = ZoneInfo("America/New_York")
 
 PAPER_TELEMETRY_REQUIRED_FIELDS = [
     "paper_trade",
@@ -47,6 +49,8 @@ PAPER_TRADE_EVENT_COLUMNS = [
     "session_id",
     "scan_id",
     "event_time",
+    "event_time_et",
+    "event_time_utc",
     "event_type",
     "trade_key",
     "symbol",
@@ -83,6 +87,16 @@ def _state_key_for_trade(trade):
         trade.get("option_ticker"),
         trade.get("opened_at")
     )
+
+
+def _now_et():
+
+    return datetime.now(ET_TZ)
+
+
+def _timestamp_for_key(dt):
+
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _safe_float(value):
@@ -126,11 +140,14 @@ def _append_paper_trade_event(trade, event_type, exit_price=None):
             parents=True,
             exist_ok=True
         )
+        event_dt = _now_et()
         event = {
             "trading_day": trading_day,
             "session_id": session_id,
             "scan_id": scan_id,
-            "event_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "event_time": _timestamp_for_key(event_dt),
+            "event_time_et": event_dt.isoformat(),
+            "event_time_utc": event_dt.astimezone(timezone.utc).isoformat(),
             "event_type": event_type,
             "trade_key": trade.get("trade_key") or _state_key_for_trade(trade),
             "symbol": trade.get("symbol"),
@@ -468,6 +485,9 @@ def open_paper_trade(
 
         option_mid = None
 
+    opened_dt = _now_et()
+    opened_at = _timestamp_for_key(opened_dt)
+
     trade = {
         "trade_id": str(uuid4()),
         "symbol": symbol,
@@ -486,9 +506,9 @@ def open_paper_trade(
         "planned_rr": (
             scanner_context or {}
         ).get("Candidate RR"),
-        "opened_at": datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        ),
+        "opened_at": opened_at,
+        "opened_at_et": opened_dt.isoformat(),
+        "opened_at_utc": opened_dt.astimezone(timezone.utc).isoformat(),
         "closed_at": None,
         "close_price": None,
         "exit_reason": None,
@@ -573,10 +593,12 @@ def close_paper_trade(
 
         trade["close_scanner_context"] = scanner_context
 
+    closed_dt = _now_et()
+
     trade["status"] = "CLOSED"
-    trade["closed_at"] = datetime.now().strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
+    trade["closed_at"] = _timestamp_for_key(closed_dt)
+    trade["closed_at_et"] = closed_dt.isoformat()
+    trade["closed_at_utc"] = closed_dt.astimezone(timezone.utc).isoformat()
     trade["close_price"] = close_price
     trade["exit_reason"] = exit_reason
     trade["pnl_pct"] = result["pnl_pct"]
