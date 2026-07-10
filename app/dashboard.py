@@ -4958,6 +4958,563 @@ def _render_compact_auto_paper_summary():
     cols[3].metric("Top Reason", reason)
 
 
+
+def _read_csv_safe(path):
+
+    try:
+
+        path = Path(path)
+
+        if not path.exists() or path.stat().st_size == 0:
+
+            return pd.DataFrame()
+
+        return pd.read_csv(path)
+
+    except Exception:
+
+        return pd.DataFrame()
+
+
+def _paper_trade_state_paths():
+
+    paths = []
+    state_path = ROOT_DIR / "app" / "state" / "paper_trade_state.json"
+
+    if state_path.exists():
+
+        paths.append(state_path)
+
+    daily_root = ROOT_DIR / "data" / "daily"
+
+    if daily_root.exists():
+
+        paths.extend(
+            sorted(daily_root.glob("*/paper_trade_state.json"))
+        )
+
+    return paths
+
+
+def _load_paper_trade_state_records():
+
+    records = {}
+
+    for path in _paper_trade_state_paths():
+
+        try:
+
+            payload = load_json_file(
+                str(path),
+                {}
+            )
+
+        except Exception:
+
+            payload = {}
+
+        if not isinstance(payload, dict):
+
+            continue
+
+        for fallback_key, trade in payload.items():
+
+            if not isinstance(trade, dict):
+
+                continue
+
+            trade_key = str(
+                trade.get("trade_key")
+                or fallback_key
+                or ""
+            ).strip()
+
+            if not trade_key:
+
+                continue
+
+            records[trade_key] = trade
+
+    return records
+
+
+def _trade_context_value(trade, *field_names):
+
+    if not isinstance(trade, dict):
+
+        return None
+
+    scanner_context = trade.get("scanner_context") or {}
+    close_scanner_context = trade.get("close_scanner_context") or {}
+
+    for field_name in field_names:
+
+        for source in [trade, scanner_context, close_scanner_context]:
+
+            try:
+
+                value = source.get(field_name)
+
+            except Exception:
+
+                value = None
+
+            if _has_value(value):
+
+                return value
+
+    return None
+
+
+def _paper_trade_risk_dollars(trade):
+
+    risk_value = _trade_context_value(
+        trade,
+        "Option Risk At Stop",
+        "option_risk_at_stop",
+        "risk_at_stop"
+    )
+    risk_value = _safe_float(
+        risk_value,
+        None
+    )
+
+    if risk_value is not None and risk_value > 0:
+
+        return risk_value
+
+    account_size = _env_float(
+        "ACCOUNT_SIZE",
+        _env_float("DAILY_START_CAPITAL", 0.0)
+    )
+    risk_percent = _env_float(
+        "RISK_PERCENT",
+        _env_float("OPTION_MAX_RISK_PER_TRADE_PCT", 0.0) * 100
+    )
+
+    if account_size > 0 and risk_percent > 0:
+
+        return round(
+            account_size * risk_percent / 100,
+            2
+        )
+
+    return None
+
+
+def _paper_trade_contracts(trade):
+
+    contracts = _trade_context_value(
+        trade,
+        "option_contracts",
+        "contracts",
+        "Contracts"
+    )
+
+    contracts = _safe_float(
+        contracts,
+        1
+    )
+
+    if contracts is None or contracts <= 0:
+
+        return 1
+
+    return contracts
+
+
+def _estimated_trade_pnl_dollars(trade, r_multiple):
+
+    direct_pnl = _trade_context_value(
+        trade,
+        "realized_pnl",
+        "pnl_dollars",
+        "option_pl_dollars",
+        "Option P/L $"
+    )
+    direct_pnl = _safe_float(
+        direct_pnl,
+        None
+    )
+
+    if direct_pnl is not None:
+
+        return round(
+            direct_pnl,
+            2
+        )
+
+    risk_dollars = _paper_trade_risk_dollars(trade)
+
+    if risk_dollars is None or r_multiple is None:
+
+        return None
+
+    return round(
+        risk_dollars * r_multiple * _paper_trade_contracts(trade),
+        2
+    )
+
+
+def _paper_trade_event_paths():
+
+    paths = []
+    root_event_path = ROOT_DIR / "paper_trade_events.csv"
+
+    if root_event_path.exists():
+
+        paths.append(root_event_path)
+
+    daily_root = ROOT_DIR / "data" / "daily"
+
+    if daily_root.exists():
+
+        paths.extend(
+            sorted(daily_root.glob("*/paper_trade_events.csv"))
+        )
+
+    return paths
+
+
+def _closed_paper_trade_history():
+
+    frames = []
+
+    for path in _paper_trade_event_paths():
+
+        frame = _read_csv_safe(path)
+
+        if frame.empty:
+
+            continue
+
+        frame = frame.copy()
+        frame["_source_path"] = str(path)
+        frames.append(frame)
+
+    state_records = _load_paper_trade_state_records()
+
+    if frames:
+
+        events = pd.concat(
+            frames,
+            ignore_index=True,
+            sort=False
+        )
+
+    else:
+
+        events = pd.DataFrame()
+
+    closed_rows = []
+
+    if not events.empty:
+
+        event_type = (
+            events.get("event_type", pd.Series(dtype=object))
+            .fillna("")
+            .astype(str)
+            .str.upper()
+        )
+        status = (
+            events.get("status", pd.Series(dtype=object))
+            .fillna("")
+            .astype(str)
+            .str.upper()
+        )
+        closed_mask = (
+            event_type.isin([
+                "AUTO_EXIT",
+                "MANUAL_CLOSE",
+                "CLOSE",
+                "CLOSED",
+                "EXIT"
+            ])
+            | status.eq("CLOSED")
+        )
+        closed_events = events[closed_mask].copy()
+
+        if not closed_events.empty:
+
+            closed_events["r_multiple"] = pd.to_numeric(
+                closed_events.get("r_multiple"),
+                errors="coerce"
+            )
+            closed_events = closed_events[
+                closed_events["r_multiple"].notna()
+            ].copy()
+
+        for _, row in closed_events.iterrows():
+
+            trade_key = str(row.get("trade_key") or "").strip()
+            trade = state_records.get(trade_key, {})
+            r_multiple = _safe_float(row.get("r_multiple"), None)
+            trading_day = str(row.get("trading_day") or "").strip()
+
+            if not trading_day:
+
+                event_time = str(row.get("event_time") or "")
+                trading_day = event_time[:10] if len(event_time) >= 10 else None
+
+            closed_rows.append({
+                "trade_key": trade_key,
+                "trading_day": trading_day,
+                "closed_at": row.get("event_time"),
+                "symbol": row.get("symbol") or trade.get("symbol"),
+                "direction": row.get("direction") or trade.get("direction"),
+                "option_ticker": row.get("option_ticker") or trade.get("option_ticker"),
+                "r_multiple": r_multiple,
+                "estimated_pnl_dollars": _estimated_trade_pnl_dollars(trade, r_multiple),
+                "exit_reason": row.get("exit_reason") or trade.get("exit_reason"),
+                "paper_affordability_override": _trade_context_value(
+                    trade,
+                    "Paper Affordability Override",
+                    "paper_affordability_override"
+                ),
+                "source": "event_log"
+            })
+
+    seen_trade_keys = {
+        str(row.get("trade_key") or "")
+        for row in closed_rows
+        if row.get("trade_key")
+    }
+
+    for trade_key, trade in state_records.items():
+
+        if trade_key in seen_trade_keys:
+
+            continue
+
+        if str(trade.get("status") or "").upper() != "CLOSED":
+
+            continue
+
+        r_multiple = _safe_float(
+            trade.get("r_multiple"),
+            None
+        )
+
+        if r_multiple is None:
+
+            continue
+
+        closed_at = str(
+            trade.get("closed_at")
+            or trade.get("closed_at_et")
+            or ""
+        )
+        trading_day = str(
+            trade.get("trading_day")
+            or closed_at[:10]
+            or ""
+        )
+
+        closed_rows.append({
+            "trade_key": trade_key,
+            "trading_day": trading_day,
+            "closed_at": closed_at,
+            "symbol": trade.get("symbol"),
+            "direction": trade.get("direction"),
+            "option_ticker": trade.get("option_ticker"),
+            "r_multiple": r_multiple,
+            "estimated_pnl_dollars": _estimated_trade_pnl_dollars(trade, r_multiple),
+            "exit_reason": trade.get("exit_reason"),
+            "paper_affordability_override": _trade_context_value(
+                trade,
+                "Paper Affordability Override",
+                "paper_affordability_override"
+            ),
+            "source": "paper_state"
+        })
+
+    if not closed_rows:
+
+        return pd.DataFrame()
+
+    history = pd.DataFrame(closed_rows)
+    history["r_multiple"] = pd.to_numeric(
+        history["r_multiple"],
+        errors="coerce"
+    )
+    history["estimated_pnl_dollars"] = pd.to_numeric(
+        history["estimated_pnl_dollars"],
+        errors="coerce"
+    )
+    history = history[history["r_multiple"].notna()].copy()
+
+    if "trade_key" in history.columns:
+
+        history = history.drop_duplicates(
+            subset=["trade_key"],
+            keep="last"
+        )
+
+    return history
+
+
+def _format_rate(value):
+
+    if value is None:
+
+        return "N/A"
+
+    return f"{value:.0f}%"
+
+
+def _format_r(value):
+
+    if value is None:
+
+        return "N/A"
+
+    sign = "+" if value > 0 else ""
+
+    return f"{sign}{value:.2f}R"
+
+
+def _format_dollars(value):
+
+    if value is None or pd.isna(value):
+
+        return "N/A"
+
+    sign = "+" if value > 0 else ""
+
+    return f"{sign}${value:,.2f}"
+
+
+def _paper_performance_summary(closed_trades):
+
+    if closed_trades is None or closed_trades.empty:
+
+        return {
+            "closed_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "flats": 0,
+            "win_rate": None,
+            "loss_rate": None,
+            "total_r": None,
+            "avg_r": None,
+            "estimated_pnl_dollars": None
+        }
+
+    r_values = pd.to_numeric(
+        closed_trades["r_multiple"],
+        errors="coerce"
+    ).dropna()
+    total = int(len(r_values))
+    wins = int((r_values > 0).sum())
+    losses = int((r_values < 0).sum())
+    flats = int((r_values == 0).sum())
+
+    pnl_series = pd.to_numeric(
+        closed_trades.get("estimated_pnl_dollars", pd.Series(dtype=float)),
+        errors="coerce"
+    )
+
+    estimated_pnl = None
+
+    if pnl_series.notna().any():
+
+        estimated_pnl = float(pnl_series.sum())
+
+    return {
+        "closed_trades": total,
+        "wins": wins,
+        "losses": losses,
+        "flats": flats,
+        "win_rate": (wins / total * 100) if total else None,
+        "loss_rate": (losses / total * 100) if total else None,
+        "total_r": float(r_values.sum()) if total else None,
+        "avg_r": float(r_values.mean()) if total else None,
+        "estimated_pnl_dollars": estimated_pnl
+    }
+
+
+def _render_performance_metric_row(label, summary):
+
+    st.markdown(f"**{label}**")
+    cols = st.columns(6)
+    cols[0].metric("Closed", summary["closed_trades"])
+    cols[1].metric("Win %", _format_rate(summary["win_rate"]))
+    cols[2].metric("Loss %", _format_rate(summary["loss_rate"]))
+    cols[3].metric("Total R", _format_r(summary["total_r"]))
+    cols[4].metric("Est. $ P/L", _format_dollars(summary["estimated_pnl_dollars"]))
+    cols[5].metric("Avg R", _format_r(summary["avg_r"]))
+
+
+def _render_paper_validation_performance():
+
+    st.subheader("Paper Validation Performance")
+    closed_trades = _closed_paper_trade_history()
+
+    if closed_trades.empty:
+
+        st.info("No closed paper trades found yet. Performance metrics will appear after the first paper trade closes.")
+        return
+
+    today = _current_trading_day()
+    today_trades = closed_trades[
+        closed_trades["trading_day"].astype(str).eq(today)
+    ].copy()
+
+    _render_performance_metric_row(
+        "Today",
+        _paper_performance_summary(today_trades)
+    )
+    _render_performance_metric_row(
+        "Overall",
+        _paper_performance_summary(closed_trades)
+    )
+
+    override_count = 0
+
+    if "paper_affordability_override" in closed_trades.columns:
+
+        override_count = int(
+            closed_trades["paper_affordability_override"]
+            .astype(str)
+            .str.lower()
+            .isin(["true", "1", "yes"])
+            .sum()
+        )
+
+    st.caption(
+        "Paper P/L is validation-only. Estimated $ P/L uses actual trade P/L when available, "
+        "otherwise Option Risk At Stop × R multiple × contracts, with configured risk as fallback. "
+        f"Affordability-override closed trades included: {override_count}."
+    )
+
+    with st.expander("Closed paper trades used for performance", expanded=False):
+
+        columns = [
+            column for column in [
+                "trading_day",
+                "closed_at",
+                "symbol",
+                "direction",
+                "r_multiple",
+                "estimated_pnl_dollars",
+                "paper_affordability_override",
+                "exit_reason",
+                "source"
+            ]
+            if column in closed_trades.columns
+        ]
+        display = closed_trades[columns].sort_values(
+            by=["trading_day", "closed_at"],
+            ascending=[False, False],
+            na_position="last"
+        )
+        st.dataframe(
+            _display_safe_dataframe(display),
+            width="stretch",
+            hide_index=True
+        )
+
+
 def _render_suggestion_lifecycle(df):
 
     st.markdown("**New Suggested Calls / Puts - Review Only**")
@@ -5839,6 +6396,8 @@ def main():
     _render_paper_exit_controls(df)
 
     _render_compact_auto_paper_summary()
+
+    _render_paper_validation_performance()
 
     with st.expander("Suggestion Lifecycle", expanded=False):
 
