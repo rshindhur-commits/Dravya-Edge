@@ -113,9 +113,50 @@ Current daily files live under `data/daily/YYYY-MM-DD/`; dashboard/latest mirror
 
 The dashboard reads `data/live/scanner_output_latest.csv` first, then `data/live/scanner_output_latest.xlsx`, then falls back to `scanner_output.xlsx`. Scanner execution is protected by a stale-aware lock at `data/live/scanner_run.lock` and a persistent cooldown/status file at `data/live/scanner_run_status.json`, so Streamlit refreshes or multiple browser sessions do not start overlapping or back-to-back scanner runs. Polygon aggregate requests use the short `POLYGON_CACHE_TTL` cache to avoid duplicate candle requests during rapid refreshes.
 
-The main Streamlit page is organized as an operator dashboard: compact status cards, compact market health, Action Center, Scanner Watchlist, and Paper / Real Validation Summary. Diagnostic surfaces such as suggestion lifecycle, full auto-paper decision logs, validation data health, daily report downloads, telemetry, and last-seen candidates live under collapsed expanders so the live page focuses on whether there is something to do right now.
+The main Streamlit page is organized as an operator dashboard: compact status cards, compact market health, Action Center, Scanner Watchlist, Paper / Real Validation Summary, and Paper Validation Performance. Diagnostic surfaces such as suggestion lifecycle, full auto-paper decision logs, validation data health, daily report downloads, telemetry, and last-seen candidates live under collapsed expanders so the live page focuses on whether there is something to do right now.
 
 If the dashboard is running locally on the same machine, the terminal command can read the same files directly. If the dashboard is running on Streamlit Cloud, generate the report inside the dashboard instead: use the sidebar `Generate Daily Validation Report` button, then download `daily_validation_report.html` from the same sidebar. That keeps report generation in the same filesystem where Streamlit created scanner output, telemetry, and state files.
+
+
+## Paper Validation Performance Dashboard
+
+The Streamlit dashboard includes a `Paper Validation Performance` section near the top of the operator view. It is intended to answer the daily operating questions without opening the full HTML daily report:
+
+- Did the paper system close trades today?
+- What is today's paper win percentage and loss percentage?
+- What is today's total R and average R per closed paper trade?
+- What is the overall paper win percentage, loss percentage, total R, estimated dollar P/L, and average R across available closed paper trades?
+
+The section shows two metric rows:
+
+- `Today`: closed paper trades whose `trading_day` equals the current trading day.
+- `Overall`: all closed paper trades found across available root and daily event/state files.
+
+Each row displays:
+
+- `Closed`: number of closed paper trades included in the calculation.
+- `Win %`: closed trades with `r_multiple > 0` divided by closed trades.
+- `Loss %`: closed trades with `r_multiple < 0` divided by closed trades.
+- `Total R`: sum of closed-trade `r_multiple` values.
+- `Est. $ P/L`: actual trade P/L if available; otherwise `Option Risk At Stop × R multiple × contracts`; otherwise a configured-risk fallback.
+- `Avg R`: average `r_multiple` per closed paper trade.
+
+Flat trades with `r_multiple == 0` are counted in `Closed` but not in `Win %` or `Loss %`. That means win rate plus loss rate can be less than 100% when flat exits exist.
+
+The dashboard reads closed paper-trade history from these sources, in order to support both local and Streamlit Cloud validation sessions:
+
+- `paper_trade_events.csv`
+- `data/daily/*/paper_trade_events.csv`
+- `app/state/paper_trade_state.json`
+- `data/daily/*/paper_trade_state.json`
+
+Event logs are preferred because they preserve closed-trade history even if the current JSON state is later cleared. Paper-state JSON is used as a fallback and to enrich event rows with scanner context such as `Option Risk At Stop`, contract count, and `Paper Affordability Override`.
+
+The dashboard also includes a collapsed `Closed paper trades used for performance` table with fields such as trading day, close time, symbol, direction, R multiple, estimated dollar P/L, affordability-override flag, exit reason, and source.
+
+Treat this dashboard section as paper-validation reporting, not real account P/L. Paper validation may include affordability-overridden trades when `PAPER_IGNORE_AFFORDABILITY=true`, while real-trade readiness can still block those trades with `PAPER_ONLY_UNAFFORDABLE` when `REAL_REQUIRE_AFFORDABILITY=true`.
+
+Prefer `Total R` and `Avg R` when judging strategy behavior. `Est. $ P/L` is an estimate unless actual option fill/exit P/L is available from the paper trade record. This keeps the dashboard useful before real broker fills, slippage, and option execution quality are fully validated.
 
 ## Neon Persistence
 
