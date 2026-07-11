@@ -77,6 +77,53 @@ def _round_float(value, digits=2):
         return value
 
 
+def trend_still_valid(df, direction):
+
+    latest = df.iloc[-1]
+    direction = str(direction or "").upper()
+
+    if direction == "CALL":
+
+        return (
+            latest["Close"] > latest["VWAP"]
+            and latest["EMA9"] > latest["EMA20"]
+            and latest["RSI"] > 55
+        )
+
+    return (
+        latest["Close"] < latest["VWAP"]
+        and latest["EMA9"] < latest["EMA20"]
+        and latest["RSI"] < 45
+    )
+
+
+def _should_guard_early_exit(df, exit_reason, bars_in_trade, rr_progress, is_short):
+
+    if bars_in_trade > 3:
+
+        return False
+
+    if abs(rr_progress) >= 0.25:
+
+        return False
+
+    weak_exit_reasons = [
+        "EMA9 invalidation",
+        "VWAP invalidation",
+        "MACD",
+        "Failed breakout"
+    ]
+
+    if not any(reason in str(exit_reason) for reason in weak_exit_reasons):
+
+        return False
+
+    return trend_still_valid(
+        df,
+        "PUT" if is_short else "CALL"
+    )
+
+
 def evaluate_exit(
     df,
     analysis,
@@ -122,6 +169,14 @@ def evaluate_exit(
         if trade_state
         else entry_price
     )
+
+    if highest_price is None:
+
+        highest_price = entry_price
+
+    if lowest_price is None:
+
+        lowest_price = entry_price
 
     highest_price = max(
         highest_price,
@@ -304,6 +359,18 @@ def evaluate_exit(
 
         exit_signal = True
         exit_reason = "Near-close exit without sufficient profit"
+
+    if exit_signal and _should_guard_early_exit(
+        df,
+        exit_reason,
+        bars_in_trade,
+        rr_progress,
+        is_short
+    ):
+
+        exit_signal = False
+        exit_reason = "Hold"
+        adjustment_reason = "Early weak exit guarded; trend intact"
 
     if exit_signal:
 

@@ -1083,8 +1083,26 @@ def compute_indicators(
 
     try:
 
-        # First 30 minutes of session
-        opening_range = df.iloc[:6]
+        market_open = pd.DataFrame()
+
+        if isinstance(df.index, pd.DatetimeIndex):
+
+            session_df = df.copy()
+
+            if session_df.index.tz is None:
+
+                session_df.index = session_df.index.tz_localize("UTC")
+
+            session_df.index = session_df.index.tz_convert("America/New_York")
+            market_open = session_df.between_time("09:30", "10:00")
+
+        if len(market_open) >= 6:
+
+            opening_range = market_open.iloc[:6]
+
+        else:
+
+            opening_range = df.iloc[:6]
 
         orb_high = opening_range["High"].max()
 

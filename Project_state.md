@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-07-09
+Last updated: 2026-07-11
 
 ## Project Purpose
 
@@ -661,11 +661,25 @@ When starting a fresh GPT session:
 
 ## Recent Major Changes
 
+2026-07-11
+- Entered calibration phase after the initial six-day review. Avoid broad strategy/indicator changes until more paper-session evidence is collected.
+- Fixed opening range breakout/breakdown calculation to use the regular-session 09:30-10:00 ET range instead of premarket-contaminated first dataframe rows.
+- Added daily candidate persistence so repeated symbol/direction/setup candidates carry first/last seen timestamps, scan count, current/best score, score delta, and strengthening status.
+- Category-based scoring is retained as a shadow diagnostic for future comparison, while the legacy score remains the active decision score.
+- Added measurement-only analytics modules for market coverage, missed opportunity attribution, entry delay, and daily trading scorecards. The dashboard renders these through `app/dashboard_components/market_coverage.py` without changing scanner decisions.
+- Added `opportunity_funnel.py`, `engine_health.py`, `market_leaderboard.py`, `engineering_recommendation.py`, and `strategy_journal.py` so daily review can show where symbols drop out, whether runtime/quote health affected the day, which movers mattered most, what engineering focus is suggested, and how strategy metrics evolve over time.
+- Production-engineering status: candidate persistence is implemented; scanner market-data prefetch now uses bounded `ThreadPoolExecutor` through `SCANNER_MAX_WORKERS`; engine health writes `engine_health_history.csv` with runtime/workers/symbol/failure/health-score fields; scanner profiling writes `scanner_stage_profile.csv` with stage timings; Polygon cache hit/miss instrumentation is still pending; validation freeze is documented but not code-enforced; graduation criteria are not implemented.
+- Refined entry detection: breakout uses the prior 10-bar resistance level, EMA pullback uses an ATR-aware near-touch, and breakdown requires body strength plus relative-volume confirmation.
+- Added an early weak-exit guard: during the first few bars, near-flat EMA/VWAP/MACD/failed-breakout exits can hold when the trend remains intact. Hard stops, targets, and risk exits still take priority.
+- Added paper-mode option selection so validation can keep the best-quality primary contract active while real readiness remains affordability-gated.
+- Added `data/daily/YYYY-MM-DD/market_opportunity_audit.csv` after each scan for watchlist-level opportunity attribution: symbol, score, shadow category score, setup, action, blocked reason, top candidate, persistence metrics, move %, and replay outcome.
+
 2026-07-09
 - Added invalid fresh-entry filtering in the dashboard so `ACTIVE_TRADE`, `PAPER_TRADE`, `OPEN_TRADE`, `NO_ENTRY`, `NO_SETUP`, and blank/null entry states cannot appear as new suggested-trade or paper-entry candidates.
 - Separated affordability behavior by workflow: suggested-trade lifecycle and paper validation can ignore affordability by default for research visibility, while real-trade readiness requires affordability by default through `REAL_REQUIRE_AFFORDABILITY=true`.
 - Paper validation entries that bypass affordability are tagged with `Paper Affordability Override` plus original affordability status/cost fields in scanner context.
 - Auto-paper decision logs now include affordability override fields, and shadow gate diagnostics use the paper-validation affordability row so expensive validation candidates do not show false gate failures.
+- Dashboard now includes a Paper Validation Performance section with today/overall closed trade count, win/loss rate, total R, average R, estimated dollar P/L, and an expandable closed-trade detail table sourced from daily/root paper trade events and paper trade state files.
 - Added a narrow paper-only high-quality index/ETF review-validation exception for SPY/QQQ `REVIEW_TV_CHART` rows. The exception is limited to safe setup types, live option quotes, strong setup/RR/option-quality thresholds, tight spread/quote-age/scans requirements, no late-chase/missed-move flags, no event/regime blocks, and valid price geometry. It does not loosen non-top-candidate gates for single names such as SMCI.
 - Dashboard manual and auto paper-entry promotion now passes full suggestion identity: symbol, direction, setup type, option ticker, opened timestamp, and paper trade key.
 - Suggested trade promotion now marks matched records as `PROMOTED_TO_PAPER`, stores `promoted_at` and `paper_trade_key`, clears stale expiry/realtime block reasons, and protects both legacy `ENTERED_PAPER` and new `PROMOTED_TO_PAPER` statuses from later expiry/cleanup.

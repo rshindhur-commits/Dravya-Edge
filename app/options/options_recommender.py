@@ -181,7 +181,8 @@ def recommend_live_option_bundle(
     symbol,
     latest_price,
     final_signal,
-    entry_type=None
+    entry_type=None,
+    paper_mode=False
 ):
 
     try:
@@ -213,7 +214,8 @@ def recommend_live_option_bundle(
         ranked = rank_option_contracts(
             contracts,
             latest_price,
-            direction
+            direction,
+            paper_mode=paper_mode
         )
 
         if not ranked:
@@ -240,7 +242,9 @@ def recommend_live_option_bundle(
         )
 
         active = (
-            affordable
+            primary
+            if paper_mode
+            else affordable
             if (
                 affordability_config.get("mode") != "OFF"
                 and affordable

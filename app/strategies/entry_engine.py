@@ -1,5 +1,46 @@
 from app.utils.runtime_logging import debug_print
 
+import pandas as pd
+
+
+ENTRY_BASE_SCORES = {
+    "BREAKDOWN_SHORT": 90,
+    "EMA_PULLBACK": 85,
+    "BREAKOUT": 80,
+    "VWAP_REJECTION": 88,
+    "EMA_REJECTION_SHORT": 86
+}
+
+
+def _entry_score(setup_type, analysis, latest, avoid_chasing, direction):
+
+    base_score = ENTRY_BASE_SCORES.get(setup_type, 70)
+
+    try:
+
+        analysis_score = abs(float(analysis.get("score", 0)))
+
+    except Exception:
+
+        analysis_score = 0
+
+    market_regime = str(analysis.get("market_regime") or "").upper()
+    market_regime_bonus = 0
+
+    if direction == "CALL" and market_regime == "TRENDING_BULLISH":
+
+        market_regime_bonus = 5
+
+    elif direction == "PUT" and market_regime == "TRENDING_BEARISH":
+
+        market_regime_bonus = 5
+
+    rel_volume = latest.get("REL_VOLUME", 0) or 0
+    volume_bonus = 5 if rel_volume > 1.5 else 3 if rel_volume > 1.2 else 0
+    extension_penalty = 5 if avoid_chasing else 0
+
+    return base_score + analysis_score + market_regime_bonus + volume_bonus - extension_penalty
+
 
 def detect_entry(df, analysis):
 
@@ -79,10 +120,16 @@ def detect_entry(df, analysis):
 
     recent_high = (
         df["High"]
-        .shift(1)
-        .tail(5)
+        .rolling(10)
         .max()
+        .iloc[-2]
+        if len(df) >= 2
+        else df["High"].max()
     )
+
+    if pd.isna(recent_high):
+
+        recent_high = df["High"].shift(1).tail(10).max()
 
     if (
         latest["Close"] > recent_high and latest["REL_VOLUME"] > 1.2
@@ -92,7 +139,13 @@ def detect_entry(df, analysis):
         ]
     ):
 
-        setup_score = 4  
+        setup_score = _entry_score(
+            "BREAKOUT",
+            analysis,
+            latest,
+            avoid_chasing,
+            "CALL"
+        )
 
         if setup_score > best_score:
             best_score = setup_score
@@ -152,13 +205,19 @@ def detect_entry(df, analysis):
          and
 
         latest["Close"] > latest["EMA9"]
-        and latest["Low"] <= latest["EMA9"]
+        and abs(latest["Low"] - latest["EMA9"]) <= latest.get("ATR", 0) * 0.25
         and latest["EMA9"] > latest["EMA20"]
 
     ):
 
 
-        setup_score = 4
+        setup_score = _entry_score(
+            "EMA_PULLBACK",
+            analysis,
+            latest,
+            avoid_chasing,
+            "CALL"
+        )
 
         if setup_score > best_score:
             best_score = setup_score  
@@ -206,7 +265,13 @@ def detect_entry(df, analysis):
             f"ema20={latest['EMA20']:.2f}"
         )        
 
-        setup_score = 4
+        setup_score = _entry_score(
+            "EMA_REJECTION_SHORT",
+            analysis,
+            latest,
+            avoid_chasing,
+            "PUT"
+        )
 
         if setup_score > best_score:
 
@@ -350,29 +415,22 @@ def detect_entry(df, analysis):
     debug_print(
         f"[BREAKDOWN LEVELS] "
         f"close={latest['Close']} "
-        f"support={latest['ROLLING_SUPPORT']} "
-        f"prev_low={latest['PREV_LOW']} "
+        f"support={latest.get('ROLLING_SUPPORT')} "
+        f"prev_low={latest.get('PREV_LOW')} "
         f"breakdown={latest['BREAKDOWN']}"
     )    
 
     if (
         (
             latest.get("BREAKDOWN", False)
-            or
-            (
-                latest.get("LOWER_HIGH", False)
-                and latest["TREND_PHASE"] == "DOWNTREND"
-            )    
+            and latest.get("LOWER_HIGH", False)
         )
         and
         latest["Close"] < latest["VWAP"]
         and
         latest["EMA9"] < latest["EMA20"]
-        # and latest["REL_VOLUME"] > 1.0        #Enable after market opens
-        and latest.get(
-            "LOWER_HIGH",
-            False
-        )
+        and latest.get("BODY_STRENGTH", 0) > 0.5
+        and latest.get("REL_VOLUME", 0) > 1.1
     ):
 
         recent_low = (
@@ -394,7 +452,13 @@ def detect_entry(df, analysis):
                 f"LOWER_HIGH={latest['LOWER_HIGH']}"
             )            
 
-            setup_score = 5
+            setup_score = _entry_score(
+                "BREAKDOWN_SHORT",
+                analysis,
+                latest,
+                avoid_chasing,
+                "PUT"
+            )
             if setup_score > best_score:
                 best_score = setup_score
             
@@ -438,7 +502,13 @@ def detect_entry(df, analysis):
 
     ):        
 
-        setup_score = 5
+        setup_score = _entry_score(
+            "VWAP_REJECTION",
+            analysis,
+            latest,
+            avoid_chasing,
+            "PUT"
+        )
         if setup_score > best_score:
             best_score = setup_score  
 

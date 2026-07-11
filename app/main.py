@@ -9,6 +9,8 @@ from app.state.state_trade_manager import (
     update_trade
 )
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 import time
 import json
 import pandas as pd
@@ -87,6 +89,16 @@ from app.analytics.trade_telemetry import (
     save_trade_telemetry
 )
 
+from app.analytics.engine_health import (
+    append_engine_health_history,
+    calculate_health_score,
+    EngineHealth
+)
+from app.analytics.scanner_profiler import (
+    StageTimer,
+    append_scanner_stage_profile
+)
+
 from app.analytics.candidate_snapshot_writer import (
     append_candidate_snapshots
 )
@@ -133,6 +145,320 @@ SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
     min_option_quality=65.0,
     max_spread_pct=10.0
 )
+
+
+def _env_bool(name, default=False):
+
+    value = os.getenv(name)
+
+    if value is None:
+
+        return default
+
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _paper_option_validation_mode():
+
+    return _env_bool(
+        "PAPER_IGNORE_AFFORDABILITY",
+        True
+    )
+
+
+def _env_int(name, default):
+
+    value = os.getenv(name)
+
+    if value is None:
+
+        return default
+
+    try:
+
+        return int(str(value).strip())
+
+    except Exception:
+
+        return default
+
+
+SCANNER_MAX_WORKERS = max(
+    1,
+    _env_int("SCANNER_MAX_WORKERS", 5)
+)
+
+
+def process_symbol(symbol):
+
+    start = time.perf_counter()
+
+    try:
+
+        df_5m_raw = get_polygon_data(
+            symbol,
+            5,
+            "minute",
+            1
+        )
+
+        return {
+            "symbol": symbol,
+            "data": df_5m_raw,
+            "runtime": time.perf_counter() - start,
+            "success": True,
+            "error": None,
+        }
+
+    except Exception as exc:
+
+        return {
+            "symbol": symbol,
+            "data": pd.DataFrame(),
+            "runtime": time.perf_counter() - start,
+            "success": False,
+            "error": str(exc),
+        }
+
+
+def _prefetch_watchlist_market_data(watchlist):
+
+    if SCANNER_MAX_WORKERS <= 1:
+
+        return {
+            symbol: process_symbol(symbol)
+            for symbol in watchlist
+        }
+
+    results = {}
+
+    with ThreadPoolExecutor(max_workers=SCANNER_MAX_WORKERS) as executor:
+
+        future_map = {
+            executor.submit(process_symbol, symbol): symbol
+            for symbol in watchlist
+        }
+
+        for future in as_completed(future_map):
+
+            symbol = future_map[future]
+            results[symbol] = future.result()
+
+    return results
+
+
+def _candidate_persistence_key(row):
+
+    return "|".join(
+        str(row.get(field) or "").strip().upper()
+        for field in [
+            "Symbol",
+            "Candidate Direction",
+            "Entry"
+        ]
+    )
+
+
+def _load_candidate_persistence_state(trading_day):
+
+    path = daily_path(trading_day, "candidate_persistence_state.json")
+
+    try:
+
+        if not path.exists() or path.stat().st_size == 0:
+
+            return {}
+
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    except Exception:
+
+        return {}
+
+
+def _save_candidate_persistence_state(trading_day, state):
+
+    path = daily_path(trading_day, "candidate_persistence_state.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(state, indent=2, default=str),
+        encoding="utf-8"
+    )
+
+
+def _add_candidate_persistence(df_results, trading_day, scan_id):
+
+    if df_results.empty:
+
+        return df_results
+
+    state = _load_candidate_persistence_state(trading_day)
+    observed_at = now_et().isoformat()
+    output = df_results.copy()
+
+    for column in [
+        "Candidate Persistence Key",
+        "Candidate First Seen",
+        "Candidate Last Seen",
+        "Candidate Scan Count",
+        "Candidate Best Score",
+        "Candidate Current Score",
+        "Candidate Score Delta",
+        "Candidate Strengthening"
+    ]:
+
+        if column not in output.columns:
+
+            output[column] = None
+
+    for index, row in output.iterrows():
+
+        entry_type = str(row.get("Entry") or "").strip().upper()
+        direction = str(row.get("Candidate Direction") or "").strip().upper()
+
+        if entry_type in {"", "NAN", "NONE", "NO_ENTRY", "NO_SETUP"} or direction not in {"CALL", "PUT"}:
+
+            continue
+
+        key = _candidate_persistence_key(row)
+        current_score = _safe_metric(
+            pd.DataFrame([{"score": row.get("15m Score")}]),
+            "score"
+        )
+
+        existing = state.get(key, {})
+        first_seen = existing.get("first_seen_at", observed_at)
+        scan_count = int(existing.get("scan_count", 0) or 0) + 1
+        previous_score = existing.get("current_score")
+        best_score = existing.get("best_score")
+
+        try:
+
+            current_score_float = float(current_score)
+
+        except Exception:
+
+            current_score_float = None
+
+        try:
+
+            previous_score_float = float(previous_score)
+
+        except Exception:
+
+            previous_score_float = None
+
+        try:
+
+            best_score_float = float(best_score)
+
+        except Exception:
+
+            best_score_float = current_score_float
+
+        if current_score_float is not None:
+
+            best_score_float = max(
+                current_score_float,
+                best_score_float if best_score_float is not None else current_score_float
+            )
+
+        score_delta = (
+            round(current_score_float - previous_score_float, 2)
+            if current_score_float is not None and previous_score_float is not None
+            else None
+        )
+        strengthening = score_delta is not None and score_delta > 0
+
+        state[key] = {
+            "symbol": row.get("Symbol"),
+            "direction": direction,
+            "entry": entry_type,
+            "first_seen_at": first_seen,
+            "last_seen_at": observed_at,
+            "last_scan_id": scan_id,
+            "scan_count": scan_count,
+            "current_score": current_score_float,
+            "previous_score": previous_score_float,
+            "best_score": best_score_float,
+            "score_delta": score_delta,
+            "strengthening": strengthening,
+            "action_status": row.get("Action Status"),
+            "top_candidate": row.get("Top Candidate")
+        }
+        output.at[index, "Candidate Persistence Key"] = key
+        output.at[index, "Candidate First Seen"] = first_seen
+        output.at[index, "Candidate Last Seen"] = observed_at
+        output.at[index, "Candidate Scan Count"] = scan_count
+        output.at[index, "Candidate Best Score"] = best_score_float
+        output.at[index, "Candidate Current Score"] = current_score_float
+        output.at[index, "Candidate Score Delta"] = score_delta
+        output.at[index, "Candidate Strengthening"] = strengthening
+
+    _save_candidate_persistence_state(trading_day, state)
+
+    return output
+
+
+def _append_market_opportunity_audit(df_results, trading_day, scan_id):
+
+    try:
+
+        if df_results.empty:
+
+            return None
+
+        def audit_column(name):
+
+            if name in df_results.columns:
+
+                return df_results[name]
+
+            return pd.Series([None] * len(df_results), index=df_results.index)
+
+        blocked_reason = (
+            audit_column("Blocked By")
+            .combine_first(audit_column("Action Reason"))
+            .combine_first(audit_column("Option Rejection Reason"))
+        )
+
+        audit = pd.DataFrame({
+            "trading_day": trading_day,
+            "scan_id": scan_id,
+            "observed_at": now_et().isoformat(),
+            "symbol": audit_column("Symbol"),
+            "score": audit_column("15m Score"),
+            "category_score": audit_column("Category Score"),
+            "setup": audit_column("Entry"),
+            "action": audit_column("Action Status"),
+            "blocked_reason": blocked_reason,
+            "top_candidate": audit_column("Top Candidate"),
+            "candidate_scan_count": audit_column("Candidate Scan Count"),
+            "candidate_best_score": audit_column("Candidate Best Score"),
+            "candidate_score_delta": audit_column("Candidate Score Delta"),
+            "candidate_strengthening": audit_column("Candidate Strengthening"),
+            "market_move_pct": audit_column("Symbol Move %"),
+            "final_outcome": audit_column("Replay Outcome")
+        })
+        path = daily_path(trading_day, "market_opportunity_audit.csv")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not path.exists() or path.stat().st_size == 0
+        audit.to_csv(
+            path,
+            mode="a",
+            header=write_header,
+            index=False
+        )
+
+        return {
+            "path": str(path),
+            "rows": len(audit)
+        }
+
+    except Exception as exc:
+
+        print(f"[MARKET OPPORTUNITY AUDIT WARNING] {exc}")
+        return None
 
 
 def _align_action_status_with_entry_gate(row):
@@ -1937,6 +2263,8 @@ def _dispatch_telegram_entry_alerts(df_results):
 
 def run_scanner():   
 
+    scan_perf_start = time.perf_counter()
+    stage_timer = StageTimer()
     validate_runtime_settings()
     print_runtime_banner()
     print_db_status()
@@ -1978,10 +2306,16 @@ def run_scanner():
         "reference_regime",
         "UNKNOWN"
     )
+    with stage_timer.stage("Market Data"):
+
+        market_data_prefetch = _prefetch_watchlist_market_data(WATCHLIST)
+
+    symbol_runtimes = {}
+    symbol_failures = {}
     
     for symbol in WATCHLIST:
 
-        time.sleep(0.5)
+        symbol_start = time.perf_counter()
 
         try:
 
@@ -1989,12 +2323,14 @@ def run_scanner():
             # Fetch ONLY fresh 5m Polygon data
             # =====================================
 
-            df_5m_raw = get_polygon_data(
-                symbol,
-                5,
-                "minute",
-                1
-            )
+            prefetch_result = market_data_prefetch.get(symbol) or process_symbol(symbol)
+            symbol_runtimes[symbol] = prefetch_result.get("runtime")
+
+            if not prefetch_result.get("success"):
+
+                raise RuntimeError(prefetch_result.get("error") or "market data fetch failed")
+
+            df_5m_raw = prefetch_result.get("data")
 
 
             if df_5m_raw.empty:
@@ -2061,9 +2397,13 @@ def run_scanner():
             # Apply indicators
             # =====================================
 
-            df_5m = compute_indicators(df_5m_raw,interval="5m",symbol=symbol)
+            with stage_timer.stage("Indicators"):
 
-            df_15m = compute_indicators(df_15m_raw,interval="15m",symbol=symbol)
+                df_5m = compute_indicators(df_5m_raw,interval="5m",symbol=symbol)
+
+                df_15m = compute_indicators(df_15m_raw,interval="15m",symbol=symbol)
+
+                df_1h = compute_indicators(df_1h_raw,interval="1h",symbol=symbol)
 
             try:
 
@@ -2074,8 +2414,6 @@ def run_scanner():
             except Exception:
 
                 market_reference[symbol] = 0            
-
-            df_1h = compute_indicators(df_1h_raw,interval="1h",symbol=symbol)
 
             symbol_move_pct = _safe_metric(
                 df_15m,
@@ -2161,29 +2499,31 @@ def run_scanner():
             # Analyze each timeframe
             # =====================================
 
-            analysis_5m = analyze_setup(df_5m)
+            with stage_timer.stage("Strategy"):
 
-            analysis_15m = (
-                analyze_setup(df_15m)
-                if not df_15m.empty
-                else {
-                    "signal": "NEUTRAL",
-                    "score": 0,
-                    "reasons": ["15m unavailable"],
-                    "valid": False
-                }
-            )
+                analysis_5m = analyze_setup(df_5m)
 
-            analysis_1h = (
-                analyze_setup(df_1h)
-                if not df_1h.empty
-                else {
-                    "signal": "NEUTRAL",
-                    "score": 0,
-                    "reasons": ["1h unavailable"],
-                    "valid": False
-                }
-            )            
+                analysis_15m = (
+                    analyze_setup(df_15m)
+                    if not df_15m.empty
+                    else {
+                        "signal": "NEUTRAL",
+                        "score": 0,
+                        "reasons": ["15m unavailable"],
+                        "valid": False
+                    }
+                )
+
+                analysis_1h = (
+                    analyze_setup(df_1h)
+                    if not df_1h.empty
+                    else {
+                        "signal": "NEUTRAL",
+                        "score": 0,
+                        "reasons": ["1h unavailable"],
+                        "valid": False
+                    }
+                )
 
             # =====================================
             # Analysis validation protection
@@ -2244,10 +2584,12 @@ def run_scanner():
 
                 if not df_15m.empty:
 
-                    entry_setup = detect_entry(
-                        df_15m,
-                        analysis_15m
-                    )
+                    with stage_timer.stage("Entries"):
+
+                        entry_setup = detect_entry(
+                            df_15m,
+                            analysis_15m
+                        )
 
                 else:
 
@@ -2279,11 +2621,13 @@ def run_scanner():
 
             if not df_15m.empty:
 
-                risk_setup = calculate_risk(
-                    df_15m,
-                    analysis_15m,
-                    entry_setup
-                )
+                with stage_timer.stage("Risk"):
+
+                    risk_setup = calculate_risk(
+                        df_15m,
+                        analysis_15m,
+                        entry_setup
+                    )
 
                 print(
                     f"[RISK ENGINE] "
@@ -2516,50 +2860,52 @@ def run_scanner():
                 # Evaluate exits FIRST
                 # =====================================
 
-                exit_setup = evaluate_exit(
+                with stage_timer.stage("Paper Trades"):
 
-                    df_15m,
+                    exit_setup = evaluate_exit(
 
-                    analysis_15m,
+                        df_15m,
 
-                    {
+                        analysis_15m,
 
-                        "stop_loss": (
-                            active_trade["stop_loss"]
-                        ),
+                        {
 
-                        "take_profit": (
-                            active_trade["take_profit"]
-                        ),
+                            "stop_loss": (
+                                active_trade["stop_loss"]
+                            ),
 
-                        "entry_price": (
-                            active_trade.get(
-                                "entry_price",
-                                None
-                            )
-                        )
+                            "take_profit": (
+                                active_trade["take_profit"]
+                            ),
 
-                    },
-                    
-                    # For active trades, infer direction
-                    # from stop_loss vs entry_price
-                    {
-                        "entry_type": (
-                            active_trade.get("entry_type")
-                            or (
-                                "BREAKDOWN_SHORT"
-                                if (
-                                    active_trade.get("stop_loss", 0)
-                                    > active_trade.get("entry_price", 0)
+                            "entry_price": (
+                                active_trade.get(
+                                    "entry_price",
+                                    None
                                 )
-                                else "BREAKOUT_LONG"
                             )
-                        )
-                    },
 
-                    trade_state=active_trade
+                        },
+                    
+                        # For active trades, infer direction
+                        # from stop_loss vs entry_price
+                        {
+                            "entry_type": (
+                                active_trade.get("entry_type")
+                                or (
+                                    "BREAKDOWN_SHORT"
+                                    if (
+                                        active_trade.get("stop_loss", 0)
+                                        > active_trade.get("entry_price", 0)
+                                    )
+                                    else "BREAKOUT_LONG"
+                                )
+                            )
+                        },
 
-                )
+                        trade_state=active_trade
+
+                    )
 
                 trade_management.update({
                     "trade_action": exit_setup["trade_action"],
@@ -3026,14 +3372,17 @@ def run_scanner():
                 and risk_setup["trade_allowed"]
             ):
 
-                option_bundle = (
-                    recommend_live_option_bundle(
-                        symbol,
-                        latest_price,
-                        final_signal,
-                        entry_setup.get("entry_type")
+                with stage_timer.stage("Options"):
+
+                    option_bundle = (
+                        recommend_live_option_bundle(
+                            symbol,
+                            latest_price,
+                            final_signal,
+                            entry_setup.get("entry_type"),
+                            paper_mode=_paper_option_validation_mode()
+                        )
                     )
-                )
 
                 best_quality_option = option_bundle.get(
                     "primary"
@@ -3478,6 +3827,8 @@ def run_scanner():
                 "Final Signal": final_signal,
 
                 "15m Score": analysis_15m["score"],
+
+                "Category Score": analysis_15m.get("category_score"),
 
                 "Alignment Score": round(
                     alignment_score,
@@ -4648,35 +4999,117 @@ def run_scanner():
                 "Fix scanner exception"
             )
 
+            symbol_failures[symbol] = str(e)
+
         time.sleep(0.5)
+        symbol_runtimes[symbol] = time.perf_counter() - symbol_start
 
     # =========================
     # Export Excel Report
     # =========================
 
     df_results = pd.DataFrame(results)
-    df_results = _add_relative_strength_rankings(
-        df_results
+    scan_runtime_sec = round(time.perf_counter() - scan_perf_start, 2)
+    with stage_timer.stage("Dashboard"):
+
+        df_results = _add_candidate_persistence(
+            df_results,
+            trading_day,
+            scan_id
+        )
+        df_results = _add_relative_strength_rankings(
+            df_results
+        )
+        audit_result = _append_market_opportunity_audit(
+            df_results,
+            trading_day,
+            scan_id
+        )
+
+    if audit_result:
+
+        print(
+            "[MARKET OPPORTUNITY AUDIT] "
+            f"saved {audit_result['rows']} rows to "
+            f"{audit_result['path']}"
+        )
+
+    option_freshness = df_results.get("Option Quote Freshness", pd.Series(dtype=object)).astype(str).str.upper()
+    successful_runtimes = [
+        runtime for symbol, runtime in symbol_runtimes.items()
+        if symbol not in symbol_failures and runtime is not None
+    ]
+    average_symbol_runtime = (
+        round(sum(successful_runtimes) / len(successful_runtimes), 2)
+        if successful_runtimes
+        else None
     )
-    record_gate_decisions(
-        df_results.to_dict("records"),
-        run_id=scan_id
+    health = EngineHealth(
+        scan_runtime_sec=scan_runtime_sec,
+        scanner_runtime=scan_runtime_sec,
+        worker_count=SCANNER_MAX_WORKERS,
+        polygon_calls=len(WATCHLIST),
+        polygon_failures=len(symbol_failures),
+        exceptions=len(symbol_failures),
+        average_symbol_runtime=average_symbol_runtime,
+        average_symbol_time=average_symbol_runtime,
+        symbols_completed=len(WATCHLIST) - len(symbol_failures),
+        symbols_failed=len(symbol_failures),
+        fresh_quotes=int(option_freshness.eq("LIVE_QUOTE").sum()),
+        stale_quotes=int(option_freshness.eq("STALE_QUOTE").sum()),
+        delayed_quotes=int(option_freshness.eq("DELAYED_QUOTE").sum()),
+    )
+    health.health_score = calculate_health_score(health)
+    with stage_timer.stage("Engine Health"):
+
+        append_engine_health_history(
+            trading_day,
+            {
+                "timestamp": now_et().isoformat(),
+                "scan_runtime_sec": health.scan_runtime_sec,
+                "health_score": health.health_score,
+                "cache_hit_rate": health.cache_hit_rate,
+                "worker_count": health.worker_count,
+                "polygon_calls": health.polygon_calls,
+                "exceptions": health.exceptions,
+                "symbols_completed": health.symbols_completed,
+                "symbols_failed": health.symbols_failed,
+                "average_symbol_runtime": health.average_symbol_runtime,
+            }
+        )
+    print(
+        "[ENGINE HEALTH] "
+        f"score={health.health_score} "
+        f"runtime={health.scan_runtime_sec}s "
+        f"workers={health.worker_count} "
+        f"symbols={health.symbols_completed}/{len(WATCHLIST)}"
     )
 
-    snapshot_result = append_candidate_snapshots(
-        df_results,
-        trading_day=trading_day,
-        scan_id=scan_id
-    )
+    with stage_timer.stage("Database"):
+
+        record_gate_decisions(
+            df_results.to_dict("records"),
+            run_id=scan_id
+        )
+
+    with stage_timer.stage("Dashboard"):
+
+        snapshot_result = append_candidate_snapshots(
+            df_results,
+            trading_day=trading_day,
+            scan_id=scan_id
+        )
 
     try:
 
-        lifecycle_count = record_signal_lifecycle_events_for_scan(
-            df_results.to_dict("records"),
-            trading_day=trading_day,
-            scan_id=scan_id,
-            observed_at=now_et()
-        )
+        with stage_timer.stage("Dashboard"):
+
+            lifecycle_count = record_signal_lifecycle_events_for_scan(
+                df_results.to_dict("records"),
+                trading_day=trading_day,
+                scan_id=scan_id,
+                observed_at=now_et()
+            )
 
         print(
             f"[SIGNAL LIFECYCLE] recorded {lifecycle_count} observations"
@@ -4697,9 +5130,11 @@ def run_scanner():
             f"{snapshot_result['path']}"
         )
 
-    _dispatch_telegram_entry_alerts(
-        df_results
-    )
+    with stage_timer.stage("Telegram"):
+
+        _dispatch_telegram_entry_alerts(
+            df_results
+        )
 
     output_file = (
         settings.scanner_output_file
@@ -4707,55 +5142,57 @@ def run_scanner():
 
     try:
 
-        live_csv_path = live_path("scanner_output_latest.csv")
-        daily_csv_path = daily_path(trading_day, "scanner_output_close.csv")
-        live_csv_path.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-        daily_csv_path.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-        df_results.to_csv(
-            live_csv_path,
-            index=False
-        )
-        df_results.to_csv(
-            daily_csv_path,
-            index=False
-        )
+        with stage_timer.stage("Excel"):
 
-        with pd.ExcelWriter(
-
-            output_file,
-            engine="openpyxl"
-
-        ) as writer:
-
-            df_results.to_excel(
-
-                writer,
-                sheet_name="Scanner",
+            live_csv_path = live_path("scanner_output_latest.csv")
+            daily_csv_path = daily_path(trading_day, "scanner_output_close.csv")
+            live_csv_path.parent.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+            daily_csv_path.parent.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+            df_results.to_csv(
+                live_csv_path,
                 index=False
-
+            )
+            df_results.to_csv(
+                daily_csv_path,
+                index=False
             )
 
-        for mirror_output_file in [
-            live_path("scanner_output_latest.xlsx"),
-            daily_path(trading_day, "scanner_output_close.xlsx")
-        ]:
-
             with pd.ExcelWriter(
-                mirror_output_file,
+
+                output_file,
                 engine="openpyxl"
-            ) as mirror_writer:
+
+            ) as writer:
 
                 df_results.to_excel(
-                    mirror_writer,
+
+                    writer,
                     sheet_name="Scanner",
                     index=False
+
                 )
+
+            for mirror_output_file in [
+                live_path("scanner_output_latest.xlsx"),
+                daily_path(trading_day, "scanner_output_close.xlsx")
+            ]:
+
+                with pd.ExcelWriter(
+                    mirror_output_file,
+                    engine="openpyxl"
+                ) as mirror_writer:
+
+                    df_results.to_excel(
+                        mirror_writer,
+                        sheet_name="Scanner",
+                        index=False
+                    )
 
     except PermissionError:
 
@@ -4774,38 +5211,56 @@ def run_scanner():
 
         output_file = fallback_output_file
 
-        with pd.ExcelWriter(
+        with stage_timer.stage("Excel"):
 
-            output_file,
-            engine="openpyxl"
+            with pd.ExcelWriter(
 
-        ) as writer:
+                output_file,
+                engine="openpyxl"
 
-            df_results.to_excel(
+            ) as writer:
 
-                writer,
-                sheet_name="Scanner",
-                index=False
+                df_results.to_excel(
 
-            )
+                    writer,
+                    sheet_name="Scanner",
+                    index=False
+
+                )
 
     print(
         f"\nExcel report saved:"
         f" {output_file}"
     )
-    record_scanner_run_finish(
+    with stage_timer.stage("Database"):
+
+        record_scanner_run_finish(
+            scan_id,
+            status="FINISHED",
+            rows_count=len(df_results),
+            payload={
+                "trading_day": trading_day,
+                "output_file": str(output_file),
+                "snapshot_rows": (
+                    snapshot_result or {}
+                ).get("rows")
+            }
+        )
+
+    profile_result = append_scanner_stage_profile(
+        trading_day,
         scan_id,
-        status="FINISHED",
-        rows_count=len(df_results),
-        payload={
-            "trading_day": trading_day,
-            "output_file": str(output_file),
-            "snapshot_rows": (
-                snapshot_result or {}
-            ).get("rows")
-        }
+        stage_timer,
+        observed_at=now_et().isoformat()
     )
 
+    if profile_result:
+
+        print(
+            "[SCANNER PROFILE] "
+            f"saved {profile_result['rows']} stages to "
+            f"{profile_result['path']}"
+        )
 
     console.print(table)
 
