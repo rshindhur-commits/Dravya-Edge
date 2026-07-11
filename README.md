@@ -26,6 +26,19 @@ The app now has a first-pass research layer for validating edge quality before a
 
 The backtesting framework is intentionally stock-first. It validates whether the underlying setup hit target before stop using historical candles; historical option quote replay and option P/L approximation are later steps.
 
+## Calibration Phase Changes
+
+The project is now in a calibration phase: avoid adding new indicators or broad threshold loosening until more paper sessions are reviewed. Recent code changes are intentionally targeted to behavior observed during the first six-day validation sample:
+
+- ORB uses the regular-session 09:30-10:00 ET opening range instead of the first rows of a dataframe, so premarket candles do not corrupt opening-range breakout/breakdown levels.
+- Candidate persistence tracks technically valid setups across repeated scans with first/last seen timestamps, scan count, best/current score, score delta, and strengthening status.
+- Category score is recorded as a shadow diagnostic only. The legacy score remains the decision score until enough paper-trade evidence exists to compare old score versus category score.
+- Breakout detection uses the prior 10-bar resistance level. EMA pullback detection is volatility-aware using `ATR * 0.25`. Breakdown entries require breakdown structure, body strength, and relative volume confirmation.
+- Early weak exits are guarded for the first few bars when the trade is near flat and trend remains intact. Hard stops, targets, and other risk exits remain active.
+- Paper-mode option selection can keep the best-quality contract active for validation when paper affordability override is enabled. Real-trade readiness remains affordability-gated.
+
+These changes are calibration refinements, not a new strategy family. Do not change EMA periods, RSI/MACD thresholds, ATR rules, DTE/delta rules, risk manager thresholds, or setup/RR thresholds without a larger validation sample.
+
 ## Daily Validation Report
 
 Daily validation uses a session model:
@@ -78,6 +91,49 @@ Auto-paper decisions are stored in two places with different purposes:
 - `app/state/auto_paper_decision_log.json`: capped to the most recent 500 rows for fast dashboard display.
 
 Every auto-paper decision includes market-session fields such as `trading_day`, `session_id`, `scan_id`, `scan_timestamp`, `market_session`, `decision_time_bucket`, `is_auto_entry_window`, `is_after_close`, `minutes_from_open`, and `minutes_to_close`. Starting from the latest fixes, each decision also logs the active gate thresholds at decision time: `gate_mode` (always `"auto_paper"`), `min_rr_used`, and `min_setup_used`. This makes it possible to tell whether a skip reason like `RR_BELOW_THRESHOLD` was caused by the actual threshold in use at that moment, or by a gate mismatch. Decision rows also include scanner eligibility diagnostics such as `setup_valid`, `execution_ready`, `realtime_ready`, `affordable`, `price_geometry_ok`, `price_geometry_error`, `scanner_output_age_minutes`, `allow_review_tv_chart_auto_paper`, and `review_validation_candidate`, so startup/restart skips like `NO_AUTO_PAPER_CANDIDATE` can be inspected directly. The report reads the full daily CSV first and falls back to the capped JSON with a warning if the daily file is missing.
+
+Every completed scanner run also appends `data/daily/YYYY-MM-DD/market_opportunity_audit.csv`. This is a lightweight watchlist-level audit trail with symbol, score, setup, action, blocked reason, top-candidate tag, symbol move %, and replay outcome. Use it after the close to answer whether major movers were detected, accepted, blocked, or missed by a specific layer.
+
+The opportunity audit also includes candidate persistence fields when a setup persists across scans: candidate scan count, best score, score delta, and whether the setup strengthened. This lets daily review separate one-scan false positives from setups that matured over time.
+
+## Trading Research Widgets
+
+The dashboard includes measurement-only research widgets built from daily files. They do not change scanner decisions:
+
+- `Trading Scorecard`: summarizes market regime, market coverage, signal count, paper entries, expectancy, and recommendations for the current trading day.
+- `Market Coverage`: estimates how many strong watchlist movers were detected, directionally correct, entered, profitable, missed, or correctly skipped.
+- `Opportunity Funnel`: counts the watchlist through momentum, entry, risk, option, affordability, realtime, entry, and profitable stages.
+- `Engine Health`: summarizes available scanner/runtime health proxies such as completed symbols, scanner errors, quote freshness, and per-symbol runtime when daily decision timing is available.
+- `Market Leaderboard`: ranks watchlist movers by absolute move and shows detection, entry, result, and miss reason.
+- `Entry Delay`: compares first seen time versus entry time for persisted candidates and reports average, median, longest, and fastest delay.
+- `Candidate Strength`: shows current score, best score, score delta, and whether a persisted setup is strengthening, weakening, or flat.
+- `Missed Opportunity Attribution`: classifies missed movers by likely layer: momentum, entry, risk, option, affordability, exit, or unknown.
+- `Engineering Recommendation`: applies simple rules to coverage, entry rate, win rate, and option rejection rate to suggest the next engineering focus.
+- `Strategy Journal`: upserts a daily strategy journal row with coverage, win rate, expectancy, largest miss, recommendation, and confidence.
+
+These widgets are fed primarily by `market_opportunity_audit.csv`, `paper_trade_events.csv`, `scanner_output_close.csv`, `auto_paper_decisions.csv`, and candidate snapshots. Use them after each session to decide where engineering time should go without introducing new indicators, AI scoring, ML prediction, or exit-confidence models prematurely.
+
+## Production Engineering Status
+
+Current implementation status for the production-engineering roadmap:
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| Parallel Scanner | Partially implemented | Market-data prefetch is parallelized with bounded `ThreadPoolExecutor` via `SCANNER_MAX_WORKERS`. Trading/state/DB/Excel/Telegram/lifecycle writes remain sequential by design. |
+| Candidate Persistence State Machine | Implemented | Scanner output includes candidate persistence fields and writes `data/daily/YYYY-MM-DD/candidate_persistence_state.json`. The opportunity audit includes scan count, best score, score delta, and strengthening flags. |
+| Engine Health Score | Partial | `app/analytics/engine_health.py` records scan runtime, worker count, symbol completion/failure counts, quote freshness, and health score to `engine_health_history.csv`. Polygon cache hit/miss instrumentation is still pending. |
+| Validation Freeze | Documented, not enforced | The docs mark the project as being in calibration/freeze mode and recommend avoiding broad strategy changes. There is no code-level freeze gate. |
+| Graduation Criteria | Not implemented | No formal confidence/position-size graduation rules are coded yet. Strategy journal includes a simple confidence value, but it does not enforce sizing rules. |
+
+Before treating Strategy v1.0 as production-ready, the remaining production-engineering work is: expand parallelism beyond market-data prefetch only if it can be done without moving state writes into worker threads, add Polygon cache hit/miss instrumentation, and define explicit graduation criteria for moving from paper validation to increased real position sizing.
+
+Current scanner performance implementation:
+
+- `SCANNER_MAX_WORKERS` controls a bounded `ThreadPoolExecutor` for parallel market-data prefetch. Default: `5`.
+- Trade state updates, lifecycle writes, DB writes, Excel/CSV writes, Telegram alerts, candidate persistence, and dashboard rendering remain sequential.
+- `engine_health_history.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with scan runtime, workers, requests, exceptions, completed/failed symbols, average symbol runtime, and health score.
+- `scanner_stage_profile.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with stage-level timings for market data, indicators, strategy, entries, risk, options, paper trades, dashboard/research persistence, Telegram, Excel/CSV export, database writes, and engine health.
+- The Engine Health dashboard widget reads the latest history row when available.
 
 Auto-paper decisions are emitted from the Streamlit dashboard auto-paper path, not from the standalone scanner loop. The dashboard writer appends the full-day CSV and then updates the capped dashboard JSON from the same decision row.
 

@@ -3,6 +3,129 @@ from app.utils.runtime_logging import debug_print
 import pandas as pd
 
 
+def _category_based_score(latest, df):
+
+    bull_trend = 0
+    bear_trend = 0
+
+    if latest["EMA9"] > latest["EMA20"]:
+
+        bull_trend += 1
+
+    if latest["EMA9"] < latest["EMA20"]:
+
+        bear_trend += 1
+
+    if latest.get("EMA9_SLOPE", 0) > 0:
+
+        bull_trend += 1
+
+    if latest.get("EMA9_SLOPE", 0) < 0:
+
+        bear_trend += 1
+
+    if latest["TREND_PHASE"] == "UPTREND":
+
+        bull_trend += 1
+
+    if latest["TREND_PHASE"] == "DOWNTREND":
+
+        bear_trend += 1
+
+    bull_trend = min(bull_trend, 3)
+    bear_trend = min(bear_trend, 3)
+
+    bull_momentum = 0
+    bear_momentum = 0
+
+    if not pd.isna(latest.get("MACD")) and not pd.isna(latest.get("MACD_SIGNAL")):
+
+        if latest["MACD"] > latest["MACD_SIGNAL"]:
+
+            bull_momentum += 1
+
+        if latest["MACD"] < latest["MACD_SIGNAL"]:
+
+            bear_momentum += 1
+
+    if latest["RSI"] > 55:
+
+        bull_momentum += 1
+
+    if latest["RSI"] < 45:
+
+        bear_momentum += 1
+
+    if latest["Close"] > latest["VWAP"]:
+
+        bull_momentum += 1
+
+    if latest["Close"] < latest["VWAP"]:
+
+        bear_momentum += 1
+
+    bull_momentum = min(bull_momentum, 3)
+    bear_momentum = min(bear_momentum, 3)
+
+    bull_participation = 0
+    bear_participation = 0
+
+    if latest["REL_VOLUME"] > 1.2:
+
+        if latest["Close"] >= latest["VWAP"]:
+
+            bull_participation += 1
+
+        else:
+
+            bear_participation += 1
+
+    if latest["VOLUME_SPIKE"]:
+
+        if latest["Close"] >= latest["Open"]:
+
+            bull_participation += 1
+
+        else:
+
+            bear_participation += 1
+
+    if latest["ATR_PCT"] > 0.35:
+
+        bull_participation += 1
+        bear_participation += 1
+
+    bull_participation = min(bull_participation, 2)
+    bear_participation = min(bear_participation, 2)
+
+    bull_structure = 0
+    bear_structure = 0
+
+    if latest["BREAKOUT"] or latest.get("ORB_BREAKOUT", False):
+
+        bull_structure += 1
+
+    if latest["HIGHER_HIGH"]:
+
+        bull_structure += 1
+
+    if latest["BREAKDOWN"] or latest.get("ORB_BREAKDOWN", False):
+
+        bear_structure += 1
+
+    if latest["LOWER_HIGH"] or latest.get("LOWER_LOW", False):
+
+        bear_structure += 1
+
+    bull_structure = min(bull_structure, 2)
+    bear_structure = min(bear_structure, 2)
+
+    bull_score = bull_trend + bull_momentum + bull_participation + bull_structure
+    bear_score = bear_trend + bear_momentum + bear_participation + bear_structure
+
+    return bull_score if bull_score >= bear_score else -bear_score
+
+
 def analyze_setup(df):
 
     required_columns = [
@@ -866,6 +989,12 @@ def analyze_setup(df):
         f"BREAKDOWN={latest['BREAKDOWN']}"
     )
 
+    category_score = _category_based_score(latest, df)
+
+    neutral_reasons.append(
+        f"Shadow category score: {category_score}"
+    )
+
 
 
 
@@ -874,6 +1003,7 @@ def analyze_setup(df):
     # =========================================
 
     entry_timing_ok = True
+    timing_penalty = 2
 
     # -----------------------------------------
     # 1. Extended Candle Filter
@@ -885,7 +1015,7 @@ def analyze_setup(df):
             "Extended candle risk"
         )
 
-        score -= 2
+        score -= timing_penalty
 
         entry_timing_ok = False
 
@@ -910,7 +1040,7 @@ def analyze_setup(df):
             "Price extended from VWAP"
         )
 
-        score -= 2
+        score -= timing_penalty
 
         entry_timing_ok = False
 
@@ -927,7 +1057,7 @@ def analyze_setup(df):
             "Bullish momentum exhaustion"
         )
 
-        score -= 2
+        score -= timing_penalty
 
         entry_timing_ok = False
 
@@ -940,7 +1070,7 @@ def analyze_setup(df):
             "Bearish momentum exhaustion"
         )
 
-        score -= 2
+        score += timing_penalty
 
         entry_timing_ok = False
 
@@ -988,6 +1118,7 @@ def analyze_setup(df):
     return {
         "signal": signal,
         "score": round(score, 1),
+        "category_score": round(category_score, 1),
         "market_regime": market_regime,
         "entry_timing_ok": entry_timing_ok,        
         "reasons": final_reasons

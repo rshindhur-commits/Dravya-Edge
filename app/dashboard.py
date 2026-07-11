@@ -61,6 +61,7 @@ from app.storage.auto_paper_decision_store import (
     classify_decision_time,
     update_recent_auto_paper_log
 )
+from app.dashboard_components.market_coverage import render_market_coverage
 from app.storage.daily_paths import daily_path, get_daily_dir
 from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
 
@@ -2352,6 +2353,12 @@ def _render_daily_artifact_downloads(report_date):
             "label": "paper_trade_events.csv",
             "path": daily_path(report_date, "paper_trade_events.csv"),
             "file_name": "paper_trade_events.csv",
+            "mime": "text/csv"
+        },
+        {
+            "label": "market_opportunity_audit.csv",
+            "path": daily_path(report_date, "market_opportunity_audit.csv"),
+            "file_name": "market_opportunity_audit.csv",
             "mime": "text/csv"
         },
         {
@@ -5248,6 +5255,14 @@ def _closed_paper_trade_history():
 
             trade_key = str(row.get("trade_key") or "").strip()
             trade = state_records.get(trade_key, {})
+            event_trade = {
+                **trade,
+                **{
+                    key: value
+                    for key, value in row.to_dict().items()
+                    if _has_value(value)
+                }
+            }
             r_multiple = _safe_float(row.get("r_multiple"), None)
             trading_day = str(row.get("trading_day") or "").strip()
 
@@ -5256,18 +5271,30 @@ def _closed_paper_trade_history():
                 event_time = str(row.get("event_time") or "")
                 trading_day = event_time[:10] if len(event_time) >= 10 else None
 
+            if not trade_key:
+
+                trade_key = "|".join(
+                    str(part or "")
+                    for part in [
+                        row.get("symbol"),
+                        row.get("option_ticker"),
+                        row.get("event_time_et") or row.get("event_time")
+                    ]
+                    if str(part or "").strip()
+                )
+
             closed_rows.append({
                 "trade_key": trade_key,
                 "trading_day": trading_day,
-                "closed_at": row.get("event_time"),
-                "symbol": row.get("symbol") or trade.get("symbol"),
-                "direction": row.get("direction") or trade.get("direction"),
-                "option_ticker": row.get("option_ticker") or trade.get("option_ticker"),
+                "closed_at": row.get("event_time_et") or row.get("event_time"),
+                "symbol": row.get("symbol") or event_trade.get("symbol"),
+                "direction": row.get("direction") or event_trade.get("direction"),
+                "option_ticker": row.get("option_ticker") or event_trade.get("option_ticker"),
                 "r_multiple": r_multiple,
-                "estimated_pnl_dollars": _estimated_trade_pnl_dollars(trade, r_multiple),
-                "exit_reason": row.get("exit_reason") or trade.get("exit_reason"),
+                "estimated_pnl_dollars": _estimated_trade_pnl_dollars(event_trade, r_multiple),
+                "exit_reason": row.get("exit_reason") or event_trade.get("exit_reason"),
                 "paper_affordability_override": _trade_context_value(
-                    trade,
+                    event_trade,
                     "Paper Affordability Override",
                     "paper_affordability_override"
                 ),
@@ -6385,6 +6412,8 @@ def main():
     )
 
     _render_compact_market_health(df)
+
+    render_market_coverage(_current_trading_day())
 
     _render_action_center(
         df,

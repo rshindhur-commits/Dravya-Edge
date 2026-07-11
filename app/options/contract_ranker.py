@@ -12,7 +12,8 @@ def rank_option_contracts(
 
     contracts,
     underlying_price,
-    direction="CALL"
+    direction="CALL",
+    paper_mode=False
 
 ):
     
@@ -424,7 +425,7 @@ def rank_option_contracts(
 
             affordability_adjusted_score = score
 
-            if affordability_config.get("mode") != "OFF":
+            if affordability_config.get("mode") != "OFF" and not paper_mode:
 
                 if c.get("preferred_affordable"):
 
