@@ -64,6 +64,7 @@ from app.storage.auto_paper_decision_store import (
 from app.dashboard_components.market_coverage import render_market_coverage
 from app.storage.daily_paths import daily_path, get_daily_dir
 from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
+from app.ui.components import kpi_card
 
 try:
 
@@ -4626,6 +4627,33 @@ def _inject_compact_dashboard_css():
         .compact-neutral {
             border-left: 4px solid #64748b;
         }
+
+        .metric-card {
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 14px 16px;
+            background: #1d1f27;
+            min-height: 84px;
+            margin-bottom: 0.7rem;
+        }
+
+        .metric-label {
+            font-size: 13px;
+            color: #9ca3af;
+            font-weight: 600;
+            margin-bottom: 8px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .metric-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: white;
+            line-height: 1.1;
+            overflow-wrap: anywhere;
+        }
         </style>
         """,
         unsafe_allow_html=True
@@ -4952,9 +4980,17 @@ def _render_compact_auto_paper_summary():
         .value_counts()
     )
     cols = st.columns(4)
-    cols[0].metric("Opened", int(counts.get("OPENED", 0)))
-    cols[1].metric("Blocked", int(counts.get("BLOCKED", 0)))
-    cols[2].metric("Skipped", int(counts.get("SKIPPED", 0)))
+    with cols[0]:
+
+        kpi_card("Opened", str(int(counts.get("OPENED", 0))))
+
+    with cols[1]:
+
+        kpi_card("Blocked", str(int(counts.get("BLOCKED", 0))))
+
+    with cols[2]:
+
+        kpi_card("Skipped", str(int(counts.get("SKIPPED", 0))))
 
     reason = "N/A"
 
@@ -4962,7 +4998,9 @@ def _render_compact_auto_paper_summary():
 
         reason = decisions["reason"].fillna("UNKNOWN").astype(str).value_counts().index[0]
 
-    cols[3].metric("Top Reason", reason)
+    with cols[3]:
+
+        kpi_card("Top Reason", reason)
 
 
 
@@ -5464,12 +5502,20 @@ def _render_performance_metric_row(label, summary):
 
     st.markdown(f"**{label}**")
     cols = st.columns(6)
-    cols[0].metric("Closed", summary["closed_trades"])
-    cols[1].metric("Win %", _format_rate(summary["win_rate"]))
-    cols[2].metric("Loss %", _format_rate(summary["loss_rate"]))
-    cols[3].metric("Total R", _format_r(summary["total_r"]))
-    cols[4].metric("Est. $ P/L", _format_dollars(summary["estimated_pnl_dollars"]))
-    cols[5].metric("Avg R", _format_r(summary["avg_r"]))
+    values = [
+        ("Closed", summary["closed_trades"]),
+        ("Win %", _format_rate(summary["win_rate"])),
+        ("Loss %", _format_rate(summary["loss_rate"])),
+        ("Total R", _format_r(summary["total_r"])),
+        ("Est. $ P/L", _format_dollars(summary["estimated_pnl_dollars"])),
+        ("Avg R", _format_r(summary["avg_r"])),
+    ]
+
+    for col, (metric_label, metric_value) in zip(cols, values):
+
+        with col:
+
+            kpi_card(metric_label, str(metric_value))
 
 
 def _render_paper_validation_performance():
