@@ -1769,14 +1769,27 @@ def _render_file_download_button(
 
         if not file_path.exists() or file_path.stat().st_size == 0:
 
-            container.button(
-                f"{label} - not available yet",
-                disabled=True,
-                key=f"missing_{key_base}"
+            container.markdown(
+                """
+                <div class="download-status download-status-missing">
+                    <div class="download-status-label">{label}</div>
+                    <div class="download-status-note">Not available yet</div>
+                </div>
+                """.format(label=escape(str(label))),
+                unsafe_allow_html=True
             )
             return False
 
         stat = file_path.stat()
+        container.markdown(
+            """
+            <div class="download-status download-status-ready">
+                <div class="download-status-label">{label}</div>
+                <div class="download-status-note">Ready to download</div>
+            </div>
+            """.format(label=escape(str(label))),
+            unsafe_allow_html=True
+        )
         container.download_button(
             label=label,
             data=file_path.read_bytes(),
@@ -1788,10 +1801,14 @@ def _render_file_download_button(
 
     except Exception as exc:
 
-        container.button(
-            f"{label} - unavailable",
-            disabled=True,
-            key=f"unavailable_{key_base}"
+        container.markdown(
+            """
+            <div class="download-status download-status-error">
+                <div class="download-status-label">{label}</div>
+                <div class="download-status-note">Unavailable</div>
+            </div>
+            """.format(label=escape(str(label))),
+            unsafe_allow_html=True
         )
         container.caption(str(exc))
         return False
@@ -4659,6 +4676,42 @@ def _inject_compact_dashboard_css():
             overflow-wrap: anywhere;
         }
 
+        .download-status {
+            border: 1px solid rgba(100, 116, 139, 0.35);
+            border-radius: 8px;
+            padding: 0.58rem 0.7rem;
+            margin: 0.35rem 0 0.25rem 0;
+            background: var(--secondary-background-color);
+            color: var(--text-color);
+        }
+
+        .download-status-ready {
+            border-left: 4px solid #16a34a;
+        }
+
+        .download-status-missing {
+            border-left: 4px solid #94a3b8;
+            opacity: 0.86;
+        }
+
+        .download-status-error {
+            border-left: 4px solid #dc2626;
+        }
+
+        .download-status-label {
+            font-size: 0.86rem;
+            font-weight: 700;
+            line-height: 1.25;
+            color: var(--text-color);
+        }
+
+        .download-status-note {
+            margin-top: 0.18rem;
+            font-size: 0.76rem;
+            font-weight: 650;
+            color: #475569;
+        }
+
         .stDataFrame th,
         .stDataFrame table thead th,
         .stDataFrame table th,
@@ -4697,11 +4750,8 @@ def _inject_compact_dashboard_css():
         }
 
         div[data-testid="stSidebar"],
-        div[data-testid="stAppViewContainer"],
-        div[data-testid="stAppViewContainer"] *,
-        div[data-testid="stSidebar"] * {
+        div[data-testid="stSidebar"] {
             color: var(--text-color) !important;
-            background-color: transparent !important;
         }
 
         div[data-testid="stSidebar"] h2,
@@ -4711,6 +4761,83 @@ def _inject_compact_dashboard_css():
         div[data-testid="stSidebar"] button,
         div[data-testid="stSidebar"] p {
             color: var(--text-color) !important;
+            opacity: 1 !important;
+        }
+
+        div[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+        div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] *,
+        div[data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"],
+        div[data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"] *,
+        div[data-testid="stSidebar"] small,
+        div[data-testid="stSidebar"] .caption,
+        div[data-testid="stAppViewContainer"] small,
+        div[data-testid="stAppViewContainer"] .caption {
+            color: #475569 !important;
+            opacity: 1 !important;
+            font-weight: 600 !important;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            div[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+            div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] *,
+            div[data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"],
+            div[data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"] *,
+            div[data-testid="stSidebar"] small,
+            div[data-testid="stSidebar"] .caption,
+            div[data-testid="stAppViewContainer"] small,
+            div[data-testid="stAppViewContainer"] .caption,
+            .download-status-note {
+                color: #cbd5e1 !important;
+                opacity: 1 !important;
+            }
+        }
+
+        div[data-testid="stToggle"] label,
+        div[data-testid="stToggle"] p,
+        div[data-testid="stCheckbox"] label,
+        div[data-testid="stCheckbox"] p {
+            color: var(--text-color) !important;
+            opacity: 1 !important;
+            font-weight: 650 !important;
+        }
+
+        div[data-testid="stToggle"] [role="switch"],
+        div[data-testid="stCheckbox"] [role="checkbox"] {
+            border: 2px solid #64748b !important;
+            box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.10) !important;
+        }
+
+        div[data-testid="stToggle"] [role="switch"][aria-checked="true"],
+        div[data-testid="stCheckbox"] [role="checkbox"][aria-checked="true"] {
+            background-color: #16a34a !important;
+            border-color: #15803d !important;
+        }
+
+        div[data-testid="stToggle"] [role="switch"][aria-checked="false"],
+        div[data-testid="stCheckbox"] [role="checkbox"][aria-checked="false"] {
+            background-color: #e2e8f0 !important;
+            border-color: #64748b !important;
+        }
+
+        div[data-testid="stButton"] button,
+        div[data-testid="stDownloadButton"] button {
+            border: 1px solid rgba(71, 85, 105, 0.45) !important;
+            color: var(--text-color) !important;
+            background: var(--secondary-background-color) !important;
+            font-weight: 650 !important;
+        }
+
+        div[data-testid="stButton"] button:hover,
+        div[data-testid="stDownloadButton"] button:hover {
+            border-color: #2563eb !important;
+            color: #1d4ed8 !important;
+        }
+
+        div[data-testid="stButton"] button:disabled,
+        div[data-testid="stDownloadButton"] button:disabled {
+            color: #64748b !important;
+            background: rgba(148, 163, 184, 0.16) !important;
+            border-color: rgba(100, 116, 139, 0.35) !important;
             opacity: 1 !important;
         }
         </style>
