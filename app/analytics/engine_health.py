@@ -16,9 +16,19 @@ class EngineHealth:
     scanner_runtime: float | None = None
     worker_count: int | None = None
     polygon_calls: int | None = None
+    polygon_requests: int | None = None
     polygon_failures: int = 0
     cache_hits: int | None = None
     cache_misses: int | None = None
+    average_api_time: float | None = None
+    average_cache_read_time: float | None = None
+    background_pending_jobs: int | None = None
+    background_completed_jobs: int | None = None
+    background_failed_jobs: int | None = None
+    background_queue_depth: int | None = None
+    background_longest_job_time: float | None = None
+    background_longest_job_name: str | None = None
+    background_average_job_time: float | None = None
     scanner_errors: int = 0
     exceptions: int = 0
     average_symbol_time: float | None = None
@@ -86,7 +96,19 @@ def append_engine_health_history(report_date: str, metrics: dict):
         "trading_day": report_date,
         "runtime": metrics.get("scan_runtime_sec"),
         "health_score": metrics.get("health_score"),
-        "cache_hit": metrics.get("cache_hit_rate"),
+        "polygon_requests": metrics.get("polygon_requests"),
+        "polygon_cache_hits": metrics.get("polygon_cache_hits"),
+        "polygon_cache_misses": metrics.get("polygon_cache_misses"),
+        "cache_hit_pct": metrics.get("cache_hit_rate"),
+        "average_api_time": metrics.get("average_api_time"),
+        "average_cache_read_time": metrics.get("average_cache_read_time"),
+        "background_pending_jobs": metrics.get("background_pending_jobs"),
+        "background_completed_jobs": metrics.get("background_completed_jobs"),
+        "background_failed_jobs": metrics.get("background_failed_jobs"),
+        "background_queue_depth": metrics.get("background_queue_depth"),
+        "background_longest_job_time": metrics.get("background_longest_job_time"),
+        "background_longest_job_name": metrics.get("background_longest_job_name"),
+        "background_average_job_time": metrics.get("background_average_job_time"),
         "workers": metrics.get("worker_count"),
         "requests": metrics.get("polygon_calls"),
         "exceptions": metrics.get("exceptions"),
@@ -150,6 +172,18 @@ def build_engine_health(report_date: str):
         health.scanner_runtime = latest_metrics.get("runtime")
         health.worker_count = latest_metrics.get("workers")
         health.polygon_calls = latest_metrics.get("requests")
+        health.polygon_requests = latest_metrics.get("polygon_requests")
+        health.cache_hits = int(latest_metrics.get("polygon_cache_hits") or 0)
+        health.cache_misses = int(latest_metrics.get("polygon_cache_misses") or 0)
+        health.average_api_time = latest_metrics.get("average_api_time")
+        health.average_cache_read_time = latest_metrics.get("average_cache_read_time")
+        health.background_pending_jobs = int(latest_metrics.get("background_pending_jobs") or 0)
+        health.background_completed_jobs = int(latest_metrics.get("background_completed_jobs") or 0)
+        health.background_failed_jobs = int(latest_metrics.get("background_failed_jobs") or 0)
+        health.background_queue_depth = int(latest_metrics.get("background_queue_depth") or 0)
+        health.background_longest_job_time = latest_metrics.get("background_longest_job_time")
+        health.background_longest_job_name = latest_metrics.get("background_longest_job_name")
+        health.background_average_job_time = latest_metrics.get("background_average_job_time")
         health.exceptions = int(latest_metrics.get("exceptions") or 0)
         health.average_symbol_runtime = latest_metrics.get("average_symbol_runtime")
         health.average_symbol_time = latest_metrics.get("average_symbol_runtime")

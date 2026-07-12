@@ -131,21 +131,43 @@ Current implementation status for the production-engineering roadmap:
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Parallel Scanner | Partially implemented | Market-data prefetch is parallelized with bounded `ThreadPoolExecutor` via `SCANNER_MAX_WORKERS`. Trading/state/DB/Excel/Telegram/lifecycle writes remain sequential by design. |
+| Parallel Scanner | Implemented for safe foreground paths | Market-data prefetch is parallelized with bounded `ThreadPoolExecutor` via `SCANNER_MAX_WORKERS`. Scanner persistence is queued after results are built so DB writes, snapshots, lifecycle events, health history, stage profile, and Excel/CSV export do not block the operator table. Trading decisions and state mutation remain sequential. |
+| Background Persistence Queue | Implemented | `app/background/background_queue.py` runs best-effort persistence tasks on one daemon worker, drains the queue at process exit, and exposes pending/completed/failed/depth/average/longest job metrics. Task failures are logged and do not stop later queued work. |
 | Candidate Persistence State Machine | Implemented | Scanner output includes candidate persistence fields and writes `data/daily/YYYY-MM-DD/candidate_persistence_state.json`. The opportunity audit includes scan count, best score, score delta, and strengthening flags. |
-| Engine Health Score | Partial | `app/analytics/engine_health.py` records scan runtime, worker count, symbol completion/failure counts, quote freshness, and health score to `engine_health_history.csv`. Polygon cache hit/miss instrumentation is still pending. |
+| Dynamic Watchlist | Optional | Default scans still use the static watchlist. Set `DYNAMIC_WATCHLIST_ENABLED=true` to seed the scan from Polygon snapshot movers, anchored by the core symbols, with `DYNAMIC_WATCHLIST_SIZE` and `DYNAMIC_WATCHLIST_MOVERS_PER_BUCKET` controlling breadth. |
+| Engine Health Score | Partial | `app/analytics/engine_health.py` records scan runtime, worker count, symbol completion/failure counts, quote freshness, Polygon request/cache/timing metrics, background queue metrics, and health score to `engine_health_history.csv`. |
 | Validation Freeze | Documented, not enforced | The docs mark the project as being in calibration/freeze mode and recommend avoiding broad strategy changes. There is no code-level freeze gate. |
 | Graduation Criteria | Not implemented | No formal confidence/position-size graduation rules are coded yet. Strategy journal includes a simple confidence value, but it does not enforce sizing rules. |
 
-Before treating Strategy v1.0 as production-ready, the remaining production-engineering work is: expand parallelism beyond market-data prefetch only if it can be done without moving state writes into worker threads, add Polygon cache hit/miss instrumentation, and define explicit graduation criteria for moving from paper validation to increased real position sizing.
+Before treating Strategy v1.0 as production-ready, the remaining production-engineering work is: measure foreground versus background scan runtime over live sessions, tune Polygon cache TTL/rate-limit settings from the new metrics, and define explicit graduation criteria for moving from paper validation to increased real position sizing.
 
 Current scanner performance implementation:
 
 - `SCANNER_MAX_WORKERS` controls a bounded `ThreadPoolExecutor` for parallel market-data prefetch. Default: `5`.
-- Trade state updates, lifecycle writes, DB writes, Excel/CSV writes, Telegram alerts, candidate persistence, and dashboard rendering remain sequential.
-- `engine_health_history.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with scan runtime, workers, requests, exceptions, completed/failed symbols, average symbol runtime, and health score.
-- `scanner_stage_profile.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with stage-level timings for market data, indicators, strategy, entries, risk, options, paper trades, dashboard/research persistence, Telegram, Excel/CSV export, database writes, and engine health.
-- The Engine Health dashboard widget reads the latest history row when available.
+- `DYNAMIC_WATCHLIST_ENABLED=false` keeps the static watchlist. When enabled, Polygon snapshot movers are merged after core symbols and before the static fallback list.
+- Foreground scan work still computes strategies, entries, risk, options, paper-trade decisions, Telegram checks, candidate persistence, relative-strength rankings, opportunity audit, and the operator table sequentially.
+- Scanner finish persistence is queued through `run_background()`: engine health, DB gate decisions, candidate snapshots, signal lifecycle rows, Excel/CSV output, scanner-run finish, and scanner stage profile run after the foreground scan has queued the result.
+- Telegram alert DB audit writes and paper-trade DB upserts are also queued through the background worker. Telegram sends, paper JSON state, and paper event CSV writes remain on the foreground path where needed for operator correctness.
+- Gate-decision DB writes use one batched insert per scan through `record_gate_decisions()` instead of one insert per symbol.
+- Signal lifecycle events and transitions use batched CSV appends per scan through `record_signal_lifecycle_events_for_scan()` instead of one file append per candidate.
+- Polygon observability records total API requests, cache hits, cache misses, cache hit %, average API time, and average cache read time from `app/utils/polygon_client.py`.
+- Background queue observability records pending jobs, completed jobs, failed jobs, queue depth, average job time, longest job time, and longest job name from `app/background/background_queue.py`.
+- `engine_health_history.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with scan runtime, workers, Polygon request/cache/timing metrics, background queue metrics, exceptions, completed/failed symbols, average symbol runtime, and health score.
+- `scanner_stage_profile.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with stage-level timings for market data, indicators, strategy, entries, risk, options, Telegram, export, and deferred persistence stages such as `Database / Engine Health`, `Database / Gate Decisions`, `Database / Candidate Snapshot`, `Database / Signal Lifecycle`, and `Database / Scanner Run`.
+- The Engine Health dashboard widget reads the latest history row when available and shows scanner health, Polygon cache/API metrics, background queue metrics, and a category/detail stage breakdown.
+
+## Shared Trade Decision And Telegram Policy
+
+Entry alerting now separates the trade decision from the notification policy:
+
+- `app/decision/decision_engine.py` exposes `evaluate_candidate()` and returns a `TradeDecision` with action, setup score, RR, option quality, confidence score, reasons, and block reasons.
+- Scanner/dashboard/paper rows remain the source of the decision. Telegram no longer needs to duplicate the ultra-strict real-review gate before sending an operational entry alert.
+- `TELEGRAM_ALERT_POLICY` controls entry alert strictness without code changes.
+- `PAPER` (default): alert eligible `ENTER_PAPER` decisions when the decision score is at least `TELEGRAM_MIN_ENTRY_ALERT_SCORE` and the shared decision is not blocked.
+- `REAL_REVIEW`: keep A+ real-review style gating with real setup/RR/option-quality thresholds, top-1 candidate, and persistence.
+- `CUSTOM`: use the explicit Telegram threshold settings such as `TELEGRAM_MIN_RR`, `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, and spread limits.
+
+Telegram still keeps notification controls separate from the decision itself: entry alert enablement, duplicate alert protection, cooldowns, daily caps, active-alert caps, time-of-day limits, and symbol cooldowns remain notification policy. This makes Telegram operationally useful again without loosening real-money review criteria.
 
 Auto-paper decisions are emitted from the Streamlit dashboard auto-paper path, not from the standalone scanner loop. The dashboard writer appends the full-day CSV and then updates the capped dashboard JSON from the same decision row.
 
@@ -332,13 +354,14 @@ Exit alerts are only allowed for explicitly tracked `PAPER` or `REAL` trades. Le
 TELEGRAM_ALERTS_ENABLED = "true"
 TELEGRAM_ENTRY_ALERTS_ENABLED = "true"
 TELEGRAM_EXIT_ALERTS_ENABLED = "true"
+TELEGRAM_ALERT_POLICY = "PAPER"
 TELEGRAM_MAX_ENTRY_ALERTS_PER_DAY = "3"
 TELEGRAM_MAX_ACTIVE_ALERTED_TRADES = "2"
 TELEGRAM_ENTRY_COOLDOWN_MINUTES = "60"
 TELEGRAM_SYMBOL_COOLDOWN_MINUTES = "60"
 TELEGRAM_TOP_CANDIDATE_LIMIT = "3"
 TELEGRAM_MIN_ENTRY_ALERT_SCORE = "85"
-TELEGRAM_INSTANT_ENTRY_ALERT_SCORE = "88"
+TELEGRAM_INSTANT_ENTRY_ALERT_SCORE = "92"
 TELEGRAM_AFTERNOON_MIN_ENTRY_ALERT_SCORE = "90"
 TELEGRAM_MIN_OPTION_QUALITY_SCORE = "65"
 TELEGRAM_MIN_RR = "2.0"
@@ -377,7 +400,7 @@ bot_token = "YOUR_BOT_TOKEN_FROM_BOTFATHER"
 chat_id = "YOUR_TELEGRAM_CHAT_ID"
 ```
 
-The scanner sends entry alerts only for high-conviction `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART` option setups that are not marked unaffordable and are within the configured top-candidate limit. Entry alerts are scored after the full scan is ranked, then attempted strongest-first in the same scan; the system does not wait for a later time bucket to compare future candidates. Auto paper entries send entry alerts at the exact moment a system paper trade opens, as long as the opened row is realtime-ready, affordable, has sufficient setup/RR, fresh quote, acceptable spread, and option quality. `ALLOW_REVIEW_TV_CHART_AUTO_PAPER=false` by default; when enabled, high-quality `REVIEW_TV_CHART` rows can enter paper-only validation as `entry_source=AUTO_PAPER_REVIEW_VALIDATION`, `trade_mode=PAPER`, and `include_in_strategy_stats=false` after the same strict paper gates, top-candidate filter, bid/ask, quote freshness, affordability, event/regime, cooldown, duplicate, and daily-cap checks pass. Review-validation entries are additionally blocked at or after 14:45 ET, when `Late Entry Risk` is `LATE_CHASE_RISK`, when `Missed Move Type` is populated, or when the row is not a configured top candidate. Manual paper entry buttons are hidden by default (`ENABLE_MANUAL_PAPER_ENTRIES=false`, `SHOW_MANUAL_PAPER_BUTTONS=false`) to keep validation telemetry clean; manual close/correction remains available by default. The default entry buckets are max 2 regular alerts from 9:45-10:30 ET, max 1 regular alert from 10:30-13:30 ET, max 1 A+ style alert from 13:30-14:45 ET, and no new entries after 14:45 ET. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect the daily max, active alerted trade cap, duplicate cooldown, quote/quality/spread/affordability gates, and no-late-entry cutoff. Exit alerts send only when confirmed paper/real trades close manually or automatically; scanner-managed `trade_state.json` exits remain dashboard-only. Exit-alert price validation resolves the current underlying price from the freshest available same-symbol source in this order: `latest_quote`, `df_5m_latest_close`, then `df_15m_latest_close`. Alerts are blocked if that resolved price differs from the same-symbol expected close by more than `TELEGRAM_EXIT_PRICE_MISMATCH_PCT` (default 3%). Sent alert keys are stored in `app/state/telegram_alert_state.json`, which is ignored by Git.
+For the current validation phase, use `TELEGRAM_ALERT_POLICY=PAPER`. In this mode, Telegram uses the shared `ENTER_PAPER` decision and `TELEGRAM_MIN_ENTRY_ALERT_SCORE`; it does not reapply the old ultra-strict real-review RR/quality/top-candidate gate before notifying. `TELEGRAM_MIN_RR`, `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, `TELEGRAM_MAX_SPREAD_PCT`, and `TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE` remain available for `CUSTOM` / `REAL_REVIEW` compatibility but are not the primary paper-alert controls. Entry alerts are scored after the full scan is ranked, then attempted strongest-first in the same scan; the system does not wait for a later time bucket to compare future candidates. Notification controls still apply: duplicate protection, cooldowns, daily caps, active-alert caps, and the no-late-entry cutoff. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect the daily max, active alerted trade cap, duplicate cooldown, symbol cooldown, and no-late-entry cutoff. Exit alerts send only when confirmed paper/real trades close manually or automatically; scanner-managed `trade_state.json` exits remain dashboard-only.
 
 Real-trade readiness is dashboard guidance only. `REAL_TRADING_ENABLED=false` and `REAL_ALERTS_ONLY=true` keep the app in manual-review mode; no real orders are placed. Rows marked `A_PLUS_REAL_REVIEW` must already have an active paper trade open for the same symbol, be `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART`, be `BULLISH_TOP_1` or `BEARISH_TOP_1`, meet the real thresholds, have a live quote age within `REAL_MAX_QUOTE_AGE_MINUTES`, avoid late/chase and missed-move flags, avoid event/regime blocks, appear in at least two consecutive suggested-trade scans, remain under `MAX_DAILY_REAL_LOSS`, and occur before `REAL_ENTRY_CUTOFF_ET`. The dashboard shows `Paper Trade Opened`, `Real Trade Readiness`, `Real Review Scan Count`, and `Real Entry Checklist` for manual tiny-trade review only.
 

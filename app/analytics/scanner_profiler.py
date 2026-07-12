@@ -14,6 +14,10 @@ class StageTimer:
 
         self.timings = {}
 
+    def record(self, name, seconds):
+
+        self.timings[name] = self.timings.get(name, 0.0) + seconds
+
     @contextmanager
     def stage(self, name):
 

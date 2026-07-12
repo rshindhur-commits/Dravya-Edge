@@ -119,6 +119,23 @@ def append_daily_auto_paper_decision(
     daily_dir: Path,
 ) -> None:
 
+    append_daily_auto_paper_decisions([decision], daily_dir)
+
+
+def append_daily_auto_paper_decisions(
+    decisions: list[dict[str, Any]],
+    daily_dir: Path,
+) -> None:
+
+    decisions = [
+        decision for decision in decisions
+        if decision
+    ]
+
+    if not decisions:
+
+        return
+
     daily_dir.mkdir(parents=True, exist_ok=True)
     path = daily_dir / "auto_paper_decisions.csv"
     file_exists = path.exists() and path.stat().st_size > 0
@@ -134,7 +151,7 @@ def append_daily_auto_paper_decision(
 
             writer.writeheader()
 
-        writer.writerow(decision)
+        writer.writerows(decisions)
 
 
 def update_recent_auto_paper_log(
@@ -142,6 +159,24 @@ def update_recent_auto_paper_log(
     state_path: Path,
     limit: int = RECENT_LOG_LIMIT,
 ) -> None:
+
+    update_recent_auto_paper_logs([decision], state_path, limit=limit)
+
+
+def update_recent_auto_paper_logs(
+    decisions: list[dict[str, Any]],
+    state_path: Path,
+    limit: int = RECENT_LOG_LIMIT,
+) -> None:
+
+    decisions = [
+        decision for decision in decisions
+        if decision
+    ]
+
+    if not decisions:
+
+        return
 
     state_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -163,7 +198,7 @@ def update_recent_auto_paper_log(
 
         rows = []
 
-    rows.append(decision)
+    rows.extend(decisions)
     rows = rows[-limit:]
     payload = json.dumps(rows, indent=2, default=str)
     tmp_path = state_path.with_name(

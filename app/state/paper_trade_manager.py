@@ -537,9 +537,10 @@ def open_paper_trade(
 
     try:
 
+        from app.background import run_background
         from app.db.persistence import upsert_paper_trade
 
-        upsert_paper_trade(trade)
+        run_background(upsert_paper_trade, trade.copy())
 
     except Exception as exc:
 
@@ -614,9 +615,10 @@ def close_paper_trade(
 
     try:
 
+        from app.background import run_background
         from app.db.persistence import upsert_paper_trade
 
-        upsert_paper_trade(trade)
+        run_background(upsert_paper_trade, trade.copy())
 
     except Exception as exc:
 

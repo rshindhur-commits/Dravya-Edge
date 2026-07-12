@@ -20,9 +20,9 @@ from rich.console import Console
 from rich.table import Table
 
 from app.config.watchlist import (
+    get_scanner_watchlist,
     MARKET_REFERENCE_SYMBOLS,
-    REFERENCE_FETCH_SYMBOLS,
-    WATCHLIST
+    REFERENCE_FETCH_SYMBOLS
 )
 from app.config.settings import (
     print_runtime_banner,
@@ -102,6 +102,10 @@ from app.analytics.scanner_profiler import (
 from app.analytics.candidate_snapshot_writer import (
     append_candidate_snapshots
 )
+from app.background import (
+    get_background_metrics,
+    run_background
+)
 from app.storage.signal_lifecycle_store import (
     record_signal_lifecycle_events_for_scan
 )
@@ -125,6 +129,7 @@ from app.db.persistence import (
     record_scanner_run_start
 )
 from app.utils.runtime_logging import debug_print
+from app.utils.polygon_client import get_metrics as get_polygon_metrics
 from app.storage.daily_paths import (
     daily_path,
     live_path
@@ -2261,6 +2266,222 @@ def _dispatch_telegram_entry_alerts(df_results):
             )
 
 
+def _write_scanner_output_files(df_results, trading_day, output_file):
+
+    live_csv_path = live_path("scanner_output_latest.csv")
+    daily_csv_path = daily_path(trading_day, "scanner_output_close.csv")
+    live_csv_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+    daily_csv_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+    df_results.to_csv(
+        live_csv_path,
+        index=False
+    )
+    df_results.to_csv(
+        daily_csv_path,
+        index=False
+    )
+
+    try:
+
+        with pd.ExcelWriter(
+
+            output_file,
+            engine="openpyxl"
+
+        ) as writer:
+
+            df_results.to_excel(
+
+                writer,
+                sheet_name="Scanner",
+                index=False
+
+            )
+
+        for mirror_output_file in [
+            live_path("scanner_output_latest.xlsx"),
+            daily_path(trading_day, "scanner_output_close.xlsx")
+        ]:
+
+            with pd.ExcelWriter(
+                mirror_output_file,
+                engine="openpyxl"
+            ) as mirror_writer:
+
+                df_results.to_excel(
+                    mirror_writer,
+                    sheet_name="Scanner",
+                    index=False
+                )
+
+    except PermissionError:
+
+        timestamp = datetime.now().strftime(
+            "%Y%m%d_%H%M%S"
+        )
+
+        fallback_output_file = (
+            f"scanner_output_{timestamp}.xlsx"
+        )
+
+        print(
+            f"[REPORT WARNING] {output_file} is locked; "
+            f"writing {fallback_output_file} instead"
+        )
+
+        output_file = fallback_output_file
+
+        with pd.ExcelWriter(
+
+            output_file,
+            engine="openpyxl"
+
+        ) as writer:
+
+            df_results.to_excel(
+
+                writer,
+                sheet_name="Scanner",
+                index=False
+
+            )
+
+    return output_file
+
+
+def _persist_scan_outputs(
+    df_results,
+    trading_day,
+    scan_id,
+    health_payload,
+    output_file,
+    foreground_timings,
+    observed_at
+):
+
+    profile_timer = StageTimer()
+
+    for stage_name, seconds in (foreground_timings or {}).items():
+
+        profile_timer.record(stage_name, seconds)
+
+    snapshot_result = None
+    records = df_results.to_dict("records")
+
+    with profile_timer.stage("Database / Engine Health"):
+
+        append_engine_health_history(
+            trading_day,
+            health_payload
+        )
+
+    print(
+        "[ENGINE HEALTH] "
+        f"score={health_payload.get('health_score')} "
+        f"runtime={health_payload.get('scan_runtime_sec')}s "
+        f"workers={health_payload.get('worker_count')} "
+        f"cache_hit={health_payload.get('cache_hit_rate')}% "
+        f"api_avg={health_payload.get('average_api_time')}s "
+        f"queue_depth={health_payload.get('background_queue_depth')} "
+        f"symbols={health_payload.get('symbols_completed')}/"
+        f"{health_payload.get('polygon_calls')}"
+    )
+
+    with profile_timer.stage("Database / Gate Decisions"):
+
+        record_gate_decisions(
+            records,
+            run_id=scan_id
+        )
+
+    with profile_timer.stage("Database / Candidate Snapshot"):
+
+        snapshot_result = append_candidate_snapshots(
+            df_results,
+            trading_day=trading_day,
+            scan_id=scan_id
+        )
+
+    try:
+
+        with profile_timer.stage("Database / Signal Lifecycle"):
+
+            lifecycle_count = record_signal_lifecycle_events_for_scan(
+                records,
+                trading_day=trading_day,
+                scan_id=scan_id,
+                observed_at=observed_at
+            )
+
+        print(
+            f"[SIGNAL LIFECYCLE] recorded {lifecycle_count} observations"
+        )
+
+    except Exception as exc:
+
+        print(
+            "[SIGNAL LIFECYCLE WARNING] "
+            f"failed to record lifecycle observations: {exc}"
+        )
+
+    if snapshot_result:
+
+        print(
+            "[CANDIDATE SNAPSHOTS] "
+            f"saved {snapshot_result['rows']} rows to "
+            f"{snapshot_result['path']}"
+        )
+
+    with profile_timer.stage("Export / Scanner Output"):
+
+        output_file = _write_scanner_output_files(
+            df_results,
+            trading_day,
+            output_file
+        )
+
+    print(
+        f"\nExcel report saved:"
+        f" {output_file}"
+    )
+
+    with profile_timer.stage("Database / Scanner Run"):
+
+        record_scanner_run_finish(
+            scan_id,
+            status="FINISHED",
+            rows_count=len(df_results),
+            payload={
+                "trading_day": trading_day,
+                "output_file": str(output_file),
+                "snapshot_rows": (
+                    snapshot_result or {}
+                ).get("rows")
+            }
+        )
+
+    profile_result = append_scanner_stage_profile(
+        trading_day,
+        scan_id,
+        profile_timer,
+        observed_at=observed_at.isoformat()
+    )
+
+    if profile_result:
+
+        print(
+            "[SCANNER PROFILE] "
+            f"saved {profile_result['rows']} stages to "
+            f"{profile_result['path']}"
+        )
+
+
 def run_scanner():   
 
     scan_perf_start = time.perf_counter()
@@ -2276,7 +2497,8 @@ def run_scanner():
         scan_id=scan_id,
         scan_timestamp=scan_timestamp
     )
-    record_scanner_run_start(
+    run_background(
+        record_scanner_run_start,
         scan_id,
         {
             "trading_day": trading_day,
@@ -2299,6 +2521,12 @@ def run_scanner():
     table.add_column("Entry")
     table.add_column("Why")
     table.add_column("Next")
+    scanner_watchlist = get_scanner_watchlist()
+    print(
+        "[WATCHLIST] "
+        f"scanning {len(scanner_watchlist)} symbols: "
+        f"{', '.join(scanner_watchlist)}"
+    )
     
     market_reference = {}
     reference_context = _fetch_reference_context()
@@ -2308,12 +2536,12 @@ def run_scanner():
     )
     with stage_timer.stage("Market Data"):
 
-        market_data_prefetch = _prefetch_watchlist_market_data(WATCHLIST)
+        market_data_prefetch = _prefetch_watchlist_market_data(scanner_watchlist)
 
     symbol_runtimes = {}
     symbol_failures = {}
     
-    for symbol in WATCHLIST:
+    for symbol in scanner_watchlist:
 
         symbol_start = time.perf_counter()
 
@@ -5048,87 +5276,23 @@ def run_scanner():
         scan_runtime_sec=scan_runtime_sec,
         scanner_runtime=scan_runtime_sec,
         worker_count=SCANNER_MAX_WORKERS,
-        polygon_calls=len(WATCHLIST),
+        polygon_calls=len(scanner_watchlist),
         polygon_failures=len(symbol_failures),
         exceptions=len(symbol_failures),
         average_symbol_runtime=average_symbol_runtime,
         average_symbol_time=average_symbol_runtime,
-        symbols_completed=len(WATCHLIST) - len(symbol_failures),
+        symbols_completed=len(scanner_watchlist) - len(symbol_failures),
         symbols_failed=len(symbol_failures),
         fresh_quotes=int(option_freshness.eq("LIVE_QUOTE").sum()),
         stale_quotes=int(option_freshness.eq("STALE_QUOTE").sum()),
         delayed_quotes=int(option_freshness.eq("DELAYED_QUOTE").sum()),
     )
     health.health_score = calculate_health_score(health)
-    with stage_timer.stage("Engine Health"):
-
-        append_engine_health_history(
-            trading_day,
-            {
-                "timestamp": now_et().isoformat(),
-                "scan_runtime_sec": health.scan_runtime_sec,
-                "health_score": health.health_score,
-                "cache_hit_rate": health.cache_hit_rate,
-                "worker_count": health.worker_count,
-                "polygon_calls": health.polygon_calls,
-                "exceptions": health.exceptions,
-                "symbols_completed": health.symbols_completed,
-                "symbols_failed": health.symbols_failed,
-                "average_symbol_runtime": health.average_symbol_runtime,
-            }
-        )
-    print(
-        "[ENGINE HEALTH] "
-        f"score={health.health_score} "
-        f"runtime={health.scan_runtime_sec}s "
-        f"workers={health.worker_count} "
-        f"symbols={health.symbols_completed}/{len(WATCHLIST)}"
-    )
-
-    with stage_timer.stage("Database"):
-
-        record_gate_decisions(
-            df_results.to_dict("records"),
-            run_id=scan_id
-        )
-
-    with stage_timer.stage("Dashboard"):
-
-        snapshot_result = append_candidate_snapshots(
-            df_results,
-            trading_day=trading_day,
-            scan_id=scan_id
-        )
-
-    try:
-
-        with stage_timer.stage("Dashboard"):
-
-            lifecycle_count = record_signal_lifecycle_events_for_scan(
-                df_results.to_dict("records"),
-                trading_day=trading_day,
-                scan_id=scan_id,
-                observed_at=now_et()
-            )
-
-        print(
-            f"[SIGNAL LIFECYCLE] recorded {lifecycle_count} observations"
-        )
-
-    except Exception as exc:
-
-        print(
-            "[SIGNAL LIFECYCLE WARNING] "
-            f"failed to record lifecycle observations: {exc}"
-        )
-
-    if snapshot_result:
-
-        print(
-            "[CANDIDATE SNAPSHOTS] "
-            f"saved {snapshot_result['rows']} rows to "
-            f"{snapshot_result['path']}"
-        )
+    polygon_metrics = get_polygon_metrics()
+    health.cache_hits = polygon_metrics.get("cache_hits")
+    health.cache_misses = polygon_metrics.get("cache_misses")
+    health.average_api_time = polygon_metrics.get("average_api_time")
+    health.average_cache_read_time = polygon_metrics.get("average_cache_read_time")
 
     with stage_timer.stage("Telegram"):
 
@@ -5139,128 +5303,46 @@ def run_scanner():
     output_file = (
         settings.scanner_output_file
     )
+    background_metrics = get_background_metrics()
 
-    try:
-
-        with stage_timer.stage("Excel"):
-
-            live_csv_path = live_path("scanner_output_latest.csv")
-            daily_csv_path = daily_path(trading_day, "scanner_output_close.csv")
-            live_csv_path.parent.mkdir(
-                parents=True,
-                exist_ok=True
-            )
-            daily_csv_path.parent.mkdir(
-                parents=True,
-                exist_ok=True
-            )
-            df_results.to_csv(
-                live_csv_path,
-                index=False
-            )
-            df_results.to_csv(
-                daily_csv_path,
-                index=False
-            )
-
-            with pd.ExcelWriter(
-
-                output_file,
-                engine="openpyxl"
-
-            ) as writer:
-
-                df_results.to_excel(
-
-                    writer,
-                    sheet_name="Scanner",
-                    index=False
-
-                )
-
-            for mirror_output_file in [
-                live_path("scanner_output_latest.xlsx"),
-                daily_path(trading_day, "scanner_output_close.xlsx")
-            ]:
-
-                with pd.ExcelWriter(
-                    mirror_output_file,
-                    engine="openpyxl"
-                ) as mirror_writer:
-
-                    df_results.to_excel(
-                        mirror_writer,
-                        sheet_name="Scanner",
-                        index=False
-                    )
-
-    except PermissionError:
-
-        timestamp = datetime.now().strftime(
-            "%Y%m%d_%H%M%S"
-        )
-
-        fallback_output_file = (
-            f"scanner_output_{timestamp}.xlsx"
-        )
-
-        print(
-            f"[REPORT WARNING] {output_file} is locked; "
-            f"writing {fallback_output_file} instead"
-        )
-
-        output_file = fallback_output_file
-
-        with stage_timer.stage("Excel"):
-
-            with pd.ExcelWriter(
-
-                output_file,
-                engine="openpyxl"
-
-            ) as writer:
-
-                df_results.to_excel(
-
-                    writer,
-                    sheet_name="Scanner",
-                    index=False
-
-                )
-
-    print(
-        f"\nExcel report saved:"
-        f" {output_file}"
-    )
-    with stage_timer.stage("Database"):
-
-        record_scanner_run_finish(
-            scan_id,
-            status="FINISHED",
-            rows_count=len(df_results),
-            payload={
-                "trading_day": trading_day,
-                "output_file": str(output_file),
-                "snapshot_rows": (
-                    snapshot_result or {}
-                ).get("rows")
-            }
-        )
-
-    profile_result = append_scanner_stage_profile(
+    run_background(
+        _persist_scan_outputs,
+        df_results.copy(),
         trading_day,
         scan_id,
-        stage_timer,
-        observed_at=now_et().isoformat()
+        {
+            "timestamp": now_et().isoformat(),
+            "scan_runtime_sec": health.scan_runtime_sec,
+            "health_score": health.health_score,
+            "polygon_requests": polygon_metrics.get("total_requests"),
+            "polygon_cache_hits": health.cache_hits,
+            "polygon_cache_misses": health.cache_misses,
+            "cache_hit_rate": health.cache_hit_rate,
+            "average_api_time": health.average_api_time,
+            "average_cache_read_time": health.average_cache_read_time,
+            "background_pending_jobs": background_metrics.get("pending_jobs"),
+            "background_completed_jobs": background_metrics.get("completed_jobs"),
+            "background_failed_jobs": background_metrics.get("failed_jobs"),
+            "background_queue_depth": background_metrics.get("queue_depth"),
+            "background_longest_job_time": background_metrics.get("longest_job_time_sec"),
+            "background_longest_job_name": background_metrics.get("longest_job_name"),
+            "background_average_job_time": background_metrics.get("average_job_time_sec"),
+            "worker_count": health.worker_count,
+            "polygon_calls": health.polygon_calls,
+            "exceptions": health.exceptions,
+            "symbols_completed": health.symbols_completed,
+            "symbols_failed": health.symbols_failed,
+            "average_symbol_runtime": health.average_symbol_runtime,
+        },
+        output_file,
+        dict(stage_timer.timings),
+        now_et()
     )
 
-    if profile_result:
-
-        print(
-            "[SCANNER PROFILE] "
-            f"saved {profile_result['rows']} stages to "
-            f"{profile_result['path']}"
-        )
+    print(
+        "[BACKGROUND] queued scanner persistence "
+        "(DB, snapshots, lifecycle, health, Excel, profile)"
+    )
 
     console.print(table)
 

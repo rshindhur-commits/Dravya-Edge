@@ -12,6 +12,7 @@ from app.gates import (
     EntryGateConfig,
     evaluate_entry_gate
 )
+from app.decision import evaluate_candidate
 from app.utils.json_store import load_json_file, save_json_file
 
 
@@ -173,7 +174,7 @@ def _entry_alert_policy():
         ),
         "instant_alert_score": _float_setting(
             "TELEGRAM_INSTANT_ENTRY_ALERT_SCORE",
-            88.0
+            92.0
         ),
         "afternoon_min_alert_score": _float_setting(
             "TELEGRAM_AFTERNOON_MIN_ENTRY_ALERT_SCORE",
@@ -369,6 +370,7 @@ def _record_alert_attempt(alert_type, context, result=None, error=None):
 
     try:
 
+        from app.background import run_background
         from app.db.persistence import record_alert_event
 
         result = result or {}
@@ -386,7 +388,8 @@ def _record_alert_attempt(alert_type, context, result=None, error=None):
 
             dedupe_key = context.get("dedupe_key")
 
-        record_alert_event(
+        run_background(
+            record_alert_event,
             alert_type=alert_type,
             symbol=context.get("symbol"),
             direction=context.get("direction"),
@@ -1004,27 +1007,40 @@ def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
         }
 
     policy = _entry_alert_policy()
+    policy_mode = _telegram_alert_policy_mode()
     min_setup = _float_setting(
         "TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE",
         70.0
     )
+    candidate = dict(scanner_context)
+    candidate["Action Status"] = action_status
 
-    gate_allowed, gate_reason = evaluate_entry_gate(
-        scanner_context,
-        EntryGateConfig(
-            min_rr=policy["min_rr"],
-            min_setup_percent=min_setup,
-            min_option_quality=policy["min_option_quality"],
-            max_spread_pct=policy["max_spread_pct"]
-        ),
-        mode="telegram"
-    )
+    if policy_mode == "REAL_REVIEW":
 
-    if not gate_allowed:
+        policy_allowed, policy_reason, decision = _real_review_policy_allowed(candidate)
+
+    elif policy_mode == "CUSTOM":
+
+        policy_allowed, policy_reason, decision = _custom_policy_allowed(
+            candidate,
+            policy,
+            min_setup=min_setup
+        )
+
+    else:
+
+        policy_allowed, policy_reason, decision = _paper_policy_allowed(
+            candidate,
+            policy["min_alert_score"]
+        )
+
+    if not policy_allowed:
 
         return {
             "sent": False,
-            "reason": gate_reason
+            "reason": policy_reason,
+            "decision_score": decision.score,
+            "telegram_policy": policy_mode
         }
 
     if _bool_value(scanner_context.get("Event Blocked")):
@@ -1071,6 +1087,8 @@ def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
             "option_ticker": option_ticker,
             "event_type": ENTRY_EVENT_TYPE,
             "source": "paper_entry",
+            "telegram_policy": policy_mode,
+            "decision_score": decision.score,
             "action_status": action_status,
             "setup_key": "_".join([
                 str(symbol),
@@ -1084,7 +1102,9 @@ def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
     return {
         "sent": True,
         "reason": "SENT",
-        "alert_key": alert_key
+        "alert_key": alert_key,
+        "decision_score": decision.score,
+        "telegram_policy": policy_mode
     }
 
 
@@ -1325,16 +1345,6 @@ def maybe_send_scanner_entry_alert(
 
     action_status = action_decision.get("action_status")
 
-    if final_signal not in [
-        "HIGH CONVICTION BULLISH",
-        "HIGH CONVICTION BEARISH"
-    ]:
-
-        return {
-            "sent": False,
-            "reason": "NOT_HIGH_CONVICTION"
-        }
-
     if action_status not in [
         "ENTER",
         "ENTER_PAPER",
@@ -1366,6 +1376,7 @@ def maybe_send_scanner_entry_alert(
         }
 
     policy = _entry_alert_policy()
+    policy_mode = _telegram_alert_policy_mode()
 
     quote_freshness = (
         option_quote_freshness
@@ -1384,68 +1395,6 @@ def maybe_send_scanner_entry_alert(
         _float_value(option_contract.get("spread_pct"), None)
     )
 
-    gate_allowed, gate_reason = evaluate_entry_gate(
-        {
-            "Action Status": action_status,
-            "Setup %": setup_score,
-            "Candidate RR": risk_reward,
-            "Option Quality Score": quality_score,
-            "Option Spread %": spread_pct,
-            "Option Quote Freshness": quote_freshness,
-            "Affordable": option_contract.get("affordable")
-        },
-        EntryGateConfig(
-            min_rr=policy["min_rr"],
-            min_setup_percent=0.0,
-            min_option_quality=policy["min_option_quality"],
-            max_spread_pct=policy["max_spread_pct"]
-        ),
-        mode="telegram"
-    )
-
-    if not gate_allowed:
-
-        return {
-            "sent": False,
-            "reason": gate_reason
-        }
-
-    if event_blocked:
-
-        return {
-            "sent": False,
-            "reason": "EVENT_BLOCKED"
-        }
-
-    if regime_blocked:
-
-        return {
-            "sent": False,
-            "reason": "REGIME_BLOCKED"
-        }
-
-    if not _top_candidate_allowed(
-        top_candidate,
-        policy["top_candidate_limit"]
-    ):
-
-        return {
-            "sent": False,
-            "reason": "NOT_TOP_ALERT_CANDIDATE"
-        }
-
-    time_bucket = _entry_alert_time_bucket()
-
-    if time_bucket in [
-        "TOO_EARLY",
-        "TOO_LATE"
-    ]:
-
-        return {
-            "sent": False,
-            "reason": f"ENTRY_ALERT_{time_bucket}"
-        }
-
     alert_score = calculate_entry_alert_score(
         setup_score=setup_score,
         alignment_score=alignment_score,
@@ -1457,17 +1406,85 @@ def maybe_send_scanner_entry_alert(
     )
 
     min_score = policy["min_alert_score"]
+    time_bucket = _entry_alert_time_bucket()
 
     if time_bucket == "AFTERNOON":
 
         min_score = policy["afternoon_min_alert_score"]
 
-    if alert_score < min_score:
+    candidate = {
+        "Action Status": action_status,
+        "Setup %": setup_score,
+        "Candidate RR": risk_reward,
+        "Option Quality Score": quality_score,
+        "Option Spread %": spread_pct,
+        "Option Quote Freshness": quote_freshness,
+        "Affordable": option_contract.get("affordable"),
+        "Event Blocked": event_blocked,
+        "Regime Blocked": regime_blocked,
+        "Top Candidate": top_candidate,
+        "Entry Alert Score": alert_score,
+    }
+
+    if policy_mode == "REAL_REVIEW":
+
+        policy_allowed, policy_reason, decision = _real_review_policy_allowed(candidate)
+
+    elif policy_mode == "CUSTOM":
+
+        policy_allowed, policy_reason, decision = _custom_policy_allowed(
+            candidate,
+            policy,
+            min_setup=0.0
+        )
+
+    else:
+
+        policy_allowed, policy_reason, decision = _paper_policy_allowed(
+            candidate,
+            min_score
+        )
+
+    if not policy_allowed:
 
         return {
             "sent": False,
-            "reason": "ALERT_SCORE_BELOW_MIN",
-            "alert_score": alert_score
+            "reason": policy_reason,
+            "alert_score": alert_score,
+            "decision_score": decision.score,
+            "telegram_policy": policy_mode
+        }
+
+    if policy_mode in {"CUSTOM", "REAL_REVIEW"}:
+
+        if final_signal not in [
+            "HIGH CONVICTION BULLISH",
+            "HIGH CONVICTION BEARISH"
+        ]:
+
+            return {
+                "sent": False,
+                "reason": "NOT_HIGH_CONVICTION"
+            }
+
+        if not _top_candidate_allowed(
+            top_candidate,
+            policy["top_candidate_limit"]
+        ):
+
+            return {
+                "sent": False,
+                "reason": "NOT_TOP_ALERT_CANDIDATE"
+            }
+
+    if time_bucket in [
+        "TOO_EARLY",
+        "TOO_LATE"
+    ]:
+
+        return {
+            "sent": False,
+            "reason": f"ENTRY_ALERT_{time_bucket}"
         }
 
     instant_alert = alert_score >= policy["instant_alert_score"]
@@ -1575,6 +1592,8 @@ def maybe_send_scanner_entry_alert(
             "top_candidate": top_candidate,
             "time_bucket": time_bucket,
             "alert_score": alert_score,
+            "decision_score": decision.score,
+            "telegram_policy": policy_mode,
             "instant_alert": instant_alert,
             "closed": False
         }
@@ -1583,5 +1602,131 @@ def maybe_send_scanner_entry_alert(
     return {
         "sent": True,
         "reason": "SENT",
-        "alert_key": alert_key
+        "alert_key": alert_key,
+        "alert_score": alert_score,
+        "decision_score": decision.score,
+        "telegram_policy": policy_mode
     }
+
+
+def _telegram_alert_policy_mode():
+
+    return str(
+        os.getenv(
+            "TELEGRAM_ALERT_POLICY",
+            _streamlit_secret(
+                ["TELEGRAM_ALERT_POLICY"],
+                _streamlit_secret(
+                    ["telegram", "alert_policy"],
+                    "PAPER"
+                )
+            )
+        )
+    ).strip().upper()
+
+
+def _decision_policy_allowed(decision, min_score):
+
+    if decision.action != "ENTER_PAPER":
+
+        return False, "DECISION_NOT_ENTER_PAPER"
+
+    if decision.blocked:
+
+        return False, "DECISION_BLOCKED: " + "; ".join(decision.block_reasons)
+
+    if decision.score < min_score:
+
+        return False, "DECISION_SCORE_BELOW_MIN"
+
+    return True, "ELIGIBLE"
+
+
+def _real_review_policy_allowed(candidate):
+
+    decision = evaluate_candidate(candidate)
+
+    allowed, reason = _decision_policy_allowed(
+        decision,
+        _float_setting("REAL_MIN_SETUP", 88.0)
+    )
+
+    if not allowed:
+
+        return False, reason, decision
+
+    gate_allowed, gate_reason = evaluate_entry_gate(
+        candidate,
+        EntryGateConfig(
+            min_rr=_float_setting("REAL_MIN_RR", 2.0),
+            min_setup_percent=_float_setting("REAL_MIN_SETUP", 88.0),
+            min_option_quality=_float_setting("REAL_MIN_OPTION_QUALITY", 90.0),
+            max_spread_pct=_float_setting("REAL_MAX_SPREAD_PCT", 8.0)
+        ),
+        mode="telegram_real_review"
+    )
+
+    if not gate_allowed:
+
+        return False, gate_reason, decision
+
+    scan_count = _float_value(
+        candidate.get("Candidate Scan Count"),
+        0
+    )
+    min_scans = _float_setting(
+        "REAL_MIN_CONSECUTIVE_SCANS",
+        2.0
+    )
+
+    if scan_count < min_scans:
+
+        return False, "REAL_REVIEW_PERSISTENCE_REQUIRED", decision
+
+    if not _top_candidate_allowed(
+        candidate.get("Top Candidate"),
+        1
+    ):
+
+        return False, "REAL_REVIEW_TOP1_REQUIRED", decision
+
+    return True, "ELIGIBLE", decision
+
+
+def _custom_policy_allowed(candidate, policy, min_setup=None):
+
+    decision = evaluate_candidate(candidate)
+    gate_allowed, gate_reason = evaluate_entry_gate(
+        candidate,
+        EntryGateConfig(
+            min_rr=policy["min_rr"],
+            min_setup_percent=(
+                min_setup
+                if min_setup is not None
+                else policy["min_alert_score"]
+            ),
+            min_option_quality=policy["min_option_quality"],
+            max_spread_pct=policy["max_spread_pct"]
+        ),
+        mode="telegram_custom"
+    )
+
+    if not gate_allowed:
+
+        return False, gate_reason, decision
+
+    if decision.blocked:
+
+        return False, "DECISION_BLOCKED: " + "; ".join(decision.block_reasons), decision
+
+    return True, "ELIGIBLE", decision
+
+
+def _paper_policy_allowed(candidate, min_score):
+
+    decision = evaluate_candidate(candidate)
+    allowed, reason = _decision_policy_allowed(
+        decision,
+        min_score
+    )
+    return allowed, reason, decision

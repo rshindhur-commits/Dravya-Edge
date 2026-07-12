@@ -205,19 +205,33 @@ _metrics = {
     "successful_requests": 0,
     "failed_requests": 0,
     "rate_limit_responses": 0,
+    "cache_hits": 0,
+    "cache_misses": 0,
+    "api_time_total_sec": 0.0,
+    "api_time_count": 0,
+    "cache_read_time_total_sec": 0.0,
+    "cache_read_count": 0,
     "last_headers": None,
 }
 # timestamps of recent requests to compute requests/min
 _request_times = deque(maxlen=1000)
 
 
-def _record_request(status: Optional[int], headers: Optional[Dict[str, str]] = None, success: bool = False):
+def _record_request(
+    status: Optional[int],
+    headers: Optional[Dict[str, str]] = None,
+    success: bool = False,
+    elapsed_seconds: float | None = None,
+):
     with _metrics_lock:
         _metrics["total_requests"] += 1
         if success:
             _metrics["successful_requests"] += 1
         else:
             _metrics["failed_requests"] += 1
+        if elapsed_seconds is not None:
+            _metrics["api_time_total_sec"] += elapsed_seconds
+            _metrics["api_time_count"] += 1
         if status == 429:
             _metrics["rate_limit_responses"] += 1
         if headers:
@@ -229,6 +243,16 @@ def _record_request(status: Optional[int], headers: Optional[Dict[str, str]] = N
         _request_times.append(time.time())
 
 
+def _record_cache_lookup(hit: bool, elapsed_seconds: float):
+    with _metrics_lock:
+        if hit:
+            _metrics["cache_hits"] += 1
+        else:
+            _metrics["cache_misses"] += 1
+        _metrics["cache_read_time_total_sec"] += elapsed_seconds
+        _metrics["cache_read_count"] += 1
+
+
 def get_metrics():
     """Return a snapshot of metrics including requests per minute."""
     with _metrics_lock:
@@ -238,6 +262,22 @@ def get_metrics():
         snapshot = dict(_metrics)
         snapshot["requests_per_minute"] = rpm
         snapshot["recent_request_count"] = len(_request_times)
+        cache_total = snapshot["cache_hits"] + snapshot["cache_misses"]
+        snapshot["cache_hit_rate"] = (
+            round(snapshot["cache_hits"] / cache_total * 100, 1)
+            if cache_total > 0
+            else None
+        )
+        snapshot["average_api_time"] = (
+            round(snapshot["api_time_total_sec"] / snapshot["api_time_count"], 4)
+            if snapshot["api_time_count"] > 0
+            else None
+        )
+        snapshot["average_cache_read_time"] = (
+            round(snapshot["cache_read_time_total_sec"] / snapshot["cache_read_count"], 6)
+            if snapshot["cache_read_count"] > 0
+            else None
+        )
         return snapshot
 
 
@@ -300,13 +340,20 @@ def get_aggs_cached(symbol: str, multiplier: int, timespan: str, from_: int, to:
     """
     key = (symbol, multiplier, timespan, from_, to, limit)
 
+    cache_read_start = time.perf_counter()
     cached = _cache_get(key)
+    cache_read_seconds = time.perf_counter() - cache_read_start
+
     if cached is not None:
+
+        _record_cache_lookup(True, cache_read_seconds)
 
         debug_print(
             f"[POLYGON CACHE HIT] {symbol} {multiplier}{timespan}"
         )
         return cached
+
+    _record_cache_lookup(False, cache_read_seconds)
 
     # acquire token before making the request
     acquire_rate_limit()
@@ -561,7 +608,9 @@ def safe_request(url: str, params: Optional[Dict[str, Any]] = None, timeout: int
 
     while attempt < max_attempts:
         try:
+            request_start = time.perf_counter()
             resp = _session.get(url, params=params, timeout=timeout)
+            elapsed_seconds = time.perf_counter() - request_start
 
             #print("\n================ POLYGON DEBUG ================")
             #print("URL:", resp.url)
@@ -585,6 +634,12 @@ def safe_request(url: str, params: Optional[Dict[str, Any]] = None, timeout: int
 
 
             if resp.status_code == 429:
+                _record_request(
+                    resp.status_code,
+                    resp.headers,
+                    success=False,
+                    elapsed_seconds=elapsed_seconds,
+                )
                 # exponential backoff with jitter
                 backoff = min(3, (2 ** attempt))
                 jitter = random.uniform(0, backoff * 0.4)
@@ -601,6 +656,12 @@ def safe_request(url: str, params: Optional[Dict[str, Any]] = None, timeout: int
                 continue
 
             resp.raise_for_status()
+            _record_request(
+                resp.status_code,
+                resp.headers,
+                success=True,
+                elapsed_seconds=elapsed_seconds,
+            )
 
             # Log Polygon rate-limit headers if present to help tuning
             try:
@@ -633,6 +694,15 @@ def safe_request(url: str, params: Optional[Dict[str, Any]] = None, timeout: int
             return resp
 
         except requests.RequestException as e:
+            try:
+                _record_request(
+                    getattr(e.response, "status_code", None),
+                    getattr(e.response, "headers", None),
+                    success=False,
+                    elapsed_seconds=(time.perf_counter() - request_start),
+                )
+            except Exception:
+                pass
             logger.exception("Request error on attempt %s: %s", attempt + 1, e)
             print(
                 f"[REQUEST ERROR] "
