@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from app.alerts.telegram_alerts import (
+    _entry_alert_policy,
     _paper_policy_allowed,
     _real_review_policy_allowed,
 )
@@ -72,6 +74,20 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             }
         )
         self.assertEqual(decision.action, "ENTER_PAPER")
+
+    def test_instant_alert_default_matches_validation_recommendation(self):
+
+        with patch.dict(
+            "os.environ",
+            {
+                "TELEGRAM_INSTANT_ENTRY_ALERT_SCORE": ""
+            },
+            clear=False,
+        ):
+
+            policy = _entry_alert_policy()
+
+        self.assertEqual(policy["instant_alert_score"], 92.0)
 
 
 if __name__ == "__main__":

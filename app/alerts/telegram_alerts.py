@@ -174,7 +174,7 @@ def _entry_alert_policy():
         ),
         "instant_alert_score": _float_setting(
             "TELEGRAM_INSTANT_ENTRY_ALERT_SCORE",
-            88.0
+            92.0
         ),
         "afternoon_min_alert_score": _float_setting(
             "TELEGRAM_AFTERNOON_MIN_ENTRY_ALERT_SCORE",
