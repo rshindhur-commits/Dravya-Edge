@@ -4661,10 +4661,20 @@ def _inject_compact_dashboard_css():
 
         .stDataFrame th,
         .stDataFrame table thead th,
+        .stDataFrame table th,
+        .stDataFrame table td,
+        .stDataFrame div[role="columnheader"],
+        .stDataFrame div[role="columnheader"] span,
         .stTable th,
         .stTable table thead th,
+        .stTable table th,
+        .stTable table td,
+        .stTable div[role="columnheader"],
+        .stTable div[role="columnheader"] span,
         .dataframe th,
-        .dataframe table thead th {
+        .dataframe table thead th,
+        .dataframe table th,
+        .dataframe table td {
             color: var(--text-color) !important;
             opacity: 1 !important;
             font-weight: 700 !important;
@@ -4677,25 +4687,31 @@ def _inject_compact_dashboard_css():
         .stTable td,
         .stTable table tbody td,
         .dataframe td,
-        .dataframe table tbody td {
+        .dataframe table tbody td,
+        .stDataFrame div[role="gridcell"],
+        .stDataFrame div[role="gridcell"] span,
+        .stTable div[role="gridcell"],
+        .stTable div[role="gridcell"] span {
             color: var(--text-color) !important;
+            opacity: 1 !important;
         }
 
-        div[data-testid="stSidebar"] {
-            background-color: var(--background-color) !important;
-            color: var(--text-color) !important;
-        }
-
+        div[data-testid="stSidebar"],
+        div[data-testid="stAppViewContainer"],
+        div[data-testid="stAppViewContainer"] *,
         div[data-testid="stSidebar"] * {
             color: var(--text-color) !important;
+            background-color: transparent !important;
         }
 
         div[data-testid="stSidebar"] h2,
         div[data-testid="stSidebar"] h3,
         div[data-testid="stSidebar"] label,
         div[data-testid="stSidebar"] span,
-        div[data-testid="stSidebar"] button {
+        div[data-testid="stSidebar"] button,
+        div[data-testid="stSidebar"] p {
             color: var(--text-color) !important;
+            opacity: 1 !important;
         }
         </style>
         """,
