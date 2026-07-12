@@ -131,21 +131,43 @@ Current implementation status for the production-engineering roadmap:
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Parallel Scanner | Partially implemented | Market-data prefetch is parallelized with bounded `ThreadPoolExecutor` via `SCANNER_MAX_WORKERS`. Trading/state/DB/Excel/Telegram/lifecycle writes remain sequential by design. |
+| Parallel Scanner | Implemented for safe foreground paths | Market-data prefetch is parallelized with bounded `ThreadPoolExecutor` via `SCANNER_MAX_WORKERS`. Scanner persistence is queued after results are built so DB writes, snapshots, lifecycle events, health history, stage profile, and Excel/CSV export do not block the operator table. Trading decisions and state mutation remain sequential. |
+| Background Persistence Queue | Implemented | `app/background/background_queue.py` runs best-effort persistence tasks on one daemon worker, drains the queue at process exit, and exposes pending/completed/failed/depth/average/longest job metrics. Task failures are logged and do not stop later queued work. |
 | Candidate Persistence State Machine | Implemented | Scanner output includes candidate persistence fields and writes `data/daily/YYYY-MM-DD/candidate_persistence_state.json`. The opportunity audit includes scan count, best score, score delta, and strengthening flags. |
-| Engine Health Score | Partial | `app/analytics/engine_health.py` records scan runtime, worker count, symbol completion/failure counts, quote freshness, and health score to `engine_health_history.csv`. Polygon cache hit/miss instrumentation is still pending. |
+| Dynamic Watchlist | Optional | Default scans still use the static watchlist. Set `DYNAMIC_WATCHLIST_ENABLED=true` to seed the scan from Polygon snapshot movers, anchored by the core symbols, with `DYNAMIC_WATCHLIST_SIZE` and `DYNAMIC_WATCHLIST_MOVERS_PER_BUCKET` controlling breadth. |
+| Engine Health Score | Partial | `app/analytics/engine_health.py` records scan runtime, worker count, symbol completion/failure counts, quote freshness, Polygon request/cache/timing metrics, background queue metrics, and health score to `engine_health_history.csv`. |
 | Validation Freeze | Documented, not enforced | The docs mark the project as being in calibration/freeze mode and recommend avoiding broad strategy changes. There is no code-level freeze gate. |
 | Graduation Criteria | Not implemented | No formal confidence/position-size graduation rules are coded yet. Strategy journal includes a simple confidence value, but it does not enforce sizing rules. |
 
-Before treating Strategy v1.0 as production-ready, the remaining production-engineering work is: expand parallelism beyond market-data prefetch only if it can be done without moving state writes into worker threads, add Polygon cache hit/miss instrumentation, and define explicit graduation criteria for moving from paper validation to increased real position sizing.
+Before treating Strategy v1.0 as production-ready, the remaining production-engineering work is: measure foreground versus background scan runtime over live sessions, tune Polygon cache TTL/rate-limit settings from the new metrics, and define explicit graduation criteria for moving from paper validation to increased real position sizing.
 
 Current scanner performance implementation:
 
 - `SCANNER_MAX_WORKERS` controls a bounded `ThreadPoolExecutor` for parallel market-data prefetch. Default: `5`.
-- Trade state updates, lifecycle writes, DB writes, Excel/CSV writes, Telegram alerts, candidate persistence, and dashboard rendering remain sequential.
-- `engine_health_history.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with scan runtime, workers, requests, exceptions, completed/failed symbols, average symbol runtime, and health score.
-- `scanner_stage_profile.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with stage-level timings for market data, indicators, strategy, entries, risk, options, paper trades, dashboard/research persistence, Telegram, Excel/CSV export, database writes, and engine health.
-- The Engine Health dashboard widget reads the latest history row when available.
+- `DYNAMIC_WATCHLIST_ENABLED=false` keeps the static watchlist. When enabled, Polygon snapshot movers are merged after core symbols and before the static fallback list.
+- Foreground scan work still computes strategies, entries, risk, options, paper-trade decisions, Telegram checks, candidate persistence, relative-strength rankings, opportunity audit, and the operator table sequentially.
+- Scanner finish persistence is queued through `run_background()`: engine health, DB gate decisions, candidate snapshots, signal lifecycle rows, Excel/CSV output, scanner-run finish, and scanner stage profile run after the foreground scan has queued the result.
+- Telegram alert DB audit writes and paper-trade DB upserts are also queued through the background worker. Telegram sends, paper JSON state, and paper event CSV writes remain on the foreground path where needed for operator correctness.
+- Gate-decision DB writes use one batched insert per scan through `record_gate_decisions()` instead of one insert per symbol.
+- Signal lifecycle events and transitions use batched CSV appends per scan through `record_signal_lifecycle_events_for_scan()` instead of one file append per candidate.
+- Polygon observability records total API requests, cache hits, cache misses, cache hit %, average API time, and average cache read time from `app/utils/polygon_client.py`.
+- Background queue observability records pending jobs, completed jobs, failed jobs, queue depth, average job time, longest job time, and longest job name from `app/background/background_queue.py`.
+- `engine_health_history.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with scan runtime, workers, Polygon request/cache/timing metrics, background queue metrics, exceptions, completed/failed symbols, average symbol runtime, and health score.
+- `scanner_stage_profile.csv` is written under both `data/daily/YYYY-MM-DD/` and `data/` with stage-level timings for market data, indicators, strategy, entries, risk, options, Telegram, export, and deferred persistence stages such as `Database / Engine Health`, `Database / Gate Decisions`, `Database / Candidate Snapshot`, `Database / Signal Lifecycle`, and `Database / Scanner Run`.
+- The Engine Health dashboard widget reads the latest history row when available and shows scanner health, Polygon cache/API metrics, background queue metrics, and a category/detail stage breakdown.
+
+## Shared Trade Decision And Telegram Policy
+
+Entry alerting now separates the trade decision from the notification policy:
+
+- `app/decision/decision_engine.py` exposes `evaluate_candidate()` and returns a `TradeDecision` with action, setup score, RR, option quality, confidence score, reasons, and block reasons.
+- Scanner/dashboard/paper rows remain the source of the decision. Telegram no longer needs to duplicate the ultra-strict real-review gate before sending an operational entry alert.
+- `TELEGRAM_ALERT_POLICY` controls entry alert strictness without code changes.
+- `PAPER` (default): alert eligible `ENTER_PAPER` decisions when the decision score is at least `TELEGRAM_MIN_ENTRY_ALERT_SCORE` and the shared decision is not blocked.
+- `REAL_REVIEW`: keep A+ real-review style gating with real setup/RR/option-quality thresholds, top-1 candidate, and persistence.
+- `CUSTOM`: use the explicit Telegram threshold settings such as `TELEGRAM_MIN_RR`, `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, and spread limits.
+
+Telegram still keeps notification controls separate from the decision itself: entry alert enablement, duplicate alert protection, cooldowns, daily caps, active-alert caps, time-of-day limits, and symbol cooldowns remain notification policy. This makes Telegram operationally useful again without loosening real-money review criteria.
 
 Auto-paper decisions are emitted from the Streamlit dashboard auto-paper path, not from the standalone scanner loop. The dashboard writer appends the full-day CSV and then updates the capped dashboard JSON from the same decision row.
 

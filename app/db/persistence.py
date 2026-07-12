@@ -306,28 +306,10 @@ def record_scanner_run_finish(run_id, status="FINISHED", rows_count=None, payloa
     )
 
 
-def record_gate_decision(row, run_id=None):
+def _gate_decision_params(row, run_id=None):
+
     if row is None:
         row = {}
-    statement = _payload_param(text("""
-        INSERT INTO gate_decisions (
-            run_id,
-            symbol,
-            decision,
-            reason,
-            action_status,
-            blocked_by,
-            payload
-        ) VALUES (
-            :run_id,
-            :symbol,
-            :decision,
-            :reason,
-            :action_status,
-            :blocked_by,
-            :payload
-        )
-    """))
     action_status = row.get("Action Status")
     reason = (
         row.get("Action Reason")
@@ -348,38 +330,83 @@ def record_gate_decision(row, run_id=None):
         "regime_blocked": row.get("Regime Blocked")
     }
 
+    return {
+        "run_id": run_id,
+        "symbol": row.get("Symbol"),
+        "decision": action_status or "UNKNOWN",
+        "reason": reason,
+        "action_status": action_status,
+        "blocked_by": row.get("Blocked By"),
+        "payload": _json_safe(payload)
+    }
+
+
+def record_gate_decision(row, run_id=None):
+    statement = _payload_param(text("""
+        INSERT INTO gate_decisions (
+            run_id,
+            symbol,
+            decision,
+            reason,
+            action_status,
+            blocked_by,
+            payload
+        ) VALUES (
+            :run_id,
+            :symbol,
+            :decision,
+            :reason,
+            :action_status,
+            :blocked_by,
+            :payload
+        )
+    """))
+
     return _safe_execute(
         statement,
-        {
-            "run_id": run_id,
-            "symbol": row.get("Symbol"),
-            "decision": action_status or "UNKNOWN",
-            "reason": reason,
-            "action_status": action_status,
-            "blocked_by": row.get("Blocked By"),
-            "payload": _json_safe(payload)
-        }
+        _gate_decision_params(row, run_id=run_id)
     )
 
 
 def record_gate_decisions(rows, run_id=None):
-    count = 0
+
+    rows = list(rows or [])
+
+    if not rows or not db_writes_enabled():
+
+        return 0
+
+    statement = _payload_param(text("""
+        INSERT INTO gate_decisions (
+            run_id,
+            symbol,
+            decision,
+            reason,
+            action_status,
+            blocked_by,
+            payload
+        ) VALUES (
+            :run_id,
+            :symbol,
+            :decision,
+            :reason,
+            :action_status,
+            :blocked_by,
+            :payload
+        )
+    """))
+    params = [
+        _gate_decision_params(row, run_id=run_id)
+        for row in rows
+    ]
 
     try:
 
-        for row in rows or []:
+        engine = get_engine()
+        with engine.begin() as conn:
+            conn.execute(statement, params)
 
-            try:
-
-                if record_gate_decision(row, run_id=run_id):
-                    count += 1
-
-            except Exception as exc:
-
-                logger.warning(
-                    "Gate decision DB write failed; continuing scanner output",
-                    exc_info=exc
-                )
+        return len(params)
 
     except Exception as exc:
 
@@ -388,4 +415,4 @@ def record_gate_decisions(rows, run_id=None):
             exc_info=exc
         )
 
-    return count
+    return 0

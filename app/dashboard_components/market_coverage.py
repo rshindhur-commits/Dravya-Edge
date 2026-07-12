@@ -117,13 +117,54 @@ def render_market_coverage(report_date: str):
 
             kpi_card(label, str(value))
 
+    cols = st.columns(8)
+    polygon_requests = (
+        health.polygon_requests
+        if health and health.polygon_requests is not None
+        else health.polygon_calls if health else None
+    )
+    values = [
+        ("Polygon Requests", _fmt_num(polygon_requests)),
+        ("Cache Hits", _fmt_num(health.cache_hits if health else None)),
+        ("Cache Misses", _fmt_num(health.cache_misses if health else None)),
+        ("Cache Hit %", _fmt_pct(health.cache_hit_rate if health else None)),
+        ("Avg API", _fmt_num(health.average_api_time if health else None)),
+        ("Avg Cache", _fmt_num(health.average_cache_read_time if health else None)),
+        ("Queue Depth", _fmt_num(health.background_queue_depth if health else None)),
+        ("Failed Jobs", _fmt_num(health.background_failed_jobs if health else None)),
+    ]
+
+    for col, (label, value) in zip(cols, values):
+
+        with col:
+
+            kpi_card(label, str(value))
+
+    cols = st.columns(5)
+    values = [
+        ("Pending Jobs", _fmt_num(health.background_pending_jobs if health else None)),
+        ("Completed Jobs", _fmt_num(health.background_completed_jobs if health else None)),
+        ("Avg Job", _fmt_num(health.background_average_job_time if health else None)),
+        ("Longest Job", _fmt_num(health.background_longest_job_time if health else None)),
+        ("Longest Name", health.background_longest_job_name if health else None),
+    ]
+
+    for col, (label, value) in zip(cols, values):
+
+        with col:
+
+            kpi_card(label, str(value or "-"))
+
     if health and health.stage_profile is not None and not health.stage_profile.empty:
 
         stage_profile = health.stage_profile.copy()
         stage_profile["seconds"] = pd.to_numeric(stage_profile["seconds"], errors="coerce")
+        stage_parts = stage_profile["stage"].astype(str).str.split(" / ", n=1, expand=True)
+        stage_profile["category"] = stage_parts[0]
+        stage_profile["detail"] = stage_parts[1].fillna(stage_parts[0]) if stage_parts.shape[1] > 1 else stage_parts[0]
         stage_profile = stage_profile.sort_values("seconds", ascending=False)
         st.dataframe(
-            stage_profile[["stage", "seconds"]],
+            stage_profile[["category", "detail", "seconds"]],
             width="stretch",
             hide_index=True
         )

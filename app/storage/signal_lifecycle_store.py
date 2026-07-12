@@ -122,6 +122,30 @@ def _append_csv(path: Path, row: dict[str, Any], fieldnames: list[str]) -> None:
         writer.writerow(row)
 
 
+def _append_csv_rows(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
+
+    if not rows:
+
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = path.exists() and path.stat().st_size > 0
+
+    with path.open("a", newline="", encoding="utf-8") as handle:
+
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=fieldnames,
+            extrasaction="ignore",
+        )
+
+        if not file_exists:
+
+            writer.writeheader()
+
+        writer.writerows(rows)
+
+
 def _row_get(row: dict[str, Any], *names: str, default=None):
 
     for name in names:
@@ -263,15 +287,14 @@ def _event_from_row(
     }
 
 
-def _append_transition(
-    daily_dir: Path,
+def _build_transition(
     event: dict[str, Any],
     previous: dict[str, Any],
     reason: str | None = None,
-) -> None:
+) -> dict[str, Any]:
 
     previous_event = previous.get("last_event") or {}
-    transition = {
+    return {
         "trading_day": event["trading_day"],
         "session_id": event["session_id"],
         "candidate_key": event["candidate_key"],
@@ -293,6 +316,16 @@ def _append_transition(
         "to_realtime_ready": event["realtime_ready"],
         "reason": reason or event.get("blocked_by") or event.get("realtime_block_reason"),
     }
+
+
+def _append_transition(
+    daily_dir: Path,
+    event: dict[str, Any],
+    previous: dict[str, Any],
+    reason: str | None = None,
+) -> None:
+
+    transition = _build_transition(event, previous, reason=reason)
     _append_csv(
         daily_dir / "signal_state_transitions.csv",
         transition,
@@ -368,23 +401,63 @@ def record_signal_lifecycle_events_for_scan(
     session_id = get_session_id(trading_day)
     daily_dir = get_daily_dir(trading_day)
     session_fields = classify_decision_time(observed_at)
-    count = 0
+    latest_state = _read_json(STATE_FILE)
+    events = []
+    transitions = []
 
     for row in rows:
 
-        record_signal_lifecycle_event(
+        event = _event_from_row(
             row,
-            daily_dir=daily_dir,
-            trading_day=trading_day,
-            session_id=session_id,
-            scan_id=scan_id,
-            observed_at=observed_at,
-            market_session=session_fields["market_session"],
-            is_auto_entry_window=session_fields["is_auto_entry_window"],
+            trading_day,
+            session_id,
+            scan_id,
+            observed_at,
+            session_fields["market_session"],
+            session_fields["is_auto_entry_window"],
         )
-        count += 1
+        events.append(event)
+        state_key = _state_key(event)
+        previous = latest_state.get(state_key)
 
-    return count
+        if previous and previous.get("state_label") != event["state_label"]:
+
+            transitions.append(_build_transition(event, previous))
+            latest_state[state_key] = {
+                "state_label": event["state_label"],
+                "state_started_at": event["observed_at"],
+                "last_seen_at": event["observed_at"],
+                "last_event": event,
+            }
+
+        elif previous:
+
+            previous["last_seen_at"] = event["observed_at"]
+            previous["last_event"] = event
+            latest_state[state_key] = previous
+
+        else:
+
+            latest_state[state_key] = {
+                "state_label": event["state_label"],
+                "state_started_at": event["observed_at"],
+                "last_seen_at": event["observed_at"],
+                "last_event": event,
+            }
+
+    _append_csv_rows(
+        daily_dir / "signal_lifecycle_events.csv",
+        events,
+        LIFECYCLE_EVENT_FIELDS,
+    )
+    _append_csv_rows(
+        daily_dir / "signal_state_transitions.csv",
+        transitions,
+        STATE_TRANSITION_FIELDS,
+    )
+    _atomic_write_json(STATE_FILE, latest_state)
+
+    return len(events)
 
 
 def record_signal_expiry_transition(
