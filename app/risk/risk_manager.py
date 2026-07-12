@@ -311,6 +311,14 @@ def calculate_risk(df, analysis, entry_setup):
     # =========================
 
     minimum_stop_distance = atr
+    original_stop_loss = stop_loss
+    original_risk_per_share = abs(entry_price - stop_loss)
+    original_reward = abs(take_profit - entry_price)
+    original_risk_reward = (
+        original_reward / original_risk_per_share
+        if original_risk_per_share > 0
+        else 0
+    )
 
     if abs(entry_price - stop_loss) < minimum_stop_distance:
 
@@ -327,6 +335,20 @@ def calculate_risk(df, analysis, entry_setup):
                 entry_price
                 + minimum_stop_distance
             )
+
+        adjusted_risk_per_share = abs(entry_price - stop_loss)
+        adjusted_risk_reward = (
+            original_reward / adjusted_risk_per_share
+            if adjusted_risk_per_share > 0
+            else 0
+        )
+        reasons.append(
+            "ATR floor adjusted stop: "
+            f"original_stop={round(original_stop_loss, 2)} "
+            f"adjusted_stop={round(stop_loss, 2)} "
+            f"rr_before={round(original_risk_reward, 2)} "
+            f"rr_after={round(adjusted_risk_reward, 2)}"
+        )
 
 
     risk_per_share = abs(
@@ -366,7 +388,7 @@ def calculate_risk(df, analysis, entry_setup):
         return {
 
             "trade_allowed": False,
-            "reason": "Invalid risk calculation"
+            "reasons": ["Invalid risk calculation"]
         }
 
     intended_direction = _risk_direction(
@@ -458,7 +480,11 @@ def calculate_risk(df, analysis, entry_setup):
 
         trade_allowed = False
 
-        if entry_setup["entry_quality"] == "LOW":
+        reasons.append(
+            f"Risk/Reward below minimum threshold ({RR_MIN_THRESHOLD})"
+        )
+
+        if entry_setup.get("entry_quality", "UNKNOWN") == "LOW":
 
             reasons.append(
                 "Low quality entry with poor RR"
@@ -497,7 +523,7 @@ def calculate_risk(df, analysis, entry_setup):
     # Weak Entry Filter
     # =========================
 
-    if entry_setup["entry_quality"] == "LOW":
+    if entry_setup.get("entry_quality", "UNKNOWN") == "LOW":
 
         max_risk_pct = min(
             max_risk_pct,
@@ -512,7 +538,7 @@ def calculate_risk(df, analysis, entry_setup):
     # Avoid Chasing Filter
     # =========================
 
-    if entry_setup["avoid_chasing"]:
+    if entry_setup.get("avoid_chasing", False):
 
         trade_allowed = False
 

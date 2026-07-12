@@ -5,6 +5,18 @@ import pandas as pd
 from app.utils.runtime_logging import debug_print
 
 
+EXIT_PRIORITY = {
+    "HARD_STOP": 100,
+    "HARD_TARGET": 95,
+    "EMA": 80,
+    "VWAP": 70,
+    "MACD": 60,
+    "FAILED_BREAKOUT": 50,
+    "TIME_EXIT": 40,
+    "NEAR_CLOSE": 30
+}
+
+
 def _is_short_entry(entry_type):
 
     entry_type = str(entry_type or "").upper()
@@ -124,6 +136,28 @@ def _should_guard_early_exit(df, exit_reason, bars_in_trade, rr_progress, is_sho
     )
 
 
+def _exit_diagnostic(code, reason):
+
+    return {
+        "code": code,
+        "reason": reason,
+        "priority": EXIT_PRIORITY.get(code, 0)
+    }
+
+
+def _select_primary_exit(exit_reasons):
+
+    if not exit_reasons:
+
+        return None
+
+    return sorted(
+        exit_reasons,
+        key=lambda item: item.get("priority", 0),
+        reverse=True
+    )[0]
+
+
 def evaluate_exit(
     df,
     analysis,
@@ -210,6 +244,7 @@ def evaluate_exit(
     trailing_stop = stop_loss
     exit_signal = False
     exit_reason = "Hold"
+    exit_reasons = []
     trade_action = "HOLD"
     adjustment_reason = "Trend intact"
 
@@ -218,25 +253,28 @@ def evaluate_exit(
 
         if latest["High"] >= stop_loss:
 
-            exit_signal = True
-            exit_reason = "Hard stop hit (short)"
+            exit_reasons.append(_exit_diagnostic("HARD_STOP", "Hard stop hit (short)"))
 
-        elif latest["Low"] <= take_profit:
+        if latest["Low"] <= take_profit:
 
-            exit_signal = True
-            exit_reason = "Profit target reached (short)"
+            exit_reasons.append(_exit_diagnostic("HARD_TARGET", "Profit target reached (short)"))
 
     else:
 
         if latest["Low"] <= stop_loss:
 
-            exit_signal = True
-            exit_reason = "Hard stop hit (long)"
+            exit_reasons.append(_exit_diagnostic("HARD_STOP", "Hard stop hit (long)"))
 
-        elif latest["High"] >= take_profit:
+        if latest["High"] >= take_profit:
 
-            exit_signal = True
-            exit_reason = "Profit target reached (long)"
+            exit_reasons.append(_exit_diagnostic("HARD_TARGET", "Profit target reached (long)"))
+
+    primary_exit = _select_primary_exit(exit_reasons)
+
+    if primary_exit:
+
+        exit_signal = True
+        exit_reason = primary_exit["reason"]
 
     if not exit_signal and rr_progress >= 1:
 
@@ -282,7 +320,7 @@ def evaluate_exit(
 
         adjustment_reason = "ATR trailing stop active"
 
-    if not exit_signal:
+    if True:
 
         if is_short and pd.notna(latest.get("EMA9")):
 
@@ -291,8 +329,7 @@ def evaluate_exit(
                 and latest.get("EMA9_SLOPE", 0) > 0
             ):
 
-                exit_signal = True
-                exit_reason = "EMA9 invalidation (short)"
+                exit_reasons.append(_exit_diagnostic("EMA", "EMA9 invalidation (short)"))
 
         elif not is_short and pd.notna(latest.get("EMA9")):
 
@@ -301,22 +338,33 @@ def evaluate_exit(
                 and latest.get("EMA9_SLOPE", 0) < 0
             ):
 
-                exit_signal = True
-                exit_reason = "EMA9 invalidation (long)"
+                exit_reasons.append(_exit_diagnostic("EMA", "EMA9 invalidation (long)"))
 
-    if not exit_signal and pd.notna(latest.get("VWAP")):
+        primary_exit = _select_primary_exit(exit_reasons)
+
+        if primary_exit:
+
+            exit_signal = True
+            exit_reason = primary_exit["reason"]
+
+    if pd.notna(latest.get("VWAP")):
 
         if is_short and current_price > latest["VWAP"]:
 
-            exit_signal = True
-            exit_reason = "VWAP invalidation (short)"
+            exit_reasons.append(_exit_diagnostic("VWAP", "VWAP invalidation (short)"))
 
         elif not is_short and current_price < latest["VWAP"]:
 
-            exit_signal = True
-            exit_reason = "VWAP invalidation (long)"
+            exit_reasons.append(_exit_diagnostic("VWAP", "VWAP invalidation (long)"))
 
-    if not exit_signal:
+        primary_exit = _select_primary_exit(exit_reasons)
+
+        if primary_exit:
+
+            exit_signal = True
+            exit_reason = primary_exit["reason"]
+
+    if True:
 
         if (
             is_short
@@ -325,8 +373,7 @@ def evaluate_exit(
             and latest["MACD"] > latest["MACD_SIGNAL"]
         ):
 
-            exit_signal = True
-            exit_reason = "MACD bullish crossover (short)"
+            exit_reasons.append(_exit_diagnostic("MACD", "MACD bullish crossover (short)"))
 
         elif (
             not is_short
@@ -335,30 +382,41 @@ def evaluate_exit(
             and latest["MACD"] < latest["MACD_SIGNAL"]
         ):
 
+            exit_reasons.append(_exit_diagnostic("MACD", "MACD bearish crossover (long)"))
+
+        primary_exit = _select_primary_exit(exit_reasons)
+
+        if primary_exit:
+
             exit_signal = True
-            exit_reason = "MACD bearish crossover (long)"
+            exit_reason = primary_exit["reason"]
 
-    if not exit_signal and latest.get("FAILED_BREAKOUT", False):
+    if latest.get("FAILED_BREAKOUT", False):
 
+        exit_reasons.append(_exit_diagnostic("FAILED_BREAKOUT", "Failed breakout"))
+        primary_exit = _select_primary_exit(exit_reasons)
         exit_signal = True
-        exit_reason = "Failed breakout"
+        exit_reason = primary_exit["reason"]
 
-    if not exit_signal and bars_in_trade >= 24 and rr_progress < 0.5:
+    if bars_in_trade >= 24 and rr_progress < 0.5:
 
+        exit_reasons.append(_exit_diagnostic("TIME_EXIT", "Time exit: trade stagnation"))
+        primary_exit = _select_primary_exit(exit_reasons)
         exit_signal = True
-        exit_reason = "Time exit: trade stagnation"
+        exit_reason = primary_exit["reason"]
 
     latest_et = _get_timestamp_et(latest)
 
     if (
-        not exit_signal
-        and latest_et is not None
+        latest_et is not None
         and latest_et.time() >= time(15, 45)
         and rr_progress < 1
     ):
 
+        exit_reasons.append(_exit_diagnostic("NEAR_CLOSE", "Near-close exit without sufficient profit"))
+        primary_exit = _select_primary_exit(exit_reasons)
         exit_signal = True
-        exit_reason = "Near-close exit without sufficient profit"
+        exit_reason = primary_exit["reason"]
 
     if exit_signal and _should_guard_early_exit(
         df,
@@ -383,12 +441,26 @@ def evaluate_exit(
         f"rr_progress={round(rr_progress, 2)} "
         f"bars={bars_in_trade} "
         f"exit_signal={exit_signal} "
-        f"reason={exit_reason}"
+        f"reason={exit_reason} "
+        f"all_reasons={[item['reason'] for item in exit_reasons]}"
     )
 
     return {
         "exit_signal": exit_signal,
         "exit_reason": exit_reason,
+        "exit_reasons": [item["reason"] for item in exit_reasons],
+        "exit_diagnostics": exit_reasons,
+        "primary_exit": exit_reason,
+        "secondary_exits": [
+            item["reason"]
+            for item in exit_reasons
+            if item["reason"] != exit_reason
+        ],
+        "ignored_exit_signals": [
+            item["reason"]
+            for item in exit_reasons
+            if not exit_signal or item["reason"] != exit_reason
+        ],
         "trailing_stop": _round_float(trailing_stop),
         "updated_stop": _round_float(updated_stop),
         "rr_progress": _round_float(rr_progress),

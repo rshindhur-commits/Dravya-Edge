@@ -114,6 +114,8 @@ def _simulate_path(
     future_df = candles.head(horizon_bars)
     bars_to_target = None
     bars_to_stop = None
+    ignored_stop_hit = False
+    ignored_stop_bar = None
     max_favorable = 0.0
     max_adverse = 0.0
 
@@ -141,6 +143,11 @@ def _simulate_path(
         if target_hit and bars_to_target is None:
 
             bars_to_target = bar_number
+
+        if stop_hit and bar_number <= ignore_stop_bars and not ignored_stop_hit:
+
+            ignored_stop_hit = True
+            ignored_stop_bar = bar_number
 
         if stop_hit and bars_to_stop is None and bar_number > ignore_stop_bars:
 
@@ -170,6 +177,8 @@ def _simulate_path(
         "outcome": outcome,
         "bars_to_target": bars_to_target,
         "bars_to_stop": bars_to_stop,
+        "ignored_stop_hit": ignored_stop_hit,
+        "ignored_stop_bar": ignored_stop_bar,
         "mfe": max_favorable,
         "mae": max_adverse,
     }
@@ -240,6 +249,8 @@ def calibrate_replay_path(
                     "r_multiple": round(r_multiple, 4),
                     "bars_to_target": path_result["bars_to_target"],
                     "bars_to_stop": path_result["bars_to_stop"],
+                    "ignored_stop_hit": path_result["ignored_stop_hit"],
+                    "ignored_stop_bar": path_result["ignored_stop_bar"],
                     "mfe": round(path_result["mfe"], 4),
                     "mae": round(path_result["mae"], 4),
                     "mfe_atr": round(path_result["mfe"] / atr, 4),
