@@ -4658,6 +4658,19 @@ def _inject_compact_dashboard_css():
             line-height: 1.1;
             overflow-wrap: anywhere;
         }
+
+        .stDataFrame table thead th,
+        .dataframe table thead th {
+            color: var(--text-color) !important;
+            opacity: 0.88 !important;
+            background-color: var(--secondary-background-color) !important;
+            border-color: rgba(148, 163, 184, 0.25) !important;
+        }
+
+        .stDataFrame table tbody td,
+        .dataframe table tbody td {
+            color: var(--text-color) !important;
+        }
         </style>
         """,
         unsafe_allow_html=True
