@@ -4659,16 +4659,42 @@ def _inject_compact_dashboard_css():
             overflow-wrap: anywhere;
         }
 
+        .stDataFrame th,
         .stDataFrame table thead th,
+        .stTable th,
+        .stTable table thead th,
+        .dataframe th,
         .dataframe table thead th {
             color: var(--text-color) !important;
-            opacity: 0.88 !important;
+            opacity: 1 !important;
+            font-weight: 700 !important;
             background-color: var(--secondary-background-color) !important;
             border-color: rgba(148, 163, 184, 0.25) !important;
         }
 
+        .stDataFrame td,
         .stDataFrame table tbody td,
+        .stTable td,
+        .stTable table tbody td,
+        .dataframe td,
         .dataframe table tbody td {
+            color: var(--text-color) !important;
+        }
+
+        div[data-testid="stSidebar"] {
+            background-color: var(--background-color) !important;
+            color: var(--text-color) !important;
+        }
+
+        div[data-testid="stSidebar"] * {
+            color: var(--text-color) !important;
+        }
+
+        div[data-testid="stSidebar"] h2,
+        div[data-testid="stSidebar"] h3,
+        div[data-testid="stSidebar"] label,
+        div[data-testid="stSidebar"] span,
+        div[data-testid="stSidebar"] button {
             color: var(--text-color) !important;
         }
         </style>
