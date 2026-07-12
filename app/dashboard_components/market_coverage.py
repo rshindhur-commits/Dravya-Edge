@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app.analytics.trading_scorecard import build_trading_scorecard
+from app.ui.components import kpi_card
 
 
 def _fmt_pct(value):
@@ -46,11 +47,19 @@ def render_market_coverage(report_date: str):
 
     st.subheader("Trading Scorecard")
     cols = st.columns(5)
-    cols[0].metric("Market Regime", scorecard.market_regime)
-    cols[1].metric("Coverage", _fmt_pct(coverage.coverage_score if coverage else None))
-    cols[2].metric("Signals", scorecard.signals.get("signals", 0))
-    cols[3].metric("Paper", scorecard.signals.get("paper", 0))
-    cols[4].metric("Expectancy", _fmt_num(scorecard.expectancy.get("expectancy_r")))
+    values = [
+        ("Market Regime", scorecard.market_regime),
+        ("Coverage", _fmt_pct(coverage.coverage_score if coverage else None)),
+        ("Signals", scorecard.signals.get("signals", 0)),
+        ("Paper", scorecard.signals.get("paper", 0)),
+        ("Expectancy", _fmt_num(scorecard.expectancy.get("expectancy_r"))),
+    ]
+
+    for col, (label, value) in zip(cols, values):
+
+        with col:
+
+            kpi_card(label, str(value))
 
     st.caption("Recommendations: " + " | ".join(scorecard.recommendations))
 
@@ -63,12 +72,20 @@ def render_market_coverage(report_date: str):
 
     st.subheader("Market Coverage")
     cols = st.columns(6)
-    cols[0].metric("Watchlist Movers", coverage.total_watchlist)
-    cols[1].metric("Detected", f"{coverage.detected} / {_fmt_pct(coverage.detection_rate)}")
-    cols[2].metric("Correct Direction", f"{coverage.correct_direction} / {_fmt_pct(coverage.correct_direction_rate)}")
-    cols[3].metric("Paper Entries", f"{coverage.entered} / {_fmt_pct(coverage.entry_rate)}")
-    cols[4].metric("Profitable", f"{coverage.profitable} / {_fmt_pct(coverage.profitable_rate)}")
-    cols[5].metric("Missed Winners", coverage.missed)
+    values = [
+        ("Watchlist Movers", coverage.total_watchlist),
+        ("Detected", f"{coverage.detected} / {_fmt_pct(coverage.detection_rate)}"),
+        ("Correct Direction", f"{coverage.correct_direction} / {_fmt_pct(coverage.correct_direction_rate)}"),
+        ("Paper Entries", f"{coverage.entered} / {_fmt_pct(coverage.entry_rate)}"),
+        ("Profitable", f"{coverage.profitable} / {_fmt_pct(coverage.profitable_rate)}"),
+        ("Missed Winners", coverage.missed),
+    ]
+
+    for col, (label, value) in zip(cols, values):
+
+        with col:
+
+            kpi_card(label, str(value))
 
     st.subheader("Opportunity Funnel")
 
@@ -83,14 +100,22 @@ def render_market_coverage(report_date: str):
     st.subheader("Engine Health")
     health = scorecard.engine_health
     cols = st.columns(8)
-    cols[0].metric("Health", _fmt_num(health.health_score if health else None))
-    cols[1].metric("Scanner", _fmt_num(health.scanner_runtime if health else None))
-    cols[2].metric("Workers", _fmt_num(health.worker_count if health else None))
-    cols[3].metric("Symbols", _fmt_num(health.symbols_completed if health else None))
-    cols[4].metric("Avg/Symbol", _fmt_num(health.average_symbol_time if health else None))
-    cols[5].metric("Fresh Quotes", _fmt_pct(health.fresh_quote_rate if health else None))
-    cols[6].metric("Delayed", _fmt_num(health.delayed_quotes if health else None))
-    cols[7].metric("Failures", _fmt_num(health.symbols_failed if health else None))
+    values = [
+        ("Health", _fmt_num(health.health_score if health else None)),
+        ("Scanner", _fmt_num(health.scanner_runtime if health else None)),
+        ("Workers", _fmt_num(health.worker_count if health else None)),
+        ("Symbols", _fmt_num(health.symbols_completed if health else None)),
+        ("Avg/Symbol", _fmt_num(health.average_symbol_time if health else None)),
+        ("Fresh Quotes", _fmt_pct(health.fresh_quote_rate if health else None)),
+        ("Delayed", _fmt_num(health.delayed_quotes if health else None)),
+        ("Failures", _fmt_num(health.symbols_failed if health else None)),
+    ]
+
+    for col, (label, value) in zip(cols, values):
+
+        with col:
+
+            kpi_card(label, str(value))
 
     if health and health.stage_profile is not None and not health.stage_profile.empty:
 
@@ -116,10 +141,18 @@ def render_market_coverage(report_date: str):
     st.subheader("Entry Delay")
     delay = scorecard.entry_delay
     cols = st.columns(4)
-    cols[0].metric("Average", _fmt_num(delay.get("average_minutes")))
-    cols[1].metric("Median", _fmt_num(delay.get("median_minutes")))
-    cols[2].metric("Longest", _fmt_num(delay.get("longest_minutes")))
-    cols[3].metric("Best", _fmt_num(delay.get("best_minutes")))
+    values = [
+        ("Average", _fmt_num(delay.get("average_minutes"))),
+        ("Median", _fmt_num(delay.get("median_minutes"))),
+        ("Longest", _fmt_num(delay.get("longest_minutes"))),
+        ("Best", _fmt_num(delay.get("best_minutes"))),
+    ]
+
+    for col, (label, value) in zip(cols, values):
+
+        with col:
+
+            kpi_card(label, str(value))
 
     if delay:
 

@@ -113,6 +113,8 @@ The dashboard includes measurement-only research widgets built from daily files.
 
 These widgets are fed primarily by `market_opportunity_audit.csv`, `paper_trade_events.csv`, `scanner_output_close.csv`, `auto_paper_decisions.csv`, and candidate snapshots. Use them after each session to decide where engineering time should go without introducing new indicators, AI scoring, ML prediction, or exit-confidence models prematurely.
 
+Dashboard KPI rows use the shared `kpi_card()` helper in `app/ui/components.py` and the global `.metric-card` CSS injected by `app/dashboard.py`. Use these compact KPI cards for scorecard, coverage, engine-health, entry-delay, and validation-summary metrics. Reserve larger headline typography for future primary performance metrics such as total P/L, total R, win rate, or profit factor.
+
 ## Production Engineering Status
 
 Current implementation status for the production-engineering roadmap:
