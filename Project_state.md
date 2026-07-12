@@ -80,7 +80,7 @@ At a high level, each scan does this per symbol:
 ### Scanner Orchestration
 
 - `app/main.py` coordinates the scanner loop, table output, Excel export, telemetry save, OpenAI summary calls, trade state updates, and projection replay.
-- `app/trade_manager.py` manages live trade adjustments such as breakeven stops, EMA9 trailing stops, failed breakout exits, EMA20 exits, momentum breakdown exits, time exits, and partial-profit signals.
+- `app/exit/exit_engine.py` is the live source of truth for exit decisions and trade-action outputs. `app/trade_manager.py` is legacy historical reference only.
 
 ### Market Data
 
@@ -144,8 +144,8 @@ At a high level, each scan does this per symbol:
 
 ### Exits
 
-- `app/exit/exit_engine.py` evaluates stop loss, momentum weakening, failed breakout, VWAP failure, MACD bearish crossover, EMA20 breakdown, and target hit.
-- `app/trade_manager.py` separately evaluates trade management actions and trailing/updated stops.
+- `app/exit/exit_engine.py` evaluates hard stop, hard target, EMA, VWAP, MACD, failed-breakout, time, and near-close exits with explicit priority diagnostics.
+- `app/trade_manager.py` is legacy and should not be used for live exit decisions.
 
 ### Projections And Replay
 
@@ -674,6 +674,8 @@ When starting a fresh GPT session:
 - Added an early weak-exit guard: during the first few bars, near-flat EMA/VWAP/MACD/failed-breakout exits can hold when the trend remains intact. Hard stops, targets, and risk exits still take priority.
 - Added paper-mode option selection so validation can keep the best-quality primary contract active while real readiness remains affordability-gated.
 - Added `data/daily/YYYY-MM-DD/market_opportunity_audit.csv` after each scan for watchlist-level opportunity attribution: symbol, score, shadow category score, setup, action, blocked reason, top candidate, persistence metrics, move %, and replay outcome.
+- Fixed replay calibration ignored-stop observability, standardized risk-manager error diagnostics on `reasons`, added explicit RR rejection reasons, made entry metadata access defensive, and added ATR-floor adjustment diagnostics without changing ATR/risk thresholds.
+- Marked `app/trade_manager.py` as legacy. `app/exit/exit_engine.py::evaluate_exit()` is the live exit source of truth and now returns explicit exit priority diagnostics: primary exit, secondary exits, all exit reasons, and ignored exit signals.
 
 2026-07-09
 - Added invalid fresh-entry filtering in the dashboard so `ACTIVE_TRADE`, `PAPER_TRADE`, `OPEN_TRADE`, `NO_ENTRY`, `NO_SETUP`, and blank/null entry states cannot appear as new suggested-trade or paper-entry candidates.

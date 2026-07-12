@@ -1,3 +1,11 @@
+"""
+LEGACY.
+
+This module is superseded by app.exit.exit_engine.evaluate_exit(), which is
+the live scanner's single source of truth for exit decisions. Keep this file
+only for historical reference until it can be safely removed.
+"""
+
 import pandas as pd
 
 

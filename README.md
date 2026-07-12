@@ -39,6 +39,16 @@ The project is now in a calibration phase: avoid adding new indicators or broad 
 
 These changes are calibration refinements, not a new strategy family. Do not change EMA periods, RSI/MACD thresholds, ATR rules, DTE/delta rules, risk manager thresholds, or setup/RR thresholds without a larger validation sample.
 
+Recent calibration bugfixes deliberately avoid strategy changes:
+
+- Replay calibration now records `ignored_stop_hit` and `ignored_stop_bar` when a stop is touched during ignored opening bars, so calibration statistics can distinguish an intentionally ignored early stop from a clean path.
+- Risk manager diagnostics always include an explicit `Risk/Reward below minimum threshold (1.5)` reason when RR rejects a trade.
+- Risk manager error returns use `reasons` consistently instead of mixing `reason` and `reasons`.
+- Risk manager entry metadata access is defensive for missing `entry_quality` / `avoid_chasing` fields.
+- ATR-floor stop adjustment is logged with original stop, adjusted stop, RR before, and RR after. The ATR floor itself is unchanged.
+
+Exit decisions use `app/exit/exit_engine.py::evaluate_exit()` as the live single source of truth. `app/trade_manager.py` is legacy and retained only for historical reference. Exit precedence is explicit: hard stop, hard target, EMA, VWAP, MACD, failed breakout, time exit, then near-close exit. The exit engine now returns `exit_reasons`, `exit_diagnostics`, `primary_exit`, `secondary_exits`, and `ignored_exit_signals` so daily review can see every triggered exit condition even when a higher-priority exit wins.
+
 ## Daily Validation Report
 
 Daily validation uses a session model:
