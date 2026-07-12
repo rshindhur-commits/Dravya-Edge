@@ -670,17 +670,17 @@ def _style_setup_grade(value):
 
     if text.startswith("A+"):
 
-        return "background-color: #14532d; color: white; font-weight: 700"
+        return "background-color: rgba(34, 197, 94, 0.18); color: inherit; font-weight: 700"
 
     if text.startswith("A"):
 
-        return "background-color: #166534; color: white; font-weight: 700"
+        return "background-color: rgba(34, 197, 94, 0.14); color: inherit; font-weight: 700"
 
     if text.startswith("B"):
 
-        return "background-color: #854d0e; color: white; font-weight: 700"
+        return "background-color: rgba(245, 158, 11, 0.18); color: inherit; font-weight: 700"
 
-    return "background-color: #7f1d1d; color: white; font-weight: 700"
+    return "background-color: rgba(239, 68, 68, 0.18); color: inherit; font-weight: 700"
 
 
 def _option_moneyness(direction, underlying_price, strike):
@@ -4334,15 +4334,15 @@ def _style_trade_rows(row):
         and action in ["WATCH", "ENTER", "ENTER_PAPER", "REVIEW_TV_CHART"]
     ):
 
-        color = "background-color: #14532d; color: white"
+        color = "background-color: rgba(34, 197, 94, 0.18); color: inherit"
 
     elif setup_pct >= 60:
 
-        color = "background-color: #713f12; color: white"
+        color = "background-color: rgba(245, 158, 11, 0.18); color: inherit"
 
     else:
 
-        color = "background-color: #7f1d1d; color: white"
+        color = "background-color: rgba(239, 68, 68, 0.18); color: inherit"
 
     return [color] * len(row)
 
@@ -4588,14 +4588,16 @@ def _inject_compact_dashboard_css():
             border: 1px solid rgba(148, 163, 184, 0.25);
             border-radius: 10px;
             padding: 0.45rem 0.6rem;
-            background: rgba(255, 255, 255, 0.035);
+            background: var(--secondary-background-color);
+            color: var(--text-color);
             min-height: 52px;
         }
 
         .compact-label {
             font-size: 0.70rem;
             font-weight: 600;
-            color: rgba(229, 231, 235, 0.70);
+            color: inherit;
+            opacity: 0.72;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -4606,7 +4608,7 @@ def _inject_compact_dashboard_css():
             line-height: 1.25;
             font-weight: 700;
             margin-top: 0.18rem;
-            color: rgba(255, 255, 255, 0.94);
+            color: inherit;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -4629,17 +4631,19 @@ def _inject_compact_dashboard_css():
         }
 
         .metric-card {
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(128, 128, 128, 0.25);
             border-radius: 10px;
             padding: 14px 16px;
-            background: #1d1f27;
+            background: var(--secondary-background-color);
+            color: var(--text-color);
             min-height: 84px;
             margin-bottom: 0.7rem;
         }
 
         .metric-label {
             font-size: 13px;
-            color: #9ca3af;
+            color: inherit;
+            opacity: 0.72;
             font-weight: 600;
             margin-bottom: 8px;
             white-space: nowrap;
@@ -4650,7 +4654,7 @@ def _inject_compact_dashboard_css():
         .metric-value {
             font-size: 28px;
             font-weight: 700;
-            color: white;
+            color: inherit;
             line-height: 1.1;
             overflow-wrap: anywhere;
         }
