@@ -65,6 +65,7 @@ from app.dashboard_components.market_coverage import render_market_coverage
 from app.storage.daily_paths import daily_path, get_daily_dir
 from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
 from app.ui.components import kpi_card
+from app.ui.dashboard_state import build_dashboard_state
 
 try:
 
@@ -88,6 +89,7 @@ if str(ROOT_DIR) not in sys.path:
 SCANNER_FILE = ROOT_DIR / "scanner_output.xlsx"
 LIVE_SCANNER_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.xlsx"
 LIVE_SCANNER_CSV_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.csv"
+LIVE_DASHBOARD_STATE_FILE = ROOT_DIR / "data" / "live" / "dashboard_state.json"
 SCANNER_LOCK_FILE = ROOT_DIR / "data" / "live" / "scanner_run.lock"
 SCANNER_STATUS_FILE = ROOT_DIR / "data" / "live" / "scanner_run_status.json"
 SCANNER_LOCK_STALE_MINUTES = 10
@@ -1162,7 +1164,6 @@ def _load_scanner_output():
             f"{scanner_file.name} is corrupted or was partially written. "
             f"Moved it aside if possible. Run scanner again. Error: {exc}"
         )
-
         return pd.DataFrame()
 
     if df.empty:
@@ -1209,6 +1210,25 @@ def _load_scanner_output():
     df = _add_shadow_diagnostics(df)
 
     return df
+
+
+def _load_dashboard_state(df=None):
+
+    try:
+
+        if LIVE_DASHBOARD_STATE_FILE.exists() and LIVE_DASHBOARD_STATE_FILE.stat().st_size > 0:
+
+            return json.loads(LIVE_DASHBOARD_STATE_FILE.read_text(encoding="utf-8"))
+
+    except Exception:
+
+        pass
+
+    if df is not None and not df.empty:
+
+        return build_dashboard_state(df)
+
+    return {}
 
 
 def _candidate_rows_for_suggestions(df):
@@ -2197,73 +2217,153 @@ Skip reason:
 
 def _render_download_exports():
 
-    st.sidebar.subheader("Exports")
+    st.sidebar.subheader("Downloads")
 
-    exports = [
-        {
-            "label": "scanner_output.xlsx",
-            "path": SCANNER_FILE,
-            "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        },
-        {
-            "label": "trade_telemetry.csv",
-            "path": TELEMETRY_FILE,
-            "mime": "text/csv"
-        },
-        {
-            "label": "paper_trade_state.json",
-            "path": PAPER_TRADE_STATE_FILE,
-            "mime": "application/json"
-        },
-        {
-            "label": "auto_paper_decision_log.json",
-            "path": AUTO_PAPER_DECISION_LOG_FILE,
-            "mime": "application/json"
-        },
-        {
-            "label": "suggested_trade_state.json",
-            "path": SUGGESTED_TRADE_STATE_FILE,
-            "mime": "application/json"
-        },
-        {
-            "label": "trade_state.json",
-            "path": TRADE_STATE_FILE,
-            "mime": "application/json"
-        }
-    ]
+    report_date = st.session_state.get(
+        "daily_validation_report_date",
+        datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    )
+    scanner_data = _scanner_output_download_bytes()
 
-    for export in exports:
+    if scanner_data is None:
 
-        if export["path"] == SCANNER_FILE:
+        _render_file_download_button(
+            "Scanner Output",
+            SCANNER_FILE,
+            file_name="scanner_output.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_primary_scanner_output"
+        )
 
-            data = _scanner_output_download_bytes()
+    else:
 
-        else:
+        st.sidebar.download_button(
+            label="Scanner Output",
+            data=scanner_data,
+            file_name="scanner_output.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_primary_scanner_output"
+        )
 
-            data = _read_download_file(
-                export["path"]
-            )
+    _render_file_download_button(
+        "Validation Report",
+        daily_path(report_date, "daily_validation_report.html"),
+        file_name=f"daily_validation_{report_date}.html",
+        mime="text/html",
+        key=f"download_primary_validation_report_{report_date}"
+    )
 
-        if data is None:
+    _render_file_download_button(
+        "Replay Report",
+        daily_path(report_date, "offline_replay_summary.csv"),
+        file_name="offline_replay_summary.csv",
+        mime="text/csv",
+        key=f"download_primary_replay_summary_{report_date}"
+    )
 
-            _render_file_download_button(
-                f"Download {export['label']}",
-                export["path"],
+    with st.sidebar.expander("Advanced", expanded=False):
+
+        exports = [
+            {
+                "label": "scanner_output.xlsx",
+                "path": SCANNER_FILE,
+                "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            },
+            {
+                "label": "trade_telemetry.csv",
+                "path": TELEMETRY_FILE,
+                "mime": "text/csv"
+            },
+            {
+                "label": "paper_trade_state.json",
+                "path": PAPER_TRADE_STATE_FILE,
+                "mime": "application/json"
+            },
+            {
+                "label": "auto_paper_decision_log.json",
+                "path": AUTO_PAPER_DECISION_LOG_FILE,
+                "mime": "application/json"
+            },
+            {
+                "label": "suggested_trade_state.json",
+                "path": SUGGESTED_TRADE_STATE_FILE,
+                "mime": "application/json"
+            },
+            {
+                "label": "trade_state.json",
+                "path": TRADE_STATE_FILE,
+                "mime": "application/json"
+            }
+        ]
+
+        for export in exports:
+
+            if export["path"] == SCANNER_FILE:
+
+                data = _scanner_output_download_bytes()
+
+            else:
+
+                data = _read_download_file(
+                    export["path"]
+                )
+
+            if data is None:
+
+                _render_file_download_button(
+                    f"Download {export['label']}",
+                    export["path"],
+                    file_name=export["label"],
+                    mime=export["mime"],
+                    key=f"download_{export['label']}",
+                    container=st
+                )
+                continue
+
+            st.download_button(
+                label=f"Download {export['label']}",
+                data=data,
                 file_name=export["label"],
                 mime=export["mime"],
                 key=f"download_{export['label']}"
             )
-            continue
 
-        st.sidebar.download_button(
-            label=f"Download {export['label']}",
-            data=data,
-            file_name=export["label"],
-            mime=export["mime"],
-            key=f"download_{export['label']}"
-        )
+        _render_daily_artifact_downloads(report_date, container=st)
 
     _render_daily_validation_report_controls()
+
+
+def _generate_daily_validation_report(report_date, finalize_report=True):
+
+    from types import SimpleNamespace
+    from tools.daily_validation_report import build_report
+
+    return build_report(
+        SimpleNamespace(
+            date=report_date,
+            output=None,
+            archive=True,
+            update_daily=True,
+            finalize=finalize_report
+        )
+    )
+
+
+def _generate_offline_replay(report_date):
+
+    from tools.replay_today import build_replay_summary, replay_scanner_snapshot
+
+    input_path = daily_path(report_date, "scanner_output_close.csv")
+    output_path = daily_path(report_date, "offline_replay.csv")
+    replay, _summary = replay_scanner_snapshot(input_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    replay.to_csv(output_path, index=False)
+    summary_path = output_path.with_name("offline_replay_summary.csv")
+    build_replay_summary(replay).to_csv(
+        summary_path,
+        index=False
+    )
+    return output_path, summary_path
 
 
 def _render_daily_validation_report_controls():
@@ -2286,23 +2386,15 @@ def _render_daily_validation_report_controls():
     )
 
     if st.sidebar.button(
-        "Generate Daily Validation Report",
+        "Generate Validation Report",
         key="generate_daily_validation_report"
     ):
 
         try:
 
-            from types import SimpleNamespace
-            from tools.daily_validation_report import build_report
-
-            output_path = build_report(
-                SimpleNamespace(
-                    date=report_date,
-                    output=None,
-                    archive=True,
-                    update_daily=True,
-                    finalize=finalize_report
-                )
+            output_path = _generate_daily_validation_report(
+                report_date,
+                finalize_report=finalize_report
             )
             st.session_state["daily_validation_report_path"] = str(output_path)
             st.sidebar.success(
@@ -2314,6 +2406,44 @@ def _render_daily_validation_report_controls():
             st.sidebar.error(
                 "Report generation failed."
             )
+            st.sidebar.text(str(exc))
+
+    if st.sidebar.button(
+        "Generate Replay",
+        key="generate_sidebar_offline_replay"
+    ):
+
+        try:
+
+            _output_path, summary_path = _generate_offline_replay(report_date)
+            st.session_state["offline_replay_summary_path"] = str(summary_path)
+            st.sidebar.success("Offline replay generated.")
+
+        except Exception as exc:
+
+            st.sidebar.error("Replay generation failed.")
+            st.sidebar.text(str(exc))
+
+    if st.sidebar.button(
+        "Post Market: Generate Everything",
+        key="post_market_generate_everything"
+    ):
+
+        try:
+
+            output_path = _generate_daily_validation_report(
+                report_date,
+                finalize_report=finalize_report
+            )
+            _replay_path, summary_path = _generate_offline_replay(report_date)
+            st.session_state["daily_validation_report_path"] = str(output_path)
+            st.session_state["offline_replay_summary_path"] = str(summary_path)
+            st.sidebar.success("Validation report and replay generated.")
+            st.rerun()
+
+        except Exception as exc:
+
+            st.sidebar.error("Post-market generation failed.")
             st.sidebar.text(str(exc))
 
     report_path = Path(
@@ -2343,10 +2473,18 @@ def _render_daily_validation_report_controls():
         key=f"download_daily_validation_report_{report_date}"
     )
 
-    _render_daily_artifact_downloads(report_date)
+    _render_file_download_button(
+        "Open Replay Summary",
+        daily_path(report_date, "offline_replay_summary.csv"),
+        file_name="offline_replay_summary.csv",
+        mime="text/csv",
+        key=f"download_sidebar_replay_summary_{report_date}"
+    )
 
 
-def _render_daily_artifact_downloads(report_date):
+def _render_daily_artifact_downloads(report_date, container=None):
+
+    container = container or st.sidebar
 
     daily_exports = [
         {
@@ -2399,7 +2537,7 @@ def _render_daily_artifact_downloads(report_date):
         }
     ]
 
-    st.sidebar.caption("Daily observability files")
+    container.caption("Daily observability files")
 
     for export in daily_exports:
 
@@ -2408,7 +2546,8 @@ def _render_daily_artifact_downloads(report_date):
             export["path"],
             file_name=export["file_name"],
             mime=export["mime"],
-            key=f"download_daily_{report_date}_{export['label']}"
+            key=f"download_daily_{report_date}_{export['label']}",
+            container=container
         )
 
 
@@ -5117,6 +5256,404 @@ def _render_scanner_watchlist(df):
     )
 
 
+def _render_entry_diagnostics(df):
+
+    if df is None or df.empty:
+
+        st.info("No scanner rows available for entry diagnostics.")
+        return
+
+    required_columns = [
+        "Symbol",
+        "ENTRY_SETUP_CANDIDATE",
+        "ENTRY_READINESS",
+        "FAILED_ENTRY_CONDITIONS",
+        "PASSED_ENTRY_CONDITIONS",
+        "ENTRY_DECISION_TIMELINE",
+        "Action Status",
+        "Market Regime",
+    ]
+
+    if not any(column in df.columns for column in required_columns):
+
+        st.info("Entry diagnostics will appear after the next scanner run.")
+        return
+
+    rows = df.copy()
+
+    for column in required_columns:
+
+        if column not in rows.columns:
+
+            rows[column] = None
+
+    rows["ENTRY_READINESS"] = pd.to_numeric(
+        rows["ENTRY_READINESS"],
+        errors="coerce"
+    )
+    display = rows[
+        [
+            "Symbol",
+            "Market Regime",
+            "Action Status",
+            "ENTRY_SETUP_CANDIDATE",
+            "ENTRY_READINESS",
+            "FAILED_ENTRY_CONDITIONS",
+            "PASSED_ENTRY_CONDITIONS",
+            "ENTRY_DECISION_TIMELINE",
+        ]
+    ].rename(
+        columns={
+            "ENTRY_SETUP_CANDIDATE": "Candidate",
+            "ENTRY_READINESS": "Readiness %",
+            "FAILED_ENTRY_CONDITIONS": "Failed",
+            "PASSED_ENTRY_CONDITIONS": "Passed",
+            "ENTRY_DECISION_TIMELINE": "Timeline",
+        }
+    )
+    display = display.sort_values(
+        by="Readiness %",
+        ascending=False,
+        na_position="last"
+    )
+    st.dataframe(
+        _display_safe_dataframe(display),
+        width="stretch",
+        hide_index=True
+    )
+
+    if "ENTRY_DIAGNOSTICS_JSON" in rows.columns:
+
+        symbol_options = rows["Symbol"].dropna().astype(str).tolist()
+
+        if symbol_options:
+
+            selected_symbol = st.selectbox(
+                "Inspect ticker diagnostics",
+                options=symbol_options,
+                key="entry_diagnostics_symbol"
+            )
+            selected_row = rows[rows["Symbol"].astype(str).eq(selected_symbol)].head(1)
+
+            if not selected_row.empty:
+
+                raw_payload = selected_row.iloc[0].get("ENTRY_DIAGNOSTICS_JSON")
+
+                try:
+
+                    st.json(json.loads(raw_payload or "{}"))
+
+                except Exception:
+
+                    st.code(str(raw_payload or "{}"), language="json")
+
+
+def _render_command_center(state, df, refresh_state):
+
+    st.subheader("Trading Command Center")
+    market_session = _dashboard_market_session()
+    age_minutes = _scanner_output_age_minutes()
+    latest_run = _short_datetime(_latest_scanner_run(df)) if df is not None and not df.empty else "missing"
+    generated = _short_datetime(state.get("generated_at"))
+    summary = state.get("summary") or {}
+    trade_status = "TRADES AVAILABLE" if summary.get("trades", 0) else "NO TRADES"
+    best_call = state.get("best_call") or {}
+    best_put = state.get("best_put") or {}
+
+    cards = [
+        ("Market", market_session),
+        ("Scanner", state.get("scanner") or "UNKNOWN"),
+        ("Last Scan", latest_run),
+        ("Scan Age", f"{age_minutes} min" if age_minutes is not None else "missing"),
+        ("Generated", generated),
+        ("Today", trade_status),
+        ("Market Bias", state.get("market_bias") or "UNKNOWN"),
+        ("Best CALL", best_call.get("symbol") or "None"),
+        ("Best PUT", best_put.get("symbol") or "None"),
+        ("Reason", state.get("reason") or "-"),
+        ("Telegram", state.get("telegram") or "UNKNOWN"),
+        ("Decision Engine", state.get("decision_engine") or "v4"),
+    ]
+    _render_compact_card_grid(cards)
+
+
+def _render_current_opportunities(state):
+
+    st.subheader("Current Opportunities")
+    candidates = state.get("top_candidates") or []
+
+    if not candidates:
+
+        st.info("No current opportunities in the latest scanner state.")
+        return
+
+    rows = []
+
+    for candidate in candidates[:10]:
+
+        rows.append(
+            {
+                "Side": candidate.get("direction"),
+                "Symbol": candidate.get("symbol"),
+                "Setup": candidate.get("setup"),
+                "Ready %": candidate.get("readiness"),
+                "RR": candidate.get("rr"),
+                "Option": candidate.get("option"),
+                "Blocked": candidate.get("blocked"),
+                "Needs": candidate.get("needs"),
+                "Next Trigger": candidate.get("next_trigger"),
+            }
+        )
+
+    st.dataframe(
+        _display_safe_dataframe(pd.DataFrame(rows)),
+        width="stretch",
+        hide_index=True
+    )
+
+
+def _render_why_no_trade(state):
+
+    st.subheader("Why No Trade Today?")
+    summary = state.get("summary") or {}
+    cards = [
+        ("Scanned", summary.get("scanned", 0)),
+        ("Bullish", summary.get("bullish", 0)),
+        ("Bearish", summary.get("bearish", 0)),
+        ("Reached Entry", summary.get("entry", 0)),
+        ("Option Seen", summary.get("option", 0)),
+        ("Trades", summary.get("trades", 0)),
+    ]
+    _render_compact_card_grid(cards)
+
+    blockers = pd.DataFrame(state.get("blockers") or [])
+
+    if blockers.empty:
+
+        st.info("No blockers recorded yet.")
+        return
+
+    st.markdown("**Top blockers**")
+    st.dataframe(
+        _display_safe_dataframe(blockers.rename(columns={"blocker": "Blocker", "count": "Count"})),
+        width="stretch",
+        hide_index=True
+    )
+
+
+def _render_missed_opportunities(state):
+
+    st.subheader("Missed Opportunities")
+    missed = state.get("missed_opportunities") or []
+
+    if not missed:
+
+        st.info("No missed opportunities identified in the current state.")
+        return
+
+    rows = []
+
+    for candidate in missed[:5]:
+
+        rows.append(
+            {
+                "Symbol": candidate.get("symbol"),
+                "Side": candidate.get("direction"),
+                "Closest Setup": candidate.get("setup"),
+                "Readiness": candidate.get("readiness"),
+                "Blocked": candidate.get("blocked"),
+                "Recommendation": candidate.get("needs"),
+            }
+        )
+
+    st.dataframe(
+        _display_safe_dataframe(pd.DataFrame(rows)),
+        width="stretch",
+        hide_index=True
+    )
+
+
+def _render_trading_page(state, df, refresh_state):
+
+    _render_command_center(state, df, refresh_state)
+    _render_current_opportunities(state)
+    _render_why_no_trade(state)
+    _render_missed_opportunities(state)
+
+
+def _render_validation_page(df):
+
+    st.subheader("Validation")
+    _render_paper_validation_performance()
+    _render_daily_validation_report_panel()
+
+
+def _render_replay_page():
+
+    st.subheader("Replay")
+    trading_day = _current_trading_day()
+    input_path = daily_path(trading_day, "scanner_output_close.csv")
+    output_path = daily_path(trading_day, "offline_replay.csv")
+    summary_path = output_path.with_name("offline_replay_summary.csv")
+
+    st.caption(f"Input: {input_path}")
+
+    if st.button("Generate Replay", key="generate_offline_replay"):
+
+        try:
+
+            _generate_offline_replay(trading_day)
+            st.success("Offline replay generated.")
+
+        except Exception as exc:
+
+            st.error(f"Offline replay failed: {exc}")
+
+    st.markdown("**Today's Replay Analysis**")
+    replay_df = pd.DataFrame()
+    summary_df = pd.DataFrame()
+
+    if output_path.exists() and output_path.stat().st_size > 0:
+
+        try:
+
+            replay_df = pd.read_csv(output_path)
+
+        except Exception:
+
+            replay_df = pd.DataFrame()
+
+    if summary_path.exists() and summary_path.stat().st_size > 0:
+
+        try:
+
+            summary_df = pd.read_csv(summary_path)
+
+        except Exception:
+
+            summary_df = pd.DataFrame()
+
+    if replay_df.empty and summary_df.empty:
+
+        st.info("Generate replay after a scanner run to see coverage, blockers, and ticker-level replay results.")
+
+    else:
+
+        scanner_rows = _file_row_count(input_path, pd.read_csv)
+        replay_rows = len(replay_df) if not replay_df.empty else len(summary_df)
+        missing_indicators = 0
+
+        if not replay_df.empty and "FAILED_ENTRY_CONDITIONS" in replay_df.columns:
+
+            missing_indicators = int(
+                replay_df["FAILED_ENTRY_CONDITIONS"]
+                .astype(str)
+                .str.contains("Missing replay indicators", na=False)
+                .sum()
+            )
+
+        coverage_pct = round((replay_rows / scanner_rows) * 100, 2) if scanner_rows else 0
+        cards = [
+            ("Symbols Replayed", replay_rows),
+            ("Coverage", f"{coverage_pct}%"),
+            ("Missing Indicators", missing_indicators),
+            ("Partial Replay", missing_indicators),
+        ]
+        _render_compact_card_grid(cards)
+
+        blocker_source = summary_df if not summary_df.empty else replay_df
+
+        if "Gate Failure Stage" in blocker_source.columns:
+
+            blockers = (
+                blocker_source["Gate Failure Stage"]
+                .fillna("Unknown")
+                .astype(str)
+                .value_counts(normalize=True)
+                .mul(100)
+                .round(1)
+                .reset_index()
+            )
+            blockers.columns = ["Blocker", "Share %"]
+            st.markdown("**Today's Biggest Blockers**")
+            st.dataframe(
+                _display_safe_dataframe(blockers),
+                width="stretch",
+                hide_index=True
+            )
+
+        if not summary_df.empty:
+
+            st.markdown("**Replay Summary**")
+            st.dataframe(
+                _display_safe_dataframe(summary_df),
+                width="stretch",
+                hide_index=True
+            )
+
+    _render_file_download_button(
+        "Download offline_replay.csv",
+        output_path,
+        file_name="offline_replay.csv",
+        mime="text/csv",
+        key="download_offline_replay",
+        container=st
+    )
+    _render_file_download_button(
+        "Download offline_replay_summary.csv",
+        summary_path,
+        file_name="offline_replay_summary.csv",
+        mime="text/csv",
+        key="download_offline_replay_summary",
+        container=st
+    )
+
+
+def _render_reports_page(df):
+
+    _render_daily_validation_report_panel()
+
+
+def _render_developer_page(df, auto_paper_controls):
+
+    with st.expander("Developer Diagnostics", expanded=True):
+
+        render_market_coverage(_current_trading_day())
+        _render_action_center(df, auto_paper_controls)
+        _render_scanner_watchlist(df)
+        _render_paper_exit_controls(df)
+        _render_compact_auto_paper_summary()
+
+        with st.expander("Suggestion Lifecycle", expanded=False):
+
+            _render_suggestion_lifecycle(df)
+
+        with st.expander("Entry Diagnostics", expanded=False):
+
+            _render_entry_diagnostics(df)
+
+        with st.expander("Full Auto-Paper Decision Log", expanded=False):
+
+            _render_auto_paper_decision_log(show_full_expander=False)
+
+        with st.expander("Validation Data Health", expanded=False):
+
+            _render_validation_data_health(df)
+
+        with st.expander("Telemetry & Debug", expanded=False):
+
+            st.subheader("Last Seen Candidates")
+            _render_last_seen_candidates(df)
+
+            st.subheader("Alert + Paper Performance Review")
+            telemetry_metrics = _telemetry_summary()
+            telemetry_cols = st.columns(3)
+
+            for col, (label, value) in zip(telemetry_cols, telemetry_metrics.items()):
+
+                col.metric(label, value)
+
+
 def _latest_decisions_df(minutes=30):
 
     entries = _load_auto_paper_decision_log()
@@ -6564,12 +7101,22 @@ def main():
     _inject_compact_dashboard_css()
 
     st.title("Dravya Wallstreet Edge")
-    st.caption("Decision dashboard only. Full engine diagnostics stay in Excel/backend.")
+    st.caption("Trading workstation. Developer diagnostics stay collapsed unless needed.")
 
     refresh_state = _render_auto_refresh_controls()
     auto_paper_controls = _render_auto_paper_controls()
-    _render_runtime_key_status()
     _render_download_exports()
+    page = st.sidebar.radio(
+        "Navigation",
+        options=[
+            "Trading",
+            "Validation",
+            "Replay",
+            "Reports",
+            "Developer",
+        ],
+        key="dashboard_page",
+    )
     _maybe_auto_run_scanner(refresh_state)
 
     if st.button("Run scanner now"):
@@ -6638,56 +7185,34 @@ def main():
         )
         st.rerun()
 
-    _render_compact_status_cards(
-        df,
-        auto_paper_controls
-    )
+    dashboard_state = _load_dashboard_state(df)
 
-    _render_compact_market_health(df)
+    if page == "Trading":
 
-    render_market_coverage(_current_trading_day())
+        _render_trading_page(
+            dashboard_state,
+            df,
+            refresh_state
+        )
 
-    _render_action_center(
-        df,
-        auto_paper_controls
-    )
+    elif page == "Validation":
 
-    _render_scanner_watchlist(df)
+        _render_validation_page(df)
 
-    _render_paper_exit_controls(df)
+    elif page == "Replay":
 
-    _render_compact_auto_paper_summary()
+        _render_replay_page()
 
-    _render_paper_validation_performance()
+    elif page == "Reports":
 
-    with st.expander("Suggestion Lifecycle", expanded=False):
+        _render_reports_page(df)
 
-        _render_suggestion_lifecycle(df)
+    else:
 
-    with st.expander("Full Auto-Paper Decision Log", expanded=False):
-
-        _render_auto_paper_decision_log(show_full_expander=False)
-
-    with st.expander("Validation Data Health", expanded=False):
-
-        _render_validation_data_health(df)
-
-    with st.expander("Daily Report", expanded=False):
-
-        _render_daily_validation_report_panel()
-
-    with st.expander("Telemetry & Debug", expanded=False):
-
-        st.subheader("Last Seen Candidates")
-        _render_last_seen_candidates(df)
-
-        st.subheader("Alert + Paper Performance Review")
-        telemetry_metrics = _telemetry_summary()
-        telemetry_cols = st.columns(3)
-
-        for col, (label, value) in zip(telemetry_cols, telemetry_metrics.items()):
-
-            col.metric(label, value)
+        _render_developer_page(
+            df,
+            auto_paper_controls
+        )
 
     st.caption("Auto-refresh controls are in the sidebar. Market-hours default is ON at 5 minutes; after-hours default is OFF.")
 

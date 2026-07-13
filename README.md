@@ -169,6 +169,47 @@ Entry alerting now separates the trade decision from the notification policy:
 
 Telegram still keeps notification controls separate from the decision itself: entry alert enablement, duplicate alert protection, cooldowns, daily caps, active-alert caps, time-of-day limits, and symbol cooldowns remain notification policy. This makes Telegram operationally useful again without loosening real-money review criteria.
 
+## Production Entry Diagnostics
+
+The scanner now writes permanent entry diagnostics for every ticker, independent of whether the ticker becomes `ENTER_PAPER`, `REVIEW_TV_CHART`, `WAIT`, `AVOID`, or `NO_ENTRY`.
+
+- `app/diagnostics/entry_diagnostics.py` evaluates entry setup families observationally without changing trading decisions.
+- Scanner output includes `ENTRY_SETUP_CANDIDATE`, `ENTRY_READINESS`, `FAILED_ENTRY_CONDITIONS`, `PASSED_ENTRY_CONDITIONS`, `ENTRY_DECISION_TIMELINE`, and `ENTRY_DIAGNOSTICS_JSON`.
+- Scanner output also includes `ENTRY_GATE_FAILURE_STAGE` so the first broad failure layer is visible without opening JSON. Expected stages include `Momentum`, `Entry`, `Risk`, `Option Quality`, `Affordability`, `Realtime`, `Telegram`, `Paper Gate`, and `Generated`.
+- `ENTRY_SETUP_CANDIDATE` records the closest setup, such as `BREAKOUT`, `EMA_PULLBACK`, `BREAKDOWN_SHORT`, `EMA_REJECTION_SHORT`, or `VWAP_REJECTION`, even when the entry engine ultimately returns `NO_ENTRY`.
+- `ENTRY_DIAGNOSTICS_JSON` stores condition-level pass/fail values with actual and required values for review.
+- The scanner prints `ENTRY FAILURE SUMMARY` and `MARKET REGIME ENTRY SUMMARY` after each run.
+- The dashboard includes an `Entry Diagnostics` expander with ticker-level readiness, failed conditions, timeline, and raw JSON inspection.
+
+## Offline Decision Replay
+
+Saved scanner snapshots can be replayed without Polygon, market hours, or API access:
+
+```powershell
+python tools/replay_today.py --input data/daily/YYYY-MM-DD/scanner_output_close.csv
+```
+
+After market close, save both detailed and concise replay outputs:
+
+```powershell
+python tools/replay_today.py --input data/daily/YYYY-MM-DD/scanner_output_close.csv --output data/daily/YYYY-MM-DD/offline_replay.csv
+```
+
+This also writes `data/daily/YYYY-MM-DD/offline_replay_summary.csv` by default. The summary columns are `Symbol`, `Closest Setup`, `Readiness`, `Failed Conditions`, `Passed Conditions`, `Final Decision`, `Gate Failure Stage`, `First Failed Rule`, `Recommendation`, and `Replay Source`.
+
+The Streamlit `Replay` page renders replay directly in the app: generate replay, review coverage, inspect biggest blockers, and read the replay summary table. Downloading CSVs is secondary and only needed for deeper offline review.
+
+The replay tool reads persisted `ENTRY_DIAGNOSTICS_JSON` when available. If the JSON is not present, it rebuilds diagnostics from replay-ready scanner columns such as `ENTRY_EMA9`, `ENTRY_EMA20`, `ENTRY_VWAP`, `ENTRY_REL_VOLUME`, `ENTRY_BODY_STRENGTH`, `ENTRY_ATR`, `ENTRY_BREAKDOWN`, `ENTRY_LOWER_HIGH`, `ENTRY_RECENT_HIGH`, and `ENTRY_RECENT_LOW`.
+
+Use `--output path/to/replay.csv` to save the replay result. Older scanner files that do not contain these `ENTRY_*` indicator columns cannot be replayed exactly; the tool reports which rows are missing replay indicators.
+
+Daily validation checks after replay:
+
+- Replay rows should equal scanner rows.
+- Missing indicators should be `0`.
+- Partial replay should be `0`.
+- `ENTRY_SETUP_CANDIDATE`, `ENTRY_READINESS`, and `FAILED_ENTRY_CONDITIONS` should match between scanner output and replay output.
+
 Auto-paper decisions are emitted from the Streamlit dashboard auto-paper path, not from the standalone scanner loop. The dashboard writer appends the full-day CSV and then updates the capped dashboard JSON from the same decision row.
 
 The first section is `Validation Data Health`. It shows counts for scanner rows, candidate snapshots, telemetry rows, paper-trade state records, paper-trade event rows, auto-paper decisions, opened decisions, suggested trades, and trade state records. If no paper trades are found, the report explicitly warns that it is based on blocked/skipped candidates only.
@@ -203,7 +244,13 @@ Current daily files live under `data/daily/YYYY-MM-DD/`; dashboard/latest mirror
 
 The dashboard reads `data/live/scanner_output_latest.csv` first, then `data/live/scanner_output_latest.xlsx`, then falls back to `scanner_output.xlsx`. Scanner execution is protected by a stale-aware lock at `data/live/scanner_run.lock` and a persistent cooldown/status file at `data/live/scanner_run_status.json`, so Streamlit refreshes or multiple browser sessions do not start overlapping or back-to-back scanner runs. Polygon aggregate requests use the short `POLYGON_CACHE_TTL` cache to avoid duplicate candle requests during rapid refreshes.
 
-The main Streamlit page is organized as an operator dashboard: compact status cards, compact market health, Action Center, Scanner Watchlist, Paper / Real Validation Summary, and Paper Validation Performance. Diagnostic surfaces such as suggestion lifecycle, full auto-paper decision logs, validation data health, daily report downloads, telemetry, and last-seen candidates live under collapsed expanders so the live page focuses on whether there is something to do right now.
+The main Streamlit page is now organized as a trading workstation with sidebar navigation: `Trading`, `Validation`, `Replay`, `Reports`, and `Developer`. The default `Trading` page answers the live operating questions: whether anything is tradable, why not, what is closest, and whether the engine is current. Developer diagnostics such as market coverage, action center, scanner watchlist, suggestion lifecycle, auto-paper logs, validation data health, telemetry, and last-seen candidates are kept under the `Developer` page.
+
+The sidebar is intentionally trader-first: `Auto Refresh`, `Paper Automation`, compact `Downloads`, `Daily Validation`, and navigation. Raw engineering exports such as telemetry, paper state, candidate snapshots, lifecycle events, and audit files are hidden under `Downloads > Advanced`. Runtime key status is not shown in the trading UI.
+
+Post-market workflow is one click from the sidebar: `Post Market: Generate Everything` builds the daily validation report, offline replay, replay summary, and refreshes the dashboard.
+
+The scanner writes `dashboard_state.json` under both `data/live/` and `data/daily/YYYY-MM-DD/`. This object is the dashboard's primary render source for the command center, current opportunities, blockers, and missed opportunities. It is built by `app/ui/dashboard_state.py` from scanner rows so the Streamlit UI does not need to recalculate business rules during live use.
 
 If the dashboard is running locally on the same machine, the terminal command can read the same files directly. If the dashboard is running on Streamlit Cloud, generate the report inside the dashboard instead: use the sidebar `Generate Daily Validation Report` button, then download `daily_validation_report.html` from the same sidebar. That keeps report generation in the same filesystem where Streamlit created scanner output, telemetry, and state files.
 
