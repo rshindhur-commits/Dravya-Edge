@@ -33,6 +33,13 @@ from app.gates import (
     EntryGateConfig,
     evaluate_entry_gate
 )
+from app.diagnostics import (
+    build_entry_diagnostics,
+    classify_entry_gate_failure_stage,
+    diagnostics_to_json,
+    empty_entry_diagnostics,
+    summarize_entry_diagnostics
+)
 from app.indicators.technical_indicators import compute_indicators
 from app.strategies.momentum_strategy import analyze_setup
 from app.ai.trade_analyzer import generate_trade_summary
@@ -130,6 +137,7 @@ from app.db.persistence import (
 )
 from app.utils.runtime_logging import debug_print
 from app.utils.polygon_client import get_metrics as get_polygon_metrics
+from app.ui.dashboard_state import write_dashboard_state
 from app.storage.daily_paths import (
     daily_path,
     live_path
@@ -520,6 +528,83 @@ def _safe_metric(df, column):
     except Exception:
 
         return None
+
+
+def _entry_replay_snapshot(df):
+
+    if df is None or df.empty:
+
+        return {}
+
+    latest = df.iloc[-1]
+
+    def value(name):
+
+        try:
+
+            item = latest.get(name)
+
+            if pd.isna(item):
+
+                return None
+
+            return item
+
+        except Exception:
+
+            return None
+
+    recent_high = None
+    recent_low = None
+
+    try:
+
+        recent_high = (
+            df["High"].rolling(10).max().iloc[-2]
+            if len(df) >= 2
+            else df["High"].max()
+        )
+
+        if pd.isna(recent_high):
+
+            recent_high = df["High"].shift(1).tail(10).max()
+
+    except Exception:
+
+        recent_high = None
+
+    try:
+
+        recent_low = df["Low"].shift(1).tail(3).min()
+
+    except Exception:
+
+        recent_low = None
+
+    return {
+        "Open": value("Open"),
+        "High": value("High"),
+        "Low": value("Low"),
+        "Close": value("Close"),
+        "EMA9": value("EMA9"),
+        "EMA20": value("EMA20"),
+        "VWAP": value("VWAP"),
+        "RSI": value("RSI"),
+        "MACD": value("MACD"),
+        "MACD_SIGNAL": value("MACD_SIGNAL"),
+        "REL_VOLUME": value("REL_VOLUME"),
+        "BODY_STRENGTH": value("BODY_STRENGTH"),
+        "ATR": value("ATR"),
+        "ADX": value("ADX"),
+        "OBV": value("OBV"),
+        "BREAKOUT": value("BREAKOUT"),
+        "BREAKDOWN": value("BREAKDOWN"),
+        "LOWER_HIGH": value("LOWER_HIGH"),
+        "ROLLING_SUPPORT": value("ROLLING_SUPPORT"),
+        "PREV_LOW": value("PREV_LOW"),
+        "RECENT_HIGH": recent_high,
+        "RECENT_LOW": recent_low,
+    }
 
 
 def _append_daily_candles(symbol, candles_df, trading_day, scan_id, interval="5m"):
@@ -1428,7 +1513,7 @@ def build_status_result_row(
 
     market_data_status = market_data_status or {}
 
-    return {
+    row = {
         "Symbol": symbol,
         "Price": "-",
         "Final Signal": final_signal,
@@ -1457,6 +1542,19 @@ def build_status_result_row(
         "Above EMA20": None,
         "Reasons": explanation,
         "Entry": "NO_ENTRY",
+        "ENTRY_SETUP_CANDIDATE": "NO_DATA",
+        "ENTRY_READINESS": 0,
+        "FAILED_ENTRY_CONDITIONS": blocked_by or action_status,
+        "PASSED_ENTRY_CONDITIONS": None,
+        "ENTRY_DECISION_TIMELINE": explanation,
+        "ENTRY_DIAGNOSTICS_JSON": diagnostics_to_json(
+            empty_entry_diagnostics(
+                symbol,
+                reason=blocked_by or action_status,
+                market_regime="UNKNOWN"
+            )
+        ),
+        "ENTRY_GATE_FAILURE_STAGE": None,
         "Entry Quality": "NONE",
         "Entry Trigger": None,
         "Risk Reward": None,
@@ -1519,6 +1617,9 @@ def build_status_result_row(
         "Partial Profit Taken": False,
         "Adjustment Reason": explanation
     }
+
+    row["ENTRY_GATE_FAILURE_STAGE"] = classify_entry_gate_failure_stage(row)
+    return row
 
 
 def build_action_decision(
@@ -2266,6 +2367,50 @@ def _dispatch_telegram_entry_alerts(df_results):
             )
 
 
+def _print_entry_diagnostic_summary(rows):
+
+    summary = summarize_entry_diagnostics(rows)
+    failure_counts = summary.get("failure_counts") or {}
+    regime_summary = summary.get("regime_summary") or {}
+
+    print("\nENTRY FAILURE SUMMARY")
+    print("---------------------")
+
+    if not failure_counts:
+
+        print("No entry condition failures recorded")
+
+    else:
+
+        for failure, count in sorted(
+            failure_counts.items(),
+            key=lambda item: item[1],
+            reverse=True
+        )[:12]:
+
+            print(f"{failure}: {count}")
+
+    print("\nMARKET REGIME ENTRY SUMMARY")
+    print("---------------------------")
+
+    if not regime_summary:
+
+        print("No regime diagnostic rows recorded")
+
+    else:
+
+        for regime, stats in sorted(regime_summary.items()):
+
+            print(
+                f"{regime}: "
+                f"candidates={stats.get('candidates', 0)} "
+                f"bullish={stats.get('bullish_candidates', 0)} "
+                f"bearish={stats.get('bearish_candidates', 0)} "
+                f"generated={stats.get('generated', 0)} "
+                f"top_failure={stats.get('top_failure') or 'NONE'}"
+            )
+
+
 def _write_scanner_output_files(df_results, trading_day, output_file):
 
     live_csv_path = live_path("scanner_output_latest.csv")
@@ -2285,6 +2430,13 @@ def _write_scanner_output_files(df_results, trading_day, output_file):
     df_results.to_csv(
         daily_csv_path,
         index=False
+    )
+    write_dashboard_state(
+        df_results,
+        [
+            live_path("dashboard_state.json"),
+            daily_path(trading_day, "dashboard_state.json"),
+        ]
     )
 
     try:
@@ -2846,6 +2998,30 @@ def run_scanner():
                     "avoid_chasing": False
 
                 }
+
+            if not df_15m.empty:
+
+                entry_replay_snapshot = _entry_replay_snapshot(
+                    df_15m
+                )
+
+                entry_diagnostics = build_entry_diagnostics(
+                    symbol,
+                    df_15m,
+                    analysis_15m,
+                    market_regime=market_regime,
+                    selected_entry=entry_setup
+                )
+
+            else:
+
+                entry_replay_snapshot = {}
+
+                entry_diagnostics = empty_entry_diagnostics(
+                    symbol,
+                    reason="No 15m dataframe",
+                    market_regime=market_regime
+                )
 
             if not df_15m.empty:
 
@@ -4137,6 +4313,34 @@ def run_scanner():
                     else "NO_ENTRY"
                 ),
 
+                "ENTRY_SETUP_CANDIDATE": entry_diagnostics.get(
+                    "candidate_setup"
+                ),
+
+                "ENTRY_READINESS": entry_diagnostics.get(
+                    "readiness"
+                ),
+
+                "FAILED_ENTRY_CONDITIONS": ", ".join(
+                    entry_diagnostics.get("failed_conditions") or []
+                ),
+
+                "PASSED_ENTRY_CONDITIONS": ", ".join(
+                    entry_diagnostics.get("passed_conditions") or []
+                ),
+
+                "ENTRY_DECISION_TIMELINE": " -> ".join(
+                    entry_diagnostics.get("timeline") or []
+                ),
+
+                "ENTRY_DIAGNOSTICS": entry_diagnostics,
+
+                "ENTRY_DIAGNOSTICS_JSON": diagnostics_to_json(
+                    entry_diagnostics
+                ),
+
+                "ENTRY_GATE_FAILURE_STAGE": None,
+
                 "Entry Quality": (
                     entry_setup["entry_quality"]
                     if entry_setup
@@ -4148,6 +4352,50 @@ def run_scanner():
                     if entry_setup
                     else None
                 ),
+
+                "ENTRY_OPEN": entry_replay_snapshot.get("Open"),
+
+                "ENTRY_HIGH": entry_replay_snapshot.get("High"),
+
+                "ENTRY_LOW": entry_replay_snapshot.get("Low"),
+
+                "ENTRY_CLOSE": entry_replay_snapshot.get("Close"),
+
+                "ENTRY_EMA9": entry_replay_snapshot.get("EMA9"),
+
+                "ENTRY_EMA20": entry_replay_snapshot.get("EMA20"),
+
+                "ENTRY_VWAP": entry_replay_snapshot.get("VWAP"),
+
+                "ENTRY_RSI": entry_replay_snapshot.get("RSI"),
+
+                "ENTRY_MACD": entry_replay_snapshot.get("MACD"),
+
+                "ENTRY_MACD_SIGNAL": entry_replay_snapshot.get("MACD_SIGNAL"),
+
+                "ENTRY_REL_VOLUME": entry_replay_snapshot.get("REL_VOLUME"),
+
+                "ENTRY_BODY_STRENGTH": entry_replay_snapshot.get("BODY_STRENGTH"),
+
+                "ENTRY_ATR": entry_replay_snapshot.get("ATR"),
+
+                "ENTRY_ADX": entry_replay_snapshot.get("ADX"),
+
+                "ENTRY_OBV": entry_replay_snapshot.get("OBV"),
+
+                "ENTRY_BREAKOUT": entry_replay_snapshot.get("BREAKOUT"),
+
+                "ENTRY_BREAKDOWN": entry_replay_snapshot.get("BREAKDOWN"),
+
+                "ENTRY_LOWER_HIGH": entry_replay_snapshot.get("LOWER_HIGH"),
+
+                "ENTRY_ROLLING_SUPPORT": entry_replay_snapshot.get("ROLLING_SUPPORT"),
+
+                "ENTRY_PREV_LOW": entry_replay_snapshot.get("PREV_LOW"),
+
+                "ENTRY_RECENT_HIGH": entry_replay_snapshot.get("RECENT_HIGH"),
+
+                "ENTRY_RECENT_LOW": entry_replay_snapshot.get("RECENT_LOW"),
 
                 "Risk Reward": (
                     risk_setup["risk_reward"]
@@ -4723,6 +4971,9 @@ def run_scanner():
             result_row = _align_action_status_with_entry_gate(
                 result_row
             )
+            result_row["ENTRY_GATE_FAILURE_STAGE"] = classify_entry_gate_failure_stage(
+                result_row
+            )
             results.append(result_row)
 
             # =====================================
@@ -5237,6 +5488,9 @@ def run_scanner():
     # =========================
 
     df_results = pd.DataFrame(results)
+    _print_entry_diagnostic_summary(
+        df_results.to_dict("records")
+    )
     scan_runtime_sec = round(time.perf_counter() - scan_perf_start, 2)
     with stage_timer.stage("Dashboard"):
 

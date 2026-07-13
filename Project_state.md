@@ -83,6 +83,16 @@ At a high level, each scan does this per symbol:
 - `app/exit/exit_engine.py` is the live source of truth for exit decisions and trade-action outputs. `app/trade_manager.py` is legacy historical reference only.
 - `app/background/background_queue.py` owns the single daemon worker used for best-effort scanner persistence tasks. It queues callable work through `run_background()` and drains pending tasks at process exit.
 - `app/background/background_queue.py::get_background_metrics()` exposes queued/completed/failed jobs, pending jobs, queue depth, average job time, longest job time, and longest job name for Engine Health.
+- `app/ui/dashboard_state.py` builds the single `dashboard_state.json` object used by the Streamlit trading workstation.
+
+### Trading Workstation UI
+
+- The Streamlit dashboard uses sidebar navigation: `Trading`, `Validation`, `Replay`, `Reports`, and `Developer`.
+- The default `Trading` page renders a command center, current opportunities, why-no-trade summary, and missed opportunities from `dashboard_state.json`.
+- The sidebar keeps only trader-facing controls visible by default: auto refresh, paper automation, compact downloads, daily validation/replay actions, and navigation. Raw exports are hidden under `Downloads > Advanced`; runtime key status is no longer rendered.
+- `Post Market: Generate Everything` runs daily validation report generation and offline replay generation, then refreshes the dashboard.
+- `dashboard_state.json` is written under `data/live/dashboard_state.json` and `data/daily/YYYY-MM-DD/dashboard_state.json` whenever scanner outputs are written.
+- The `Developer` page keeps legacy diagnostic panels available without putting them above the fold during live trading.
 
 ### Scanner Performance And Background Persistence
 
@@ -122,6 +132,26 @@ At a high level, each scan does this per symbol:
 - `TELEGRAM_ALERT_POLICY=REAL_REVIEW` keeps strict A+ gating for real-review style alerts: real setup/RR/option-quality thresholds, top-1 candidate, and minimum consecutive scans.
 - `TELEGRAM_ALERT_POLICY=CUSTOM` keeps explicit Telegram threshold behavior using settings such as `TELEGRAM_MIN_RR`, `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, and `TELEGRAM_MAX_SPREAD_PCT`.
 - Cooldowns, duplicate alert protection, daily caps, active-alert caps, and time-of-day alert windows remain Telegram notification policy rather than decision logic.
+
+### Production Entry Diagnostics
+
+- `app/diagnostics/entry_diagnostics.py` is a permanent observational diagnostics engine for entry setups. It does not change trading decisions.
+- Every normal scanner row records the closest entry setup candidate, readiness percentage, passed/failed entry conditions, an entry decision timeline, and full JSON diagnostics.
+- Scanner output columns are `ENTRY_SETUP_CANDIDATE`, `ENTRY_READINESS`, `FAILED_ENTRY_CONDITIONS`, `PASSED_ENTRY_CONDITIONS`, `ENTRY_DECISION_TIMELINE`, and `ENTRY_DIAGNOSTICS_JSON`.
+- Scanner output also stores `ENTRY_GATE_FAILURE_STAGE`, a broad failure layer such as `Momentum`, `Entry`, `Risk`, `Option Quality`, `Affordability`, `Realtime`, `Telegram`, `Paper Gate`, or `Generated`.
+- The diagnostics module evaluates setup families such as `BREAKOUT`, `EMA_PULLBACK`, `EMA_REJECTION_SHORT`, `BREAKDOWN_SHORT`, and `VWAP_REJECTION`, including actual versus required condition values.
+- `run_scanner()` prints an entry failure summary and market regime entry summary after building scanner rows.
+- The Streamlit dashboard exposes an `Entry Diagnostics` expander so ticker-level readiness and raw diagnostics can be reviewed without inspecting code.
+
+### Offline Decision Replay
+
+- `tools/replay_today.py` replays entry diagnostics from saved scanner CSV/XLSX snapshots without Polygon/API access.
+- The replay tool prefers persisted `ENTRY_DIAGNOSTICS_JSON`; otherwise it rebuilds diagnostics from replay-ready scanner columns such as `ENTRY_EMA9`, `ENTRY_EMA20`, `ENTRY_VWAP`, `ENTRY_REL_VOLUME`, `ENTRY_BODY_STRENGTH`, `ENTRY_ATR`, `ENTRY_BREAKDOWN`, `ENTRY_LOWER_HIGH`, `ENTRY_RECENT_HIGH`, and `ENTRY_RECENT_LOW`.
+- With `--output data/daily/YYYY-MM-DD/offline_replay.csv`, the replay tool also writes `data/daily/YYYY-MM-DD/offline_replay_summary.csv` containing `Symbol`, closest setup, readiness, failed/passed conditions, final decision, gate failure stage, first failed rule, recommendation, and replay source.
+- The Streamlit `Replay` page renders coverage, biggest blockers, and the replay summary directly in the app. CSV downloads remain available but are no longer the primary replay workflow.
+- Replay prints coverage metrics: scanner rows, replay rows, missing indicators, partial replay count, and coverage percentage. For a fresh replay-ready scanner output, missing indicators and partial replay should be zero.
+- Scanner output now stores these `ENTRY_*` indicator snapshot columns so future market states are reproducible after the market closes.
+- Older scanner files without the replay indicator columns are reported as partial replay inputs rather than treated as exact reproductions.
 
 ### Timeframes And Indicators
 
