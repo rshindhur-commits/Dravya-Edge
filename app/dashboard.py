@@ -5377,6 +5377,119 @@ def _render_command_center(state, df, refresh_state):
     _render_compact_card_grid(cards)
 
 
+def _metadata_status(age_minutes, refresh_minutes):
+
+    if age_minutes is None:
+
+        return "OUTDATED"
+
+    current_limit = refresh_minutes + 0.5
+    stale_limit = refresh_minutes * 2
+
+    if age_minutes <= current_limit:
+
+        return "CURRENT"
+
+    if age_minutes <= stale_limit:
+
+        return "STALE"
+
+    return "OUTDATED"
+
+
+def _status_label(status):
+
+    status = str(status or "UNKNOWN").upper()
+
+    if status == "CURRENT":
+
+        return "CURRENT OK"
+
+    if status == "STALE":
+
+        return "STALE"
+
+    if status == "READY":
+
+        return "READY OK"
+
+    if status == "LIVE":
+
+        return "LIVE OK"
+
+    return status
+
+
+def _scan_metadata(df, refresh_state=None):
+
+    trading_day = _current_trading_day()
+    manifest = {}
+
+    try:
+
+        from app.storage.session_manager import get_or_create_session_manifest
+
+        manifest = get_or_create_session_manifest(trading_day)
+
+    except Exception:
+
+        manifest = {}
+
+    refresh_minutes = 5
+
+    if refresh_state:
+
+        refresh_minutes = int(refresh_state.get("scanner_cadence_minutes") or refresh_state.get("interval_minutes") or 5)
+
+    age_minutes = _scanner_output_age_minutes()
+    status = _metadata_status(age_minutes, refresh_minutes)
+    latest_run = _latest_scanner_run(df) if df is not None and not df.empty else manifest.get("last_scan_at")
+    scan_id = manifest.get("last_scan_id")
+
+    if df is not None and not df.empty:
+
+        for column in ["Scan ID", "Data Version", "scan_id"]:
+
+            if column in df.columns and not df[column].dropna().empty:
+
+                scan_id = df[column].dropna().iloc[0]
+                break
+
+    if not scan_id and latest_run:
+
+        try:
+
+            scan_id = get_scan_id(trading_day)
+
+        except Exception:
+
+            scan_id = "UNKNOWN"
+
+    return {
+        "trading_day": trading_day,
+        "scan_id": scan_id or "UNKNOWN",
+        "scanner_started": manifest.get("last_scan_at") or latest_run or "UNKNOWN",
+        "scanner_finished": latest_run or manifest.get("last_scan_at") or "UNKNOWN",
+        "last_refreshed": datetime.now(ZoneInfo("America/New_York")).strftime("%m/%d/%Y %H:%M:%S ET"),
+        "scan_age": f"{age_minutes} min" if age_minutes is not None else "missing",
+        "symbols": len(df) if df is not None else 0,
+        "status": status,
+        "refresh_minutes": refresh_minutes,
+    }
+
+
+def _render_metadata_card(title, rows):
+
+    st.markdown(f"**{title}**")
+    cols = st.columns(4)
+
+    for index, (label, value) in enumerate(rows):
+
+        with cols[index % 4]:
+
+            kpi_card(label, str(value))
+
+
 def _render_current_opportunities(state):
 
     st.subheader("Current Opportunities")
@@ -5475,6 +5588,20 @@ def _render_missed_opportunities(state):
 
 def _render_trading_page(state, df, refresh_state):
 
+    metadata = _scan_metadata(df, refresh_state=refresh_state)
+    _render_metadata_card(
+        "Trading Session",
+        [
+            ("Scanner Status", "LIVE OK"),
+            ("Current Scan ID", metadata["scan_id"]),
+            ("Scanner Started", metadata["scanner_started"]),
+            ("Scanner Finished", metadata["scanner_finished"]),
+            ("Last Refreshed", metadata["last_refreshed"]),
+            ("Scan Age", metadata["scan_age"]),
+            ("Symbols Scanned", metadata["symbols"]),
+            ("Status", _status_label(metadata["status"])),
+        ]
+    )
     _render_command_center(state, df, refresh_state)
     _render_current_opportunities(state)
     _render_why_no_trade(state)
@@ -5488,14 +5615,40 @@ def _render_validation_page(df):
     _render_daily_validation_report_panel()
 
 
-def _render_replay_page():
+def _render_replay_page(df=None, refresh_state=None):
 
     st.subheader("Replay")
     trading_day = _current_trading_day()
     input_path = daily_path(trading_day, "scanner_output_close.csv")
     output_path = daily_path(trading_day, "offline_replay.csv")
     summary_path = output_path.with_name("offline_replay_summary.csv")
+    metadata = _scan_metadata(df, refresh_state=refresh_state)
+    replay_generated = (
+        datetime.fromtimestamp(summary_path.stat().st_mtime, ZoneInfo("America/New_York")).strftime("%m/%d/%Y %H:%M:%S ET")
+        if summary_path.exists()
+        else "Not generated"
+    )
+    scanner_rows_for_metadata = _file_row_count(input_path, pd.read_csv)
+    replay_rows_for_metadata = _file_row_count(output_path, pd.read_csv)
+    coverage_for_metadata = (
+        f"{replay_rows_for_metadata} / {scanner_rows_for_metadata} ({round((replay_rows_for_metadata / scanner_rows_for_metadata) * 100, 1)}%)"
+        if scanner_rows_for_metadata
+        else "pending"
+    )
 
+    _render_metadata_card(
+        "Replay Session",
+        [
+            ("Replay Status", "READY OK" if summary_path.exists() else "MISSING"),
+            ("Replay Scan ID", metadata["scan_id"]),
+            ("Replay Generated", replay_generated),
+            ("Based On Scan", metadata["scanner_finished"]),
+            ("Replay Coverage", coverage_for_metadata),
+            ("Replay Version", "v1"),
+            ("Data Version", metadata["scan_id"]),
+            ("Status", _status_label(metadata["status"])),
+        ]
+    )
     st.caption(f"Input: {input_path}")
 
     if st.button("Generate Replay", key="generate_offline_replay"):
@@ -5585,8 +5738,21 @@ def _render_replay_page():
         if not summary_df.empty:
 
             st.markdown("**Replay Summary**")
+            preferred_columns = [
+                "Symbol",
+                "Closest Setup",
+                "Readiness",
+                "First Failed Rule",
+                "Recommendation",
+                "Trade Block Details",
+                "Final Decision",
+                "Gate Failure Stage",
+            ]
+            display_summary = summary_df[
+                [column for column in preferred_columns if column in summary_df.columns]
+            ].copy()
             st.dataframe(
-                _display_safe_dataframe(summary_df),
+                _display_safe_dataframe(display_summary),
                 width="stretch",
                 hide_index=True
             )
@@ -5614,7 +5780,22 @@ def _render_reports_page(df):
     _render_daily_validation_report_panel()
 
 
-def _render_developer_page(df, auto_paper_controls):
+def _render_developer_page(df, auto_paper_controls, refresh_state=None):
+
+    metadata = _scan_metadata(df, refresh_state=refresh_state)
+    _render_metadata_card(
+        "Developer Diagnostics",
+        [
+            ("Diagnostics Status", "READY OK" if df is not None and not df.empty else "MISSING"),
+            ("Current Scan ID", metadata["scan_id"]),
+            ("Diagnostics Built", metadata["last_refreshed"]),
+            ("Based On Scan", metadata["scanner_finished"]),
+            ("Symbols", metadata["symbols"]),
+            ("Data Version", metadata["scan_id"]),
+            ("Status", _status_label(metadata["status"])),
+            ("Refresh Window", f"{metadata['refresh_minutes']} min"),
+        ]
+    )
 
     with st.expander("Developer Diagnostics", expanded=True):
 
@@ -7201,7 +7382,10 @@ def main():
 
     elif page == "Replay":
 
-        _render_replay_page()
+        _render_replay_page(
+            df=df,
+            refresh_state=refresh_state
+        )
 
     elif page == "Reports":
 
@@ -7211,7 +7395,8 @@ def main():
 
         _render_developer_page(
             df,
-            auto_paper_controls
+            auto_paper_controls,
+            refresh_state=refresh_state
         )
 
     st.caption("Auto-refresh controls are in the sidebar. Market-hours default is ON at 5 minutes; after-hours default is OFF.")

@@ -1515,6 +1515,8 @@ def build_status_result_row(
 
     row = {
         "Symbol": symbol,
+        "Scan ID": market_data_status.get("scan_id"),
+        "Data Version": market_data_status.get("scan_id"),
         "Price": "-",
         "Final Signal": final_signal,
         "15m Score": None,
@@ -4205,6 +4207,10 @@ def run_scanner():
             result_row = {
 
                 "Symbol": symbol,
+
+                "Scan ID": scan_id,
+
+                "Data Version": scan_id,
 
                 "Suggestion Status": None,
 

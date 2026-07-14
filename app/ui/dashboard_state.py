@@ -266,6 +266,7 @@ def build_dashboard_state(df: pd.DataFrame, generated_at: str | None = None, sca
 
     rows = df.to_dict("records") if df is not None and not df.empty else []
     generated_at = generated_at or datetime.now().isoformat(timespec="seconds")
+    scan_id = _clean(_row_get(rows[0], "scan_id", "Scan ID")) if rows else None
     candidates = _top_candidates(rows)
     best_call = _best_by_direction(candidates, "CALL")
     best_put = _best_by_direction(candidates, "PUT")
@@ -275,6 +276,8 @@ def build_dashboard_state(df: pd.DataFrame, generated_at: str | None = None, sca
 
     return {
         "generated_at": generated_at,
+        "scan_id": scan_id,
+        "data_version": scan_id,
         "scanner": scanner_status,
         "decision_engine": "v4",
         "telegram": "CONFIGURED",

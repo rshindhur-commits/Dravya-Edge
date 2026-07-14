@@ -195,7 +195,9 @@ After market close, save both detailed and concise replay outputs:
 python tools/replay_today.py --input data/daily/YYYY-MM-DD/scanner_output_close.csv --output data/daily/YYYY-MM-DD/offline_replay.csv
 ```
 
-This also writes `data/daily/YYYY-MM-DD/offline_replay_summary.csv` by default. The summary columns are `Symbol`, `Closest Setup`, `Readiness`, `Failed Conditions`, `Passed Conditions`, `Final Decision`, `Gate Failure Stage`, `First Failed Rule`, `Recommendation`, and `Replay Source`.
+This also writes `data/daily/YYYY-MM-DD/offline_replay_summary.csv` by default. The summary columns are `Symbol`, `Closest Setup`, `Readiness`, `Failed Conditions`, `Passed Conditions`, `Final Decision`, `Gate Failure Stage`, `First Failed Rule`, `Recommendation`, `Trade Block Details`, and `Replay Source`.
+
+Replay now separates entry-rule failure from trade-block failure. Entry diagnostics explain setup readiness; trade-block details explain blockers such as RR, option spread, open interest, volume, quote age, option quality, and affordability with actual versus required values.
 
 The Streamlit `Replay` page renders replay directly in the app: generate replay, review coverage, inspect biggest blockers, and read the replay summary table. Downloading CSVs is secondary and only needed for deeper offline review.
 
@@ -249,6 +251,8 @@ The main Streamlit page is now organized as a trading workstation with sidebar n
 The sidebar is intentionally trader-first: `Auto Refresh`, `Paper Automation`, compact `Downloads`, `Daily Validation`, and navigation. Raw engineering exports such as telemetry, paper state, candidate snapshots, lifecycle events, and audit files are hidden under `Downloads > Advanced`. Runtime key status is not shown in the trading UI.
 
 Post-market workflow is one click from the sidebar: `Post Market: Generate Everything` builds the daily validation report, offline replay, replay summary, and refreshes the dashboard.
+
+`Trading`, `Replay`, and `Developer` pages use one standardized metadata card at the top of the page. It shows scan id/data version, scanner timing, refresh age, symbol count, and data freshness (`CURRENT`, `STALE`, or `OUTDATED`) using the configured refresh interval. Scanner output rows include `Scan ID` and `Data Version` so dashboard state, replay, validation, and CSV/JSON artifacts can be traced back to the same scan.
 
 The scanner writes `dashboard_state.json` under both `data/live/` and `data/daily/YYYY-MM-DD/`. This object is the dashboard's primary render source for the command center, current opportunities, blockers, and missed opportunities. It is built by `app/ui/dashboard_state.py` from scanner rows so the Streamlit UI does not need to recalculate business rules during live use.
 

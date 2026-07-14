@@ -91,6 +91,8 @@ At a high level, each scan does this per symbol:
 - The default `Trading` page renders a command center, current opportunities, why-no-trade summary, and missed opportunities from `dashboard_state.json`.
 - The sidebar keeps only trader-facing controls visible by default: auto refresh, paper automation, compact downloads, daily validation/replay actions, and navigation. Raw exports are hidden under `Downloads > Advanced`; runtime key status is no longer rendered.
 - `Post Market: Generate Everything` runs daily validation report generation and offline replay generation, then refreshes the dashboard.
+- `Trading`, `Replay`, and `Developer` pages share the same metadata-card pattern: scan id/data version, scan timing, refresh age, symbol count, and freshness status.
+- Scanner rows persist `Scan ID` and `Data Version`; `dashboard_state.json` also carries `scan_id` and `data_version` for end-to-end traceability.
 - `dashboard_state.json` is written under `data/live/dashboard_state.json` and `data/daily/YYYY-MM-DD/dashboard_state.json` whenever scanner outputs are written.
 - The `Developer` page keeps legacy diagnostic panels available without putting them above the fold during live trading.
 
@@ -147,7 +149,8 @@ At a high level, each scan does this per symbol:
 
 - `tools/replay_today.py` replays entry diagnostics from saved scanner CSV/XLSX snapshots without Polygon/API access.
 - The replay tool prefers persisted `ENTRY_DIAGNOSTICS_JSON`; otherwise it rebuilds diagnostics from replay-ready scanner columns such as `ENTRY_EMA9`, `ENTRY_EMA20`, `ENTRY_VWAP`, `ENTRY_REL_VOLUME`, `ENTRY_BODY_STRENGTH`, `ENTRY_ATR`, `ENTRY_BREAKDOWN`, `ENTRY_LOWER_HIGH`, `ENTRY_RECENT_HIGH`, and `ENTRY_RECENT_LOW`.
-- With `--output data/daily/YYYY-MM-DD/offline_replay.csv`, the replay tool also writes `data/daily/YYYY-MM-DD/offline_replay_summary.csv` containing `Symbol`, closest setup, readiness, failed/passed conditions, final decision, gate failure stage, first failed rule, recommendation, and replay source.
+- With `--output data/daily/YYYY-MM-DD/offline_replay.csv`, the replay tool also writes `data/daily/YYYY-MM-DD/offline_replay_summary.csv` containing `Symbol`, closest setup, readiness, failed/passed conditions, final decision, gate failure stage, first failed rule, recommendation, trade-block details, and replay source.
+- Replay trade-block details include actual versus required values for RR, option spread, open interest, volume, quote age, option quality, and affordability when those fields are present.
 - The Streamlit `Replay` page renders coverage, biggest blockers, and the replay summary directly in the app. CSV downloads remain available but are no longer the primary replay workflow.
 - Replay prints coverage metrics: scanner rows, replay rows, missing indicators, partial replay count, and coverage percentage. For a fresh replay-ready scanner output, missing indicators and partial replay should be zero.
 - Scanner output now stores these `ENTRY_*` indicator snapshot columns so future market states are reproducible after the market closes.
