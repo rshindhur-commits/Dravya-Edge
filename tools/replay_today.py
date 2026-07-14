@@ -20,6 +20,7 @@ from app.diagnostics import (  # noqa: E402
     diagnostics_to_json,
     summarize_entry_diagnostics,
 )
+from app.config.settings import settings  # noqa: E402
 
 
 def _read_scanner_snapshot(path: Path) -> pd.DataFrame:
@@ -54,6 +55,66 @@ def _load_existing_diagnostics(row: dict):
         return None
 
 
+def _safe_float(value, default=None):
+
+    try:
+
+        if value is None:
+
+            return default
+
+        numeric = float(value)
+
+        if pd.isna(numeric):
+
+            return default
+
+        return numeric
+
+    except Exception:
+
+        return default
+
+
+def _trade_block_diagnostics(row: dict) -> tuple[str, str]:
+
+    checks = []
+
+    def add_check(name, actual, required, failed):
+
+        checks.append(
+            {
+                "name": name,
+                "actual": actual,
+                "required": required,
+                "failed": failed,
+            }
+        )
+
+    rr = _safe_float(row.get("Candidate RR") or row.get("Risk Reward") or row.get("RR"))
+    spread = _safe_float(row.get("Option Spread %"))
+    open_interest = _safe_float(row.get("Option Open Interest"))
+    volume = _safe_float(row.get("Option Volume"))
+    quote_age = _safe_float(row.get("Option Quote Age Minutes"))
+    quality = _safe_float(row.get("Option Quality Score"))
+    affordable = str(row.get("Affordable") or "").strip().lower()
+
+    add_check("RR", rr, ">= 2.0", rr is not None and rr < 2.0)
+    add_check("Option Spread %", spread, f"<= {settings.option_max_spread_pct}", spread is not None and spread > settings.option_max_spread_pct)
+    add_check("Option Open Interest", open_interest, f">= {settings.option_min_open_interest}", open_interest is not None and open_interest < settings.option_min_open_interest)
+    add_check("Option Volume", volume, f">= {settings.option_min_volume}", volume is not None and volume < settings.option_min_volume)
+    add_check("Quote Age Minutes", quote_age, f"<= {settings.option_max_quote_age_minutes}", quote_age is not None and quote_age > settings.option_max_quote_age_minutes)
+    add_check("Option Quality Score", quality, f">= {settings.option_min_quality_score}", quality is not None and quality < settings.option_min_quality_score)
+    add_check("Affordable", affordable or None, "true", affordable in {"false", "0", "no"})
+
+    failed = [check for check in checks if check["failed"]]
+    text = "; ".join(
+        f"{check['name']} actual={check['actual']} required={check['required']}"
+        for check in failed
+    )
+    return text or "No trade-block detail failed", json.dumps(checks, default=str)
+
+
 def replay_scanner_snapshot(path: Path) -> tuple[pd.DataFrame, dict]:
 
     snapshot = _read_scanner_snapshot(path)
@@ -85,6 +146,9 @@ def replay_scanner_snapshot(path: Path) -> tuple[pd.DataFrame, dict]:
                 "REPLAY_SOURCE": source,
                 "ENTRY_DIAGNOSTICS_JSON": diagnostics_to_json(diagnostics),
             }
+        trade_block_text, trade_block_json = _trade_block_diagnostics(row)
+        replay_row["TRADE_BLOCK_DETAILS"] = trade_block_text
+        replay_row["TRADE_BLOCK_DETAILS_JSON"] = trade_block_json
 
         if not replay_row["ENTRY_GATE_FAILURE_STAGE"]:
 
@@ -125,6 +189,7 @@ def build_replay_summary(replay: pd.DataFrame) -> pd.DataFrame:
                 "Gate Failure Stage",
                 "First Failed Rule",
                 "Recommendation",
+                "Trade Block Details",
                 "Replay Source",
             ]
         )
@@ -135,6 +200,10 @@ def build_replay_summary(replay: pd.DataFrame) -> pd.DataFrame:
         lambda value: value.split(",")[0].strip() if value.strip() else "None"
     )
     output["RECOMMENDATION"] = output["FIRST_FAILED_RULE"].apply(_recommendation_for_failure)
+    output["TRADE_BLOCK_DETAILS"] = output.get(
+        "TRADE_BLOCK_DETAILS",
+        pd.Series("", index=output.index)
+    )
 
     return output.rename(
         columns={
@@ -146,6 +215,7 @@ def build_replay_summary(replay: pd.DataFrame) -> pd.DataFrame:
             "ENTRY_GATE_FAILURE_STAGE": "Gate Failure Stage",
             "FIRST_FAILED_RULE": "First Failed Rule",
             "RECOMMENDATION": "Recommendation",
+            "TRADE_BLOCK_DETAILS": "Trade Block Details",
             "REPLAY_SOURCE": "Replay Source",
         }
     )[
@@ -159,6 +229,7 @@ def build_replay_summary(replay: pd.DataFrame) -> pd.DataFrame:
             "Gate Failure Stage",
             "First Failed Rule",
             "Recommendation",
+            "Trade Block Details",
             "Replay Source",
         ]
     ]

@@ -14,6 +14,7 @@ class DashboardStateTests(unittest.TestCase):
                 [
                     {
                         "Symbol": "ARM",
+                        "Scan ID": "2026-07-13_175750",
                         "Final Signal": "HIGH CONVICTION BEARISH",
                         "Candidate Direction": "PUT",
                         "ENTRY_SETUP_CANDIDATE": "BREAKDOWN_SHORT",
@@ -36,6 +37,8 @@ class DashboardStateTests(unittest.TestCase):
         )
 
         self.assertEqual(state["market_bias"], "BEARISH")
+        self.assertEqual(state["scan_id"], "2026-07-13_175750")
+        self.assertEqual(state["data_version"], "2026-07-13_175750")
         self.assertEqual(state["best_put"]["symbol"], "ARM")
         self.assertEqual(state["summary"]["scanned"], 2)
         self.assertEqual(state["summary"]["trades"], 0)

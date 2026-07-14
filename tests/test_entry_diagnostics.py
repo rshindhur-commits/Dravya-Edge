@@ -60,6 +60,8 @@ class EntryDiagnosticsTests(unittest.TestCase):
         self.assertTrue(diagnostics["candidate_setup"])
         self.assertGreater(diagnostics["readiness"], 0)
         self.assertIn("failed_conditions", diagnostics)
+        self.assertIn("Signal:", diagnostics["timeline"][0])
+        self.assertTrue(any(item.startswith("Passed:") for item in diagnostics["timeline"]))
 
     def test_summary_reads_persisted_json_payload(self):
 
@@ -139,6 +141,7 @@ class EntryDiagnosticsTests(unittest.TestCase):
                     "PASSED_ENTRY_CONDITIONS": "VWAP, EMA_ALIGNMENT",
                     "Action Status": "WAIT",
                     "ENTRY_GATE_FAILURE_STAGE": "Entry",
+                    "TRADE_BLOCK_DETAILS": "Option Spread % actual=18 required=<= 10",
                     "REPLAY_SOURCE": "replayed_snapshot",
                 }
             ]
@@ -158,11 +161,13 @@ class EntryDiagnosticsTests(unittest.TestCase):
                 "Gate Failure Stage",
                 "First Failed Rule",
                 "Recommendation",
+                "Trade Block Details",
                 "Replay Source",
             ],
         )
         self.assertEqual(summary.iloc[0]["First Failed Rule"], "BODY_STRENGTH")
         self.assertEqual(summary.iloc[0]["Recommendation"], "Wait for stronger candle body")
+        self.assertIn("Option Spread %", summary.iloc[0]["Trade Block Details"])
         self.assertEqual(coverage["missing_indicators"], 0)
         self.assertEqual(coverage["coverage_pct"], 100.0)
 

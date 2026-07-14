@@ -332,13 +332,13 @@ def build_entry_diagnostics(symbol, df, analysis, market_regime=None, selected_e
     exact_match = next((setup for setup in setups if setup.setup == selected_type), None)
     closest = exact_match or max(setups, key=lambda setup: setup.readiness)
     action_entry = selected_type or "NO_ENTRY"
+    failed_text = ", ".join(closest.failed_conditions) if closest.failed_conditions else "None"
     timeline = [
-        f"Momentum {analysis.get('score')}",
-        str(analysis.get("signal") or "UNKNOWN"),
-        f"Candidate {closest.setup}",
-        f"Readiness {closest.readiness}%",
-        "Failed " + ", ".join(closest.failed_conditions) if closest.failed_conditions else "Failed none",
-        f"Selected {action_entry}",
+        f"Signal: {analysis.get('signal') or 'UNKNOWN'}",
+        f"Candidate: {closest.setup}",
+        f"Passed: {closest.matched_conditions}/{closest.total_conditions}",
+        f"Failed: {failed_text}",
+        f"Decision: {action_entry}",
     ]
     diagnostic = EntryDiagnostics(
         ticker=symbol,
