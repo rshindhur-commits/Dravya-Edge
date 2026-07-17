@@ -7,6 +7,37 @@ from app.strategies.entry_engine import _entry_score, detect_entry
 
 class EntryEngineTests(unittest.TestCase):
 
+    def test_ema_pullback_accepts_moderate_low_distance_from_ema9(self):
+
+        df = pd.DataFrame([
+            {
+                "Open": 100.5,
+                "High": 103.0,
+                "Low": 99.1,
+                "Close": 101.0,
+                "VWAP": 100.0,
+                "EMA9": 99.8,
+                "EMA20": 98.5,
+                "ATR": 2.0,
+                "REL_VOLUME": 1.0,
+                "BODY_STRENGTH": 0.4,
+                "BREAKDOWN": False,
+                "LOWER_HIGH": False,
+            }
+        ] * 20)
+
+        entry = detect_entry(
+            df,
+            {
+                "signal": "BULLISH",
+                "score": 7,
+                "market_regime": "TRENDING_BULL",
+            },
+            symbol="ORCL"
+        )
+
+        self.assertEqual(entry["entry_type"], "EMA_PULLBACK")
+
     def test_ema_rejection_short_uses_recent_touch_window(self):
 
         df = pd.DataFrame([
