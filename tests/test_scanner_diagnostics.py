@@ -109,7 +109,11 @@ class ScannerDiagnosticsTests(unittest.TestCase):
                 "Option Quality Score": 90,
                 "Option Spread %": 4,
                 "Option Quote Freshness": "LIVE_QUOTE",
-                "15m Score": 90,
+                "15m Score": 50,
+                "Setup %": 87,
+                "ENTRY_GATE_SETUP": 87,
+                "ENTRY_GATE_MIN_SETUP": 70,
+                "ENTRY_GATE_RESULT": "PASS",
                 "Alignment Score": 5,
                 "RS Rank Score": 2,
                 "Relative Volume": 2,
@@ -138,7 +142,7 @@ class ScannerDiagnosticsTests(unittest.TestCase):
                 {"sent": True, "reason": "SENT"},
                 {"sent": False, "reason": "NOT_ACTIONABLE_STATUS"},
             ],
-        ):
+        ) as send_alert:
 
             summary = _dispatch_telegram_entry_alerts(df_results)
 
@@ -148,6 +152,15 @@ class ScannerDiagnosticsTests(unittest.TestCase):
         self.assertEqual(summary["blocked_count"], 1)
         self.assertEqual(summary["reasons"]["SENT"], 1)
         self.assertEqual(summary["reasons"]["NOT_ACTIONABLE_STATUS"], 1)
+        nvda_call = next(
+            call
+            for call in send_alert.call_args_list
+            if call.kwargs["symbol"] == "NVDA"
+        )
+        self.assertEqual(
+            nvda_call.kwargs["setup_score"],
+            87
+        )
         self.assertEqual(df_results.loc[0, "Telegram Eligibility"], "SENT")
         self.assertIsNone(df_results.loc[0, "Telegram Block Reason"])
         self.assertTrue(df_results.loc[0, "Telegram Sent"])
