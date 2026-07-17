@@ -41,10 +41,18 @@ def project_trade(
             "entry_quality"
         ]
 
-        market_regime = analysis.get(
+        market_regime = str(analysis.get(
             "market_regime",
             "CHOPPY"
-        )        
+        ) or "CHOPPY").strip().upper()
+
+        if market_regime == "TRENDING_BULL":
+
+            market_regime = "TRENDING_BULLISH"
+
+        elif market_regime == "TRENDING_BEAR":
+
+            market_regime = "TRENDING_BEARISH"
 
         # =====================================
         # ATR-aware expected move

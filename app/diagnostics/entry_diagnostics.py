@@ -215,6 +215,37 @@ def _latest_context(df):
     return latest, recent_high, recent_low
 
 
+def _recent_ema_touch(df, price_column="High", ema_column="EMA9", window=3):
+
+    if df is None or df.empty:
+
+        return False, None
+
+    if price_column not in df.columns or ema_column not in df.columns:
+
+        return False, None
+
+    recent = df.tail(window)
+
+    try:
+
+        touches = recent[price_column] >= recent[ema_column]
+
+        if touches.any():
+
+            return True, _safe_float(
+                recent.loc[touches, price_column].max()
+            )
+
+        return False, _safe_float(
+            recent[price_column].max()
+        )
+
+    except Exception:
+
+        return False, None
+
+
 def _evaluate_setups(df, analysis):
 
     latest, recent_high, recent_low = _latest_context(df)
@@ -231,6 +262,12 @@ def _evaluate_setups(df, analysis):
     recent_low = _safe_float(recent_low)
     breakdown = _safe_bool(latest.get("BREAKDOWN"))
     lower_high = _safe_bool(latest.get("LOWER_HIGH"))
+    recent_ema9_touch, recent_ema9_touch_high = _recent_ema_touch(
+        df,
+        "High",
+        "EMA9",
+        window=3
+    )
 
     bullish_signal = _signal_is(analysis, "BULLISH", "HIGH CONVICTION BULLISH")
     bearish_signal = _signal_is(analysis, "BEARISH", "HIGH CONVICTION BEARISH")
@@ -266,7 +303,7 @@ def _evaluate_setups(df, analysis):
             [
                 _condition("BEARISH_SIGNAL", bearish_signal, analysis.get("signal"), "BEARISH or HIGH CONVICTION BEARISH"),
                 _condition("CLOSE_BELOW_EMA9", close is not None and ema9 is not None and close < ema9, close, f"< EMA9 {ema9}"),
-                _condition("REJECTED_EMA9", high is not None and ema9 is not None and high >= ema9, high, f">= EMA9 {ema9}"),
+                _condition("REJECTED_EMA9", recent_ema9_touch and ema9 is not None, recent_ema9_touch_high, f"recent 3-bar touch >= EMA9 {ema9}"),
                 _condition("EMA_ALIGNMENT", ema9 is not None and ema20 is not None and ema9 < ema20, ema9, f"< EMA20 {ema20}"),
                 _condition("VWAP", close is not None and vwap is not None and close < vwap, close, f"< VWAP {vwap}"),
             ],

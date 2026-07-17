@@ -33,13 +33,6 @@ from app.gates import (
     EntryGateConfig,
     evaluate_entry_gate
 )
-from app.diagnostics import (
-    build_entry_diagnostics,
-    classify_entry_gate_failure_stage,
-    diagnostics_to_json,
-    empty_entry_diagnostics,
-    summarize_entry_diagnostics
-)
 from app.indicators.technical_indicators import compute_indicators
 from app.strategies.momentum_strategy import analyze_setup
 from app.ai.trade_analyzer import generate_trade_summary
@@ -72,7 +65,16 @@ from app.options.options_recommender import (
 )
 
 from app.options.live_options_chain import (
-    fetch_option_snapshot
+    fetch_option_snapshot,
+    refresh_contract_quote
+)
+
+from app.options.affordability_config import (
+    get_affordability_config
+)
+
+from app.options.option_affordability import (
+    add_affordability_metrics
 )
 
 from app.options.option_metrics import (
@@ -109,10 +111,7 @@ from app.analytics.scanner_profiler import (
 from app.analytics.candidate_snapshot_writer import (
     append_candidate_snapshots
 )
-from app.background import (
-    get_background_metrics,
-    run_background
-)
+from app.background import run_background
 from app.storage.signal_lifecycle_store import (
     record_signal_lifecycle_events_for_scan
 )
@@ -136,8 +135,6 @@ from app.db.persistence import (
     record_scanner_run_start
 )
 from app.utils.runtime_logging import debug_print
-from app.utils.polygon_client import get_metrics as get_polygon_metrics
-from app.ui.dashboard_state import write_dashboard_state
 from app.storage.daily_paths import (
     daily_path,
     live_path
@@ -474,6 +471,244 @@ def _append_market_opportunity_audit(df_results, trading_day, scan_id):
         return None
 
 
+def _json_list(value):
+
+    if value is None:
+
+        return []
+
+    if isinstance(value, list):
+
+        return value
+
+    try:
+
+        if pd.isna(value):
+
+            return []
+
+    except Exception:
+
+        pass
+
+    try:
+
+        parsed = json.loads(str(value))
+
+        if isinstance(parsed, list):
+
+            return parsed
+
+    except Exception:
+
+        return []
+
+    return []
+
+
+def _append_option_liquidity_audit(df_results, trading_day, scan_id):
+
+    try:
+
+        if df_results.empty or "Option Liquidity Attempts" not in df_results.columns:
+
+            return None
+
+        rows = []
+
+        for _, row in df_results.iterrows():
+
+            attempts = _json_list(
+                row.get("Option Liquidity Attempts")
+            )
+
+            for attempt_index, attempt in enumerate(attempts, start=1):
+
+                rows.append({
+                    "trading_day": trading_day,
+                    "scan_id": scan_id,
+                    "observed_at": now_et().isoformat(),
+                    "symbol": row.get("Symbol"),
+                    "selected_option_ticker": row.get("Option Ticker"),
+                    "attempt_index": attempt_index,
+                    "attempt_source": attempt.get("source"),
+                    "attempt_ticker": attempt.get("ticker"),
+                    "attempt_code": attempt.get("code"),
+                    "attempt_reason": attempt.get("reason"),
+                    "attempt_spread_pct": attempt.get("spread_pct"),
+                    "attempt_liquid": attempt.get("liquid"),
+                    "attempt_accepted": attempt.get("accepted", False),
+                    "action_status": row.get("Action Status"),
+                    "option_quote_status": row.get("Option Quote Status"),
+                    "option_rejection_reason": row.get("Option Rejection Reason")
+                })
+
+        if not rows:
+
+            return None
+
+        audit = pd.DataFrame(rows)
+        path = daily_path(trading_day, "option_liquidity_attempts.csv")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not path.exists() or path.stat().st_size == 0
+        audit.to_csv(
+            path,
+            mode="a",
+            header=write_header,
+            index=False
+        )
+
+        return {
+            "path": str(path),
+            "rows": len(audit)
+        }
+
+    except Exception as exc:
+
+        print(f"[OPTION LIQUIDITY AUDIT WARNING] {exc}")
+        return None
+
+
+def _bool_series(series):
+
+    return series.astype(str).str.strip().str.lower().isin([
+        "true",
+        "1",
+        "yes"
+    ])
+
+
+def _build_candidate_funnel(df_results, telegram_summary=None):
+
+    telegram_summary = telegram_summary or {}
+
+    if df_results.empty:
+
+        return {
+            "scanned": 0,
+            "directional": 0,
+            "entry_ready": 0,
+            "risk_passed": 0,
+            "option_selected": 0,
+            "liquidity_passed": 0,
+            "affordability_passed": 0,
+            "ema_rejection_short": 0,
+            "enter_paper": 0,
+            "telegram": 0
+        }
+
+    final_signal = df_results.get("Final Signal", pd.Series(dtype=object)).astype(str)
+    entry = df_results.get("Entry", pd.Series(dtype=object)).astype(str).str.upper()
+    candidate_direction = df_results.get("Candidate Direction", pd.Series(dtype=object)).astype(str).str.upper()
+    option_ticker = df_results.get("Option Ticker", pd.Series(dtype=object))
+    action_status = df_results.get("Action Status", pd.Series(dtype=object)).astype(str).str.upper()
+    trade_allowed = _bool_series(
+        df_results.get("Trade Allowed", pd.Series(dtype=object))
+    )
+    setup_valid = _bool_series(
+        df_results.get("Setup Valid", pd.Series(dtype=object))
+    )
+    liquidity_passed = _bool_series(
+        df_results.get("Option Liquidity Passed", pd.Series(dtype=object))
+    )
+    affordable = _bool_series(
+        df_results.get("Affordable", pd.Series(dtype=object))
+    )
+
+    directional = final_signal.str.contains(
+        "BULLISH|BEARISH",
+        case=False,
+        regex=True,
+        na=False
+    )
+    entry_ready = (
+        ~entry.isin(["", "NAN", "NONE", "NO_ENTRY", "NO_SETUP"])
+        & candidate_direction.isin(["CALL", "PUT"])
+    )
+
+    return {
+        "scanned": int(len(df_results)),
+        "directional": int(directional.sum()),
+        "entry_ready": int(entry_ready.sum()),
+        "risk_passed": int(setup_valid.sum()),
+        "option_selected": int(option_ticker.notna().sum()),
+        "liquidity_passed": int(liquidity_passed.sum()),
+        "affordability_passed": int(affordable.sum()),
+        "ema_rejection_short": int(entry.eq("EMA_REJECTION_SHORT").sum()),
+        "enter_paper": int(action_status.eq("ENTER_PAPER").sum()),
+        "telegram": int(telegram_summary.get("sent_count", 0))
+    }
+
+
+def _write_candidate_funnel(funnel, trading_day, scan_id, telegram_summary=None):
+
+    telegram_summary = telegram_summary or {}
+    payload = {
+        "trading_day": trading_day,
+        "scan_id": scan_id,
+        "observed_at": now_et().isoformat(),
+        **funnel,
+        "telegram_attempted": telegram_summary.get("attempted_count", 0),
+        "telegram_blocked": telegram_summary.get("blocked_count", 0),
+        "telegram_reasons": telegram_summary.get("reasons", {})
+    }
+    path = daily_path(trading_day, "candidate_funnel.jsonl")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+
+        handle.write(json.dumps(payload, default=str) + "\n")
+
+    return {
+        "path": str(path),
+        "rows": 1
+    }
+
+
+def _print_candidate_funnel(funnel, telegram_summary=None):
+
+    telegram_summary = telegram_summary or {}
+    print("\n[CANDIDATE FUNNEL]")
+
+    for label, key in [
+        ("scanned", "scanned"),
+        ("directional", "directional"),
+        ("entry ready", "entry_ready"),
+        ("risk passed", "risk_passed"),
+        ("option selected", "option_selected"),
+        ("liquidity passed", "liquidity_passed"),
+        ("affordability passed", "affordability_passed"),
+        ("EMA_REJECTION_SHORT", "ema_rejection_short"),
+        ("ENTER_PAPER", "enter_paper"),
+        ("Telegram", "telegram")
+    ]:
+
+        print(f"{funnel.get(key, 0)} {label}")
+
+    ema_rejection_short_count = funnel.get("ema_rejection_short", 0)
+    ema_rejection_warning_threshold = _env_int(
+        "EMA_REJECTION_SHORT_WARNING_THRESHOLD",
+        10
+    )
+
+    if ema_rejection_short_count > ema_rejection_warning_threshold:
+
+        print(
+            "[CANDIDATE FUNNEL WARNING] "
+            f"EMA_REJECTION_SHORT count={ema_rejection_short_count} "
+            f"exceeds threshold={ema_rejection_warning_threshold}; "
+            "recent rejection window may be too wide"
+        )
+
+    print(
+        "[TELEGRAM SUMMARY] "
+        f"ENTER_PAPER={funnel.get('enter_paper', 0)} "
+        f"attempted={telegram_summary.get('attempted_count', 0)} "
+        f"sent={telegram_summary.get('sent_count', 0)} "
+        f"blocked={telegram_summary.get('blocked_count', 0)} "
+        f"reasons={telegram_summary.get('reasons', {})}"
+    )
+
+
 def _align_action_status_with_entry_gate(row):
 
     if row.get("Action Status") not in [
@@ -528,83 +763,6 @@ def _safe_metric(df, column):
     except Exception:
 
         return None
-
-
-def _entry_replay_snapshot(df):
-
-    if df is None or df.empty:
-
-        return {}
-
-    latest = df.iloc[-1]
-
-    def value(name):
-
-        try:
-
-            item = latest.get(name)
-
-            if pd.isna(item):
-
-                return None
-
-            return item
-
-        except Exception:
-
-            return None
-
-    recent_high = None
-    recent_low = None
-
-    try:
-
-        recent_high = (
-            df["High"].rolling(10).max().iloc[-2]
-            if len(df) >= 2
-            else df["High"].max()
-        )
-
-        if pd.isna(recent_high):
-
-            recent_high = df["High"].shift(1).tail(10).max()
-
-    except Exception:
-
-        recent_high = None
-
-    try:
-
-        recent_low = df["Low"].shift(1).tail(3).min()
-
-    except Exception:
-
-        recent_low = None
-
-    return {
-        "Open": value("Open"),
-        "High": value("High"),
-        "Low": value("Low"),
-        "Close": value("Close"),
-        "EMA9": value("EMA9"),
-        "EMA20": value("EMA20"),
-        "VWAP": value("VWAP"),
-        "RSI": value("RSI"),
-        "MACD": value("MACD"),
-        "MACD_SIGNAL": value("MACD_SIGNAL"),
-        "REL_VOLUME": value("REL_VOLUME"),
-        "BODY_STRENGTH": value("BODY_STRENGTH"),
-        "ATR": value("ATR"),
-        "ADX": value("ADX"),
-        "OBV": value("OBV"),
-        "BREAKOUT": value("BREAKOUT"),
-        "BREAKDOWN": value("BREAKDOWN"),
-        "LOWER_HIGH": value("LOWER_HIGH"),
-        "ROLLING_SUPPORT": value("ROLLING_SUPPORT"),
-        "PREV_LOW": value("PREV_LOW"),
-        "RECENT_HIGH": recent_high,
-        "RECENT_LOW": recent_low,
-    }
 
 
 def _append_daily_candles(symbol, candles_df, trading_day, scan_id, interval="5m"):
@@ -1513,10 +1671,8 @@ def build_status_result_row(
 
     market_data_status = market_data_status or {}
 
-    row = {
+    return {
         "Symbol": symbol,
-        "Scan ID": market_data_status.get("scan_id"),
-        "Data Version": market_data_status.get("scan_id"),
         "Price": "-",
         "Final Signal": final_signal,
         "15m Score": None,
@@ -1544,19 +1700,6 @@ def build_status_result_row(
         "Above EMA20": None,
         "Reasons": explanation,
         "Entry": "NO_ENTRY",
-        "ENTRY_SETUP_CANDIDATE": "NO_DATA",
-        "ENTRY_READINESS": 0,
-        "FAILED_ENTRY_CONDITIONS": blocked_by or action_status,
-        "PASSED_ENTRY_CONDITIONS": None,
-        "ENTRY_DECISION_TIMELINE": explanation,
-        "ENTRY_DIAGNOSTICS_JSON": diagnostics_to_json(
-            empty_entry_diagnostics(
-                symbol,
-                reason=blocked_by or action_status,
-                market_regime="UNKNOWN"
-            )
-        ),
-        "ENTRY_GATE_FAILURE_STAGE": None,
         "Entry Quality": "NONE",
         "Entry Trigger": None,
         "Risk Reward": None,
@@ -1619,9 +1762,6 @@ def build_status_result_row(
         "Partial Profit Taken": False,
         "Adjustment Reason": explanation
     }
-
-    row["ENTRY_GATE_FAILURE_STAGE"] = classify_entry_gate_failure_stage(row)
-    return row
 
 
 def build_action_decision(
@@ -2231,6 +2371,117 @@ def build_candidate_trade_plan(
     }
 
 
+def _iter_option_bundle_candidates(option_bundle):
+
+    if not option_bundle:
+
+        return
+
+    for label in [
+        "active",
+        "primary",
+        "affordable",
+        "short_dte",
+        "longer_dte"
+    ]:
+
+        yield label, option_bundle.get(label)
+
+    for index, contract in enumerate(
+        option_bundle.get("ranked") or [],
+        start=1
+    ):
+
+        yield f"ranked #{index}", contract
+
+
+def _select_liquid_option_from_bundle(option_bundle, intended_option_direction):
+
+    attempts = []
+
+    if not option_bundle:
+
+        return None, None, attempts
+
+    affordability_config = get_affordability_config()
+    seen_tickers = set()
+
+    for source, contract in _iter_option_bundle_candidates(option_bundle):
+
+        if not contract:
+
+            continue
+
+        ticker = contract.get("ticker")
+        dedupe_key = ticker or id(contract)
+
+        if dedupe_key in seen_tickers:
+
+            continue
+
+        seen_tickers.add(dedupe_key)
+        print(
+            f"[LIQUIDITY FALLBACK] Try {source} contract "
+            f"{ticker or 'UNKNOWN'}"
+        )
+
+        candidate = add_affordability_metrics(
+            refresh_contract_quote(dict(contract)),
+            config=affordability_config
+        )
+        direction_match = contract_matches_direction(
+            candidate,
+            intended_option_direction
+        )
+
+        if not direction_match:
+
+            attempt = {
+                "source": source,
+                "ticker": ticker,
+                "liquid": False,
+                "code": "DIRECTION_MISMATCH",
+                "reason": "Option contract type does not match setup direction",
+                "spread_pct": candidate.get("spread_pct"),
+                "accepted": False
+            }
+            attempts.append(attempt)
+            print(
+                f"[LIQUIDITY FALLBACK] {source} failed: "
+                f"{attempt['reason']}"
+            )
+            continue
+
+        liquidity = evaluate_option_liquidity(candidate)
+        attempt = {
+            "source": source,
+            "ticker": candidate.get("ticker"),
+            "liquid": liquidity.get("liquid"),
+            "code": liquidity.get("code"),
+            "reason": liquidity.get("reason"),
+            "spread_pct": liquidity.get("spread_pct"),
+            "accepted": False
+        }
+        attempts.append(attempt)
+
+        if liquidity.get("liquid"):
+
+            attempt["accepted"] = True
+            candidate["liquidity_attempts"] = list(attempts)
+            print(
+                f"[LIQUIDITY FALLBACK] Accepted {source} contract "
+                f"{candidate.get('ticker') or 'UNKNOWN'}"
+            )
+            return candidate, liquidity, attempts
+
+        print(
+            f"[LIQUIDITY FALLBACK] {source} liquidity failed: "
+            f"{liquidity.get('reason')}"
+        )
+
+    return None, None, attempts
+
+
 def _row_bool(value):
 
     if value is None:
@@ -2267,9 +2518,25 @@ def _row_float(row, column, default=0):
 
 def _dispatch_telegram_entry_alerts(df_results):
 
+    summary = {
+        "enter_paper_count": 0,
+        "attempted_count": 0,
+        "sent_count": 0,
+        "blocked_count": 0,
+        "error_count": 0,
+        "reasons": {},
+        "alerts": []
+    }
+
     if df_results.empty:
 
-        return
+        return summary
+
+    if "Action Status" in df_results.columns:
+
+        summary["enter_paper_count"] = int(
+            df_results["Action Status"].astype(str).str.upper().eq("ENTER_PAPER").sum()
+        )
 
     rows = []
 
@@ -2360,6 +2627,20 @@ def _dispatch_telegram_entry_alerts(df_results):
                 f"sent={telegram_result.get('sent')} "
                 f"reason={telegram_result.get('reason')}"
             )
+            reason = telegram_result.get("reason") or "UNKNOWN"
+            sent = bool(telegram_result.get("sent"))
+            summary["attempted_count"] += 1
+            summary["sent_count"] += int(sent)
+            summary["blocked_count"] += int(not sent)
+            summary["reasons"][reason] = summary["reasons"].get(reason, 0) + 1
+            summary["alerts"].append({
+                "symbol": row.get("Symbol"),
+                "action_status": row.get("Action Status"),
+                "sent": sent,
+                "reason": reason,
+                "alert_score": alert_score,
+                "option_ticker": row.get("Option Ticker")
+            })
 
         except Exception as e:
 
@@ -2367,50 +2648,21 @@ def _dispatch_telegram_entry_alerts(df_results):
                 f"[TELEGRAM ENTRY ALERT ERROR] "
                 f"{row.get('Symbol')}: {e}"
             )
+            summary["attempted_count"] += 1
+            summary["blocked_count"] += 1
+            summary["error_count"] += 1
+            summary["reasons"]["ERROR"] = summary["reasons"].get("ERROR", 0) + 1
+            summary["alerts"].append({
+                "symbol": row.get("Symbol"),
+                "action_status": row.get("Action Status"),
+                "sent": False,
+                "reason": "ERROR",
+                "alert_score": alert_score,
+                "option_ticker": row.get("Option Ticker"),
+                "error": str(e)
+            })
 
-
-def _print_entry_diagnostic_summary(rows):
-
-    summary = summarize_entry_diagnostics(rows)
-    failure_counts = summary.get("failure_counts") or {}
-    regime_summary = summary.get("regime_summary") or {}
-
-    print("\nENTRY FAILURE SUMMARY")
-    print("---------------------")
-
-    if not failure_counts:
-
-        print("No entry condition failures recorded")
-
-    else:
-
-        for failure, count in sorted(
-            failure_counts.items(),
-            key=lambda item: item[1],
-            reverse=True
-        )[:12]:
-
-            print(f"{failure}: {count}")
-
-    print("\nMARKET REGIME ENTRY SUMMARY")
-    print("---------------------------")
-
-    if not regime_summary:
-
-        print("No regime diagnostic rows recorded")
-
-    else:
-
-        for regime, stats in sorted(regime_summary.items()):
-
-            print(
-                f"{regime}: "
-                f"candidates={stats.get('candidates', 0)} "
-                f"bullish={stats.get('bullish_candidates', 0)} "
-                f"bearish={stats.get('bearish_candidates', 0)} "
-                f"generated={stats.get('generated', 0)} "
-                f"top_failure={stats.get('top_failure') or 'NONE'}"
-            )
+    return summary
 
 
 def _write_scanner_output_files(df_results, trading_day, output_file):
@@ -2432,13 +2684,6 @@ def _write_scanner_output_files(df_results, trading_day, output_file):
     df_results.to_csv(
         daily_csv_path,
         index=False
-    )
-    write_dashboard_state(
-        df_results,
-        [
-            live_path("dashboard_state.json"),
-            daily_path(trading_day, "dashboard_state.json"),
-        ]
     )
 
     try:
@@ -2528,7 +2773,7 @@ def _persist_scan_outputs(
     snapshot_result = None
     records = df_results.to_dict("records")
 
-    with profile_timer.stage("Database / Engine Health"):
+    with profile_timer.stage("Engine Health"):
 
         append_engine_health_history(
             trading_day,
@@ -2540,21 +2785,18 @@ def _persist_scan_outputs(
         f"score={health_payload.get('health_score')} "
         f"runtime={health_payload.get('scan_runtime_sec')}s "
         f"workers={health_payload.get('worker_count')} "
-        f"cache_hit={health_payload.get('cache_hit_rate')}% "
-        f"api_avg={health_payload.get('average_api_time')}s "
-        f"queue_depth={health_payload.get('background_queue_depth')} "
         f"symbols={health_payload.get('symbols_completed')}/"
         f"{health_payload.get('polygon_calls')}"
     )
 
-    with profile_timer.stage("Database / Gate Decisions"):
+    with profile_timer.stage("Database gate_decisions"):
 
         record_gate_decisions(
             records,
             run_id=scan_id
         )
 
-    with profile_timer.stage("Database / Candidate Snapshot"):
+    with profile_timer.stage("Candidate snapshot"):
 
         snapshot_result = append_candidate_snapshots(
             df_results,
@@ -2564,7 +2806,7 @@ def _persist_scan_outputs(
 
     try:
 
-        with profile_timer.stage("Database / Signal Lifecycle"):
+        with profile_timer.stage("Signal lifecycle"):
 
             lifecycle_count = record_signal_lifecycle_events_for_scan(
                 records,
@@ -2592,7 +2834,7 @@ def _persist_scan_outputs(
             f"{snapshot_result['path']}"
         )
 
-    with profile_timer.stage("Export / Scanner Output"):
+    with profile_timer.stage("Excel scanner_output"):
 
         output_file = _write_scanner_output_files(
             df_results,
@@ -2605,7 +2847,7 @@ def _persist_scan_outputs(
         f" {output_file}"
     )
 
-    with profile_timer.stage("Database / Scanner Run"):
+    with profile_timer.stage("Database scanner_run"):
 
         record_scanner_run_finish(
             scan_id,
@@ -3000,30 +3242,6 @@ def run_scanner():
                     "avoid_chasing": False
 
                 }
-
-            if not df_15m.empty:
-
-                entry_replay_snapshot = _entry_replay_snapshot(
-                    df_15m
-                )
-
-                entry_diagnostics = build_entry_diagnostics(
-                    symbol,
-                    df_15m,
-                    analysis_15m,
-                    market_regime=market_regime,
-                    selected_entry=entry_setup
-                )
-
-            else:
-
-                entry_replay_snapshot = {}
-
-                entry_diagnostics = empty_entry_diagnostics(
-                    symbol,
-                    reason="No 15m dataframe",
-                    market_regime=market_regime
-                )
 
             if not df_15m.empty:
 
@@ -3725,6 +3943,7 @@ def run_scanner():
             option_spread_pct = None
             option_mid_price = None
             option_bundle = None
+            option_liquidity_attempts = []
             short_dte_option = None
             longer_dte_option = None
             realtime_block_reason = None
@@ -3808,96 +4027,39 @@ def run_scanner():
                     "longer_dte"
                 ) if option_bundle else None
 
+                option_recommendation, option_liquidity, option_liquidity_attempts = (
+                    _select_liquid_option_from_bundle(
+                        option_bundle,
+                        intended_option_direction
+                    )
+                )
+
                 if option_recommendation:
 
-                    option_direction_match = (
-                        contract_matches_direction(
-                            option_recommendation,
-                            intended_option_direction
-                        )
-                    )
-
-                    if not option_direction_match:
-
-                        risk_setup["trade_allowed"] = False
-
-                        option_rejection_reason = (
-                            "Option contract type does not match setup direction"
-                        )
-
-                        risk_setup.setdefault(
-                            "reasons",
-                            []
-                        )
-
-                        risk_setup["reasons"].append(
-                            option_rejection_reason
-                        )
-
+                    option_direction_match = True
                     option_quote_status = option_recommendation.get(
                         "quote_status"
-                    )
-
+                    ) or option_liquidity.get("code")
                     option_mid_price = option_recommendation.get(
                         "mid_price"
-                    )
-
-                    option_spread_pct = option_recommendation.get(
+                    ) or option_recommendation.get("quote_midpoint")
+                    option_spread_pct = option_liquidity.get(
                         "spread_pct"
                     )
-
-                    if risk_setup["trade_allowed"]:
-
-                        option_liquidity = (
-                            evaluate_option_liquidity(
-                                option_recommendation
-                            )
-                        )
-
-                        option_spread_pct = option_liquidity.get(
-                            "spread_pct"
-                        )
-
-                        print(
-                            f"[LIQUIDITY] {symbol} "
-                            f"liquid={option_liquidity['liquid']} "
-                            f"code={option_liquidity.get('code')} "
-                            f"reason={option_liquidity['reason']}"
-                        )
-
-                        if not option_liquidity["liquid"]:
-
-                            risk_setup["trade_allowed"] = False
-
-                            option_quote_status = option_liquidity.get(
-                                "code",
-                                option_quote_status
-                            )
-
-                            option_rejection_reason = (
-                                option_liquidity["reason"]
-                            )
-
-                            if option_liquidity.get("code") in [
-                                "MISSING_BID_ASK",
-                                "UNKNOWN_QUOTE_TIME",
-                                "STALE_QUOTE",
-                                "DELAYED_QUOTE"
-                            ]:
-
-                                realtime_block_reason = option_liquidity.get("code")
-
-                            risk_setup.setdefault(
-                                "reasons",
-                                []
-                            )
-
-                            risk_setup["reasons"].append(
-                                f"Liquidity failed: "
-                                f"{option_liquidity['reason']}"
-                            )
+                    print(
+                        f"[LIQUIDITY] {symbol} "
+                        f"liquid={option_liquidity['liquid']} "
+                        f"code={option_liquidity.get('code')} "
+                        f"reason={option_liquidity['reason']}"
+                    )
 
                 else:
+
+                    last_attempt = (
+                        option_liquidity_attempts[-1]
+                        if option_liquidity_attempts
+                        else {}
+                    )
 
                     risk_setup["trade_allowed"] = False
 
@@ -3906,19 +4068,40 @@ def run_scanner():
                         []
                     )
 
-                    risk_setup["reasons"].append(
-                        "No option contract passed ranking"
-                    )
-
                     option_rejection_reason = (
-                        "No option contract passed ranking"
+                        last_attempt.get("reason")
+                        or "No option contract passed ranking"
+                    )
+                    option_quote_status = (
+                        last_attempt.get("code")
+                        or "NO_CONTRACT"
+                    )
+                    option_spread_pct = last_attempt.get("spread_pct")
+                    option_direction_match = (
+                        False
+                        if option_quote_status == "DIRECTION_MISMATCH"
+                        else None
                     )
 
-                    option_quote_status = "NO_CONTRACT"
+                    if option_quote_status in [
+                        "MISSING_BID_ASK",
+                        "UNKNOWN_QUOTE_TIME",
+                        "STALE_QUOTE",
+                        "DELAYED_QUOTE"
+                    ]:
+
+                        realtime_block_reason = option_quote_status
+
+                    risk_setup["reasons"].append(
+                        f"Liquidity failed: "
+                        f"{option_rejection_reason}"
+                    )
 
                     print(
                         f"[LIQUIDITY] {symbol} "
-                        f"liquid=False reason=No ranked option contract"
+                        f"liquid=False "
+                        f"code={option_quote_status} "
+                        f"reason={option_rejection_reason}"
                     )
 
             if (
@@ -4208,10 +4391,6 @@ def run_scanner():
 
                 "Symbol": symbol,
 
-                "Scan ID": scan_id,
-
-                "Data Version": scan_id,
-
                 "Suggestion Status": None,
 
                 "Suggestion First Seen": None,
@@ -4319,34 +4498,6 @@ def run_scanner():
                     else "NO_ENTRY"
                 ),
 
-                "ENTRY_SETUP_CANDIDATE": entry_diagnostics.get(
-                    "candidate_setup"
-                ),
-
-                "ENTRY_READINESS": entry_diagnostics.get(
-                    "readiness"
-                ),
-
-                "FAILED_ENTRY_CONDITIONS": ", ".join(
-                    entry_diagnostics.get("failed_conditions") or []
-                ),
-
-                "PASSED_ENTRY_CONDITIONS": ", ".join(
-                    entry_diagnostics.get("passed_conditions") or []
-                ),
-
-                "ENTRY_DECISION_TIMELINE": " -> ".join(
-                    entry_diagnostics.get("timeline") or []
-                ),
-
-                "ENTRY_DIAGNOSTICS": entry_diagnostics,
-
-                "ENTRY_DIAGNOSTICS_JSON": diagnostics_to_json(
-                    entry_diagnostics
-                ),
-
-                "ENTRY_GATE_FAILURE_STAGE": None,
-
                 "Entry Quality": (
                     entry_setup["entry_quality"]
                     if entry_setup
@@ -4358,50 +4509,6 @@ def run_scanner():
                     if entry_setup
                     else None
                 ),
-
-                "ENTRY_OPEN": entry_replay_snapshot.get("Open"),
-
-                "ENTRY_HIGH": entry_replay_snapshot.get("High"),
-
-                "ENTRY_LOW": entry_replay_snapshot.get("Low"),
-
-                "ENTRY_CLOSE": entry_replay_snapshot.get("Close"),
-
-                "ENTRY_EMA9": entry_replay_snapshot.get("EMA9"),
-
-                "ENTRY_EMA20": entry_replay_snapshot.get("EMA20"),
-
-                "ENTRY_VWAP": entry_replay_snapshot.get("VWAP"),
-
-                "ENTRY_RSI": entry_replay_snapshot.get("RSI"),
-
-                "ENTRY_MACD": entry_replay_snapshot.get("MACD"),
-
-                "ENTRY_MACD_SIGNAL": entry_replay_snapshot.get("MACD_SIGNAL"),
-
-                "ENTRY_REL_VOLUME": entry_replay_snapshot.get("REL_VOLUME"),
-
-                "ENTRY_BODY_STRENGTH": entry_replay_snapshot.get("BODY_STRENGTH"),
-
-                "ENTRY_ATR": entry_replay_snapshot.get("ATR"),
-
-                "ENTRY_ADX": entry_replay_snapshot.get("ADX"),
-
-                "ENTRY_OBV": entry_replay_snapshot.get("OBV"),
-
-                "ENTRY_BREAKOUT": entry_replay_snapshot.get("BREAKOUT"),
-
-                "ENTRY_BREAKDOWN": entry_replay_snapshot.get("BREAKDOWN"),
-
-                "ENTRY_LOWER_HIGH": entry_replay_snapshot.get("LOWER_HIGH"),
-
-                "ENTRY_ROLLING_SUPPORT": entry_replay_snapshot.get("ROLLING_SUPPORT"),
-
-                "ENTRY_PREV_LOW": entry_replay_snapshot.get("PREV_LOW"),
-
-                "ENTRY_RECENT_HIGH": entry_replay_snapshot.get("RECENT_HIGH"),
-
-                "ENTRY_RECENT_LOW": entry_replay_snapshot.get("RECENT_LOW"),
 
                 "Risk Reward": (
                     risk_setup["risk_reward"]
@@ -4866,6 +4973,25 @@ def run_scanner():
 
                 "Option Rejection Reason": option_rejection_reason,
 
+                "Option Liquidity Passed": (
+                    option_liquidity.get("liquid")
+                    if option_liquidity
+                    else False
+                ),
+
+                "Option Liquidity Selected Source": (
+                    option_liquidity_attempts[-1].get("source")
+                    if option_liquidity_attempts
+                    and option_liquidity_attempts[-1].get("accepted")
+                    else None
+                ),
+
+                "Option Liquidity Attempts": (
+                    json.dumps(option_liquidity_attempts)
+                    if option_liquidity_attempts
+                    else None
+                ),
+
                 "Realtime Ready": realtime_ready,
 
                 "Realtime Block Reason": realtime_block_reason,
@@ -4975,9 +5101,6 @@ def run_scanner():
             }
 
             result_row = _align_action_status_with_entry_gate(
-                result_row
-            )
-            result_row["ENTRY_GATE_FAILURE_STAGE"] = classify_entry_gate_failure_stage(
                 result_row
             )
             results.append(result_row)
@@ -5494,9 +5617,6 @@ def run_scanner():
     # =========================
 
     df_results = pd.DataFrame(results)
-    _print_entry_diagnostic_summary(
-        df_results.to_dict("records")
-    )
     scan_runtime_sec = round(time.perf_counter() - scan_perf_start, 2)
     with stage_timer.stage("Dashboard"):
 
@@ -5513,6 +5633,11 @@ def run_scanner():
             trading_day,
             scan_id
         )
+        liquidity_audit_result = _append_option_liquidity_audit(
+            df_results,
+            trading_day,
+            scan_id
+        )
 
     if audit_result:
 
@@ -5520,6 +5645,14 @@ def run_scanner():
             "[MARKET OPPORTUNITY AUDIT] "
             f"saved {audit_result['rows']} rows to "
             f"{audit_result['path']}"
+        )
+
+    if liquidity_audit_result:
+
+        print(
+            "[OPTION LIQUIDITY AUDIT] "
+            f"saved {liquidity_audit_result['rows']} attempts to "
+            f"{liquidity_audit_result['path']}"
         )
 
     option_freshness = df_results.get("Option Quote Freshness", pd.Series(dtype=object)).astype(str).str.upper()
@@ -5548,22 +5681,38 @@ def run_scanner():
         delayed_quotes=int(option_freshness.eq("DELAYED_QUOTE").sum()),
     )
     health.health_score = calculate_health_score(health)
-    polygon_metrics = get_polygon_metrics()
-    health.cache_hits = polygon_metrics.get("cache_hits")
-    health.cache_misses = polygon_metrics.get("cache_misses")
-    health.average_api_time = polygon_metrics.get("average_api_time")
-    health.average_cache_read_time = polygon_metrics.get("average_cache_read_time")
 
     with stage_timer.stage("Telegram"):
 
-        _dispatch_telegram_entry_alerts(
+        telegram_summary = _dispatch_telegram_entry_alerts(
             df_results
+        )
+
+    candidate_funnel = _build_candidate_funnel(
+        df_results,
+        telegram_summary
+    )
+    _print_candidate_funnel(
+        candidate_funnel,
+        telegram_summary
+    )
+    funnel_result = _write_candidate_funnel(
+        candidate_funnel,
+        trading_day,
+        scan_id,
+        telegram_summary
+    )
+
+    if funnel_result:
+
+        print(
+            "[CANDIDATE FUNNEL] "
+            f"saved to {funnel_result['path']}"
         )
 
     output_file = (
         settings.scanner_output_file
     )
-    background_metrics = get_background_metrics()
 
     run_background(
         _persist_scan_outputs,
@@ -5574,25 +5723,15 @@ def run_scanner():
             "timestamp": now_et().isoformat(),
             "scan_runtime_sec": health.scan_runtime_sec,
             "health_score": health.health_score,
-            "polygon_requests": polygon_metrics.get("total_requests"),
-            "polygon_cache_hits": health.cache_hits,
-            "polygon_cache_misses": health.cache_misses,
             "cache_hit_rate": health.cache_hit_rate,
-            "average_api_time": health.average_api_time,
-            "average_cache_read_time": health.average_cache_read_time,
-            "background_pending_jobs": background_metrics.get("pending_jobs"),
-            "background_completed_jobs": background_metrics.get("completed_jobs"),
-            "background_failed_jobs": background_metrics.get("failed_jobs"),
-            "background_queue_depth": background_metrics.get("queue_depth"),
-            "background_longest_job_time": background_metrics.get("longest_job_time_sec"),
-            "background_longest_job_name": background_metrics.get("longest_job_name"),
-            "background_average_job_time": background_metrics.get("average_job_time_sec"),
             "worker_count": health.worker_count,
             "polygon_calls": health.polygon_calls,
             "exceptions": health.exceptions,
             "symbols_completed": health.symbols_completed,
             "symbols_failed": health.symbols_failed,
             "average_symbol_runtime": health.average_symbol_runtime,
+            "candidate_funnel": candidate_funnel,
+            "telegram_summary": telegram_summary,
         },
         output_file,
         dict(stage_timer.timings),

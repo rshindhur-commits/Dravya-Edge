@@ -187,6 +187,11 @@ At a high level, each scan does this per symbol:
 - `app/options/contract_ranker.py` preserves the technical `ranking_score` and adds affordability metadata plus an `affordability_adjusted_score` for affordable alternate selection.
 - `app/options/options_filter.py` hard-rejects unavailable bid/ask, crossed markets, stale/delayed quotes, low open interest, low volume, wide spread, disabled 0DTE/1DTE contracts, low option quality score, and unaffordable contracts when `OPTION_AFFORDABILITY_MODE=HARD`.
 - `app/options/options_recommender.py` returns a best-quality `primary` contract, a best affordable `affordable` contract when available, and an actionable `active` contract. `active` uses the affordable contract in `SOFT`/`HARD` modes when one exists; otherwise it falls back to the best-quality primary.
+- Scanner option validation now starts from the bundle's `active` contract and falls back through `primary`, `affordable`, `short_dte`, `longer_dte`, and ranked contracts before setting an option-liquidity rejection. Duplicate tickers are skipped, so a fallback may surface as `ranked #2` when earlier ranked entries already matched `active` or `primary`.
+- Fallback attempts are visible in runtime logs with `[LIQUIDITY FALLBACK] Try ...`, failure, and accepted messages. Scanner rows include `Option Liquidity Attempts` as JSON for the attempted source/ticker/code/reason/spread chain.
+- `app/main.py` appends `option_liquidity_attempts.csv` daily rows for every liquidity attempt, including symbol, selected option ticker, attempt source/ticker/code/reason/spread, liquid flag, and accepted flag.
+- `app/main.py` prints and appends a permanent `candidate_funnel.jsonl` summary with scanned, directional, entry-ready, risk-passed, option-selected, liquidity-passed, affordability-passed, `EMA_REJECTION_SHORT`, `ENTER_PAPER`, Telegram attempted/sent/blocked, and Telegram reasons. `EMA_REJECTION_SHORT_WARNING_THRESHOLD` defaults to `10` and prints a warning if the recent rejection window appears too permissive.
+- Validation commands used for this slice: `d:/Dravya_Trade_Works/.venv/Scripts/python.exe -m unittest tests.test_option_liquidity_fallback` and `d:/Dravya_Trade_Works/.venv/Scripts/python.exe -m unittest discover tests`.
 - `app/main.py` marks high-quality unaffordable setups as `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER`. Cheap contracts that fail the minimum cost/delta affordability rules can surface as `NO_TRADE_LOW_OPTION_QUALITY`.
 - Dashboard suggested-trade lifecycle and paper-validation candidate lists can ignore affordability for research visibility through `SUGGESTIONS_IGNORE_AFFORDABILITY=true` and `PAPER_IGNORE_AFFORDABILITY=true`, while preserving original affordability metadata and keeping real-trade readiness affordability-gated by default.
 
@@ -198,6 +203,12 @@ At a high level, each scan does this per symbol:
 - Regime rules can block setup families before options are considered. For example, VWAP reclaim/breakout style longs are blocked outside bullish/high-volatility regimes, and breakdown/VWAP rejection shorts are blocked outside bearish/high-volatility regimes.
 - Sector strength compares symbols against reference ETFs, especially semis versus SMH and mega-cap/software tech versus XLK.
 - Breadth is currently a watchlist breadth proxy, not official NASDAQ/QQQ advancer-decliner data. It tracks watchlist advancers/decliners, above VWAP %, above EMA20 %, and top 5 strongest/weakest names.
+
+### Entry Timing And Regime Aliases
+
+- Dashboard refresh intervals are 1, 5, or 15 minutes, while full scanner cadence is selectable at 5 or 15 minutes. Live entry detection therefore treats bearish EMA rejection as a recent 3-bar EMA9 touch plus current close below EMA9 and EMA9 below EMA20, instead of requiring only the latest candle high to touch EMA9.
+- `app/diagnostics/entry_diagnostics.py` mirrors the same recent 3-bar EMA9 touch rule for `EMA_REJECTION_SHORT`, keeping replay diagnostics aligned with live entry logic.
+- Entry scoring and projection normalize regime aliases so both `TRENDING_BEAR` / `TRENDING_BEARISH` and `TRENDING_BULL` / `TRENDING_BULLISH` receive the intended trend-regime treatment.
 
 ### Exits
 

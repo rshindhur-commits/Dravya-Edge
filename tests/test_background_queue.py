@@ -1,10 +1,6 @@
 import unittest
 
-from app.background.background_queue import (
-    get_background_metrics,
-    run_background,
-    wait_for_background_tasks,
-)
+from app.background.background_queue import run_background, wait_for_background_tasks
 
 
 class BackgroundQueueTests(unittest.TestCase):
@@ -32,12 +28,6 @@ class BackgroundQueueTests(unittest.TestCase):
                 "last"
             ]
         )
-        metrics = get_background_metrics()
-
-        self.assertGreaterEqual(metrics["completed_jobs"], 2)
-        self.assertGreaterEqual(metrics["failed_jobs"], 1)
-        self.assertEqual(metrics["queue_depth"], 0)
-        self.assertIsNotNone(metrics["average_job_time_sec"])
 
 
 if __name__ == "__main__":
