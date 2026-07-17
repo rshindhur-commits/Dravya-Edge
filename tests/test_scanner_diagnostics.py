@@ -148,6 +148,18 @@ class ScannerDiagnosticsTests(unittest.TestCase):
         self.assertEqual(summary["blocked_count"], 1)
         self.assertEqual(summary["reasons"]["SENT"], 1)
         self.assertEqual(summary["reasons"]["NOT_ACTIONABLE_STATUS"], 1)
+        self.assertEqual(df_results.loc[0, "Telegram Eligibility"], "SENT")
+        self.assertIsNone(df_results.loc[0, "Telegram Block Reason"])
+        self.assertTrue(df_results.loc[0, "Telegram Sent"])
+        self.assertEqual(
+            df_results.loc[1, "Telegram Eligibility"],
+            "NOT_ACTIONABLE_STATUS"
+        )
+        self.assertEqual(
+            df_results.loc[1, "Telegram Block Reason"],
+            "NOT_ACTIONABLE_STATUS"
+        )
+        self.assertFalse(df_results.loc[1, "Telegram Sent"])
 
 
 if __name__ == "__main__":
