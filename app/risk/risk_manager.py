@@ -311,6 +311,11 @@ def calculate_risk(df, analysis, entry_setup):
     # =========================
 
     minimum_stop_distance = atr
+
+    if entry_type == "EMA_PULLBACK":
+
+        minimum_stop_distance = atr * 0.25
+
     original_stop_loss = stop_loss
     original_risk_per_share = abs(entry_price - stop_loss)
     original_reward = abs(take_profit - entry_price)

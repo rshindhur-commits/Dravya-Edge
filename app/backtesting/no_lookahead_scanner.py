@@ -52,7 +52,11 @@ def evaluate_symbol_at_time(symbol, candles_5m, timestamp=None):
     historical_df = _ensure_structure_columns(historical_df)
     analysis = analyze_setup(historical_df)
     final_signal = analysis.get("signal", "NEUTRAL")
-    entry_setup = detect_entry(historical_df, analysis)
+    entry_setup = detect_entry(
+        historical_df,
+        analysis,
+        symbol=symbol
+    )
     risk_setup = calculate_risk(historical_df, analysis, entry_setup)
     projection = None
 

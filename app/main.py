@@ -3212,7 +3212,8 @@ def run_scanner():
 
                         entry_setup = detect_entry(
                             df_15m,
-                            analysis_15m
+                            analysis_15m,
+                            symbol=symbol
                         )
 
                 else:

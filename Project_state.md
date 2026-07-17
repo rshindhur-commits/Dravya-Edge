@@ -165,7 +165,7 @@ At a high level, each scan does this per symbol:
 ### Strategy And Entry Logic
 
 - `app/strategies/momentum_strategy.py` scores bullish, bearish, and neutral evidence using EMA, MACD, RSI, VWAP, relative volume, ATR expansion, candle body strength, market structure, breakout/breakdown behavior, failed reclaim patterns, and market regime.
-- `app/strategies/entry_engine.py` detects entries including breakout, VWAP reclaim, EMA pullback, higher-low continuation, coiled breakout, coiled breakdown, bearish breakdown short, and VWAP rejection.
+- `app/strategies/entry_engine.py` detects entries including breakout, VWAP reclaim, EMA pullback, higher-low continuation, coiled breakout, coiled breakdown, bearish breakdown short, and VWAP rejection. The active EMA pullback trigger requires bullish signal, close above EMA9, EMA9 above EMA20, and latest low within `0.40 * ATR` of EMA9.
 - Multi-timeframe bias is combined in `app/main.py`, with heavier weighting on 15m and 1h signals.
 
 ### Risk And Position Sizing
@@ -207,8 +207,14 @@ At a high level, each scan does this per symbol:
 ### Entry Timing And Regime Aliases
 
 - Dashboard refresh intervals are 1, 5, or 15 minutes, while full scanner cadence is selectable at 5 or 15 minutes. Live entry detection therefore treats bearish EMA rejection as a recent 3-bar EMA9 touch plus current close below EMA9 and EMA9 below EMA20, instead of requiring only the latest candle high to touch EMA9.
+- Live EMA pullback detection logs `[EMA_PULLBACK CHECK]` with symbol, signal, `Close>EMA9`, `EMA9>EMA20`, low-to-EMA9 distance, and threshold so `NO_ENTRY` pullback failures can be diagnosed without parsing free text.
 - `app/diagnostics/entry_diagnostics.py` mirrors the same recent 3-bar EMA9 touch rule for `EMA_REJECTION_SHORT`, keeping replay diagnostics aligned with live entry logic.
 - Entry scoring and projection normalize regime aliases so both `TRENDING_BEAR` / `TRENDING_BEARISH` and `TRENDING_BULL` / `TRENDING_BULLISH` receive the intended trend-regime treatment.
+
+### Risk Manager Calibration Notes
+
+- `app/risk/risk_manager.py` keeps the universal ATR stop-distance floor for breakout-style entries.
+- `EMA_PULLBACK` uses a smaller minimum stop floor of `0.25 * ATR`, preserving the structure-based pullback stop unless it is unrealistically tight. This avoids converting high-RR pullback candidates into risk rejections solely because the stop was widened to a full ATR.
 
 ### Exits
 

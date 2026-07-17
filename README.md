@@ -33,7 +33,7 @@ The project is now in a calibration phase: avoid adding new indicators or broad 
 - ORB uses the regular-session 09:30-10:00 ET opening range instead of the first rows of a dataframe, so premarket candles do not corrupt opening-range breakout/breakdown levels.
 - Candidate persistence tracks technically valid setups across repeated scans with first/last seen timestamps, scan count, best/current score, score delta, and strengthening status.
 - Category score is recorded as a shadow diagnostic only. The legacy score remains the decision score until enough paper-trade evidence exists to compare old score versus category score.
-- Breakout detection uses the prior 10-bar resistance level. EMA pullback detection is volatility-aware using `ATR * 0.25`. Breakdown entries require breakdown structure, body strength, and relative volume confirmation.
+- Breakout detection uses the prior 10-bar resistance level. EMA pullback detection is volatility-aware using `ATR * 0.40` for the latest low-to-EMA9 distance, and logs `[EMA_PULLBACK CHECK]` with signal, EMA alignment, low distance, and threshold for ticker-level debugging. Breakdown entries require breakdown structure, body strength, and relative volume confirmation.
 - Early weak exits are guarded for the first few bars when the trade is near flat and trend remains intact. Hard stops, targets, and other risk exits remain active.
 - Paper-mode option selection can keep the best-quality contract active for validation when paper affordability override is enabled. Real-trade readiness remains affordability-gated.
 
@@ -45,7 +45,7 @@ Recent calibration bugfixes deliberately avoid strategy changes:
 - Risk manager diagnostics always include an explicit `Risk/Reward below minimum threshold (1.5)` reason when RR rejects a trade.
 - Risk manager error returns use `reasons` consistently instead of mixing `reason` and `reasons`.
 - Risk manager entry metadata access is defensive for missing `entry_quality` / `avoid_chasing` fields.
-- ATR-floor stop adjustment is logged with original stop, adjusted stop, RR before, and RR after. The ATR floor itself is unchanged.
+- ATR-floor stop adjustment is logged with original stop, adjusted stop, RR before, and RR after. `EMA_PULLBACK` now uses a smaller pullback-specific minimum stop floor (`0.25 * ATR`) so structure-based pullback stops are not automatically widened to a full ATR; breakout-style entries still use the existing full ATR floor.
 
 Exit decisions use `app/exit/exit_engine.py::evaluate_exit()` as the live single source of truth. `app/trade_manager.py` is legacy and retained only for historical reference. Exit precedence is explicit: hard stop, hard target, EMA, VWAP, MACD, failed breakout, time exit, then near-close exit. The exit engine now returns `exit_reasons`, `exit_diagnostics`, `primary_exit`, `secondary_exits`, and `ignored_exit_signals` so daily review can see every triggered exit condition even when a higher-priority exit wins.
 

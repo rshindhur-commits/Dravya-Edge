@@ -115,7 +115,8 @@ def run_historical_batch_replay(
 
         entry_setup = detect_entry(
             historical_df,
-            analysis
+            analysis,
+            symbol=symbol
         )
 
         if entry_setup["entry_type"] == "NO_ENTRY":

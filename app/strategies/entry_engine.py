@@ -82,7 +82,7 @@ def _entry_score(setup_type, analysis, latest, avoid_chasing, direction):
     return base_score + analysis_score + market_regime_bonus + volume_bonus - extension_penalty
 
 
-def detect_entry(df, analysis):
+def detect_entry(df, analysis, symbol=None):
 
     debug_print("[ENTRY ENGINE COLUMNS]")
     debug_print(list(df.columns))    
@@ -243,6 +243,21 @@ def detect_entry(df, analysis):
     # EMA Pullback Continuation
     # =========================
 
+    ema_pullback_threshold = latest.get("ATR", 0) * 0.40
+    ema_pullback_low_distance = abs(
+        latest["Low"] - latest["EMA9"]
+    )
+
+    debug_print(
+        f"[EMA_PULLBACK CHECK] "
+        f"{symbol or 'UNKNOWN'} "
+        f"Signal={analysis['signal']} "
+        f"Close>EMA9={latest['Close'] > latest['EMA9']} "
+        f"EMA9>EMA20={latest['EMA9'] > latest['EMA20']} "
+        f"LowDist={ema_pullback_low_distance:.2f} "
+        f"Threshold={ema_pullback_threshold:.2f}"
+    )
+
     if (
         analysis["signal"] in [
             "BULLISH",
@@ -251,7 +266,7 @@ def detect_entry(df, analysis):
          and
 
         latest["Close"] > latest["EMA9"]
-        and abs(latest["Low"] - latest["EMA9"]) <= latest.get("ATR", 0) * 0.25
+        and ema_pullback_low_distance <= ema_pullback_threshold
         and latest["EMA9"] > latest["EMA20"]
 
     ):
