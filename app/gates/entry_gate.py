@@ -514,3 +514,131 @@ def evaluate_entry_gate(
         return False, "SPREAD_TOO_WIDE"
 
     return True, "ELIGIBLE"
+
+
+def build_entry_gate_diagnostics(
+    row,
+    config: EntryGateConfig,
+    mode: str = "paper"
+):
+
+    action_status = str(
+        _row_get(row, "Action Status", "action_status", default="")
+    ).strip().upper()
+    geometry_error = price_geometry_error(row)
+    min_setup, min_rr, max_spread = apply_regime_entry_thresholds(
+        row,
+        config
+    )
+    setup = safe_float(
+        _row_get(row, "Setup %", "setup_percent"),
+        0.0
+    )
+    rr = safe_float(
+        _row_get(row, "Candidate RR", "Risk Reward", "RR", "rr"),
+        0.0
+    )
+    option_quality = safe_float(
+        _row_get(row, "Option Quality Score", "option_quality_score"),
+        0.0
+    )
+    spread = _row_get(
+        row,
+        "Option Spread %",
+        "option_spread_pct",
+        "spread_pct",
+        default=None
+    )
+    quote_freshness = _row_get(
+        row,
+        "Option Quote Freshness",
+        "option_quote_freshness",
+        "quote_freshness",
+        default=None
+    )
+    affordable = _row_get(
+        row,
+        "Affordable",
+        "affordable",
+        default=True
+    )
+    spread_is_unknown = (
+        spread is None
+        or str(spread).strip().lower() in {"", "nan", "none"}
+    )
+    result = "PASS"
+    failure = None
+
+    if action_status not in ACTIONABLE_STATUSES:
+
+        result = "FAIL"
+        failure = "NOT_ACTIONABLE_STATUS"
+
+    elif geometry_error:
+
+        result = "FAIL"
+        failure = "INVALID_PRICE_GEOMETRY"
+
+    elif rr < min_rr:
+
+        result = "FAIL"
+        failure = "RR_BELOW_THRESHOLD"
+
+    elif setup < min_setup:
+
+        result = "FAIL"
+        failure = "SETUP_BELOW_THRESHOLD"
+
+    elif option_quality < config.min_option_quality:
+
+        result = "FAIL"
+        failure = "OPTION_QUALITY_BELOW_THRESHOLD"
+
+    elif quote_freshness != "LIVE_QUOTE":
+
+        result = "FAIL"
+        failure = "OPTION_QUOTE_NOT_LIVE"
+
+    elif _bool_false(affordable):
+
+        result = "FAIL"
+        failure = "OPTION_NOT_AFFORDABLE"
+
+    elif spread_is_unknown:
+
+        if mode in {"telegram", "real"}:
+
+            result = "FAIL"
+            failure = "UNKNOWN_SPREAD_FOR_ALERT"
+
+        elif mode == "paper" and option_quality >= 80:
+
+            result = "PASS"
+            failure = None
+
+        else:
+
+            result = "FAIL"
+            failure = "UNKNOWN_SPREAD"
+
+    elif safe_float(spread, max_spread + 1) > max_spread:
+
+        result = "FAIL"
+        failure = "SPREAD_TOO_WIDE"
+
+    return {
+        "setup": setup,
+        "min_setup": min_setup,
+        "rr": rr,
+        "min_rr": min_rr,
+        "option_quality": option_quality,
+        "min_option_quality": config.min_option_quality,
+        "spread": None if spread_is_unknown else safe_float(spread),
+        "max_spread": max_spread,
+        "quote_freshness": quote_freshness,
+        "affordable": affordable,
+        "action_status": action_status,
+        "geometry_error": geometry_error,
+        "result": result,
+        "failure": failure,
+    }

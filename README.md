@@ -163,8 +163,8 @@ Entry alerting now separates the trade decision from the notification policy:
 - `app/decision/decision_engine.py` exposes `evaluate_candidate()` and returns a `TradeDecision` with action, setup score, RR, option quality, confidence score, reasons, and block reasons.
 - Scanner/dashboard/paper rows remain the source of the decision. Telegram no longer needs to duplicate the ultra-strict real-review gate before sending an operational entry alert.
 - `TELEGRAM_ALERT_POLICY` controls entry alert strictness without code changes.
-- `PAPER` (default): alert eligible `ENTER_PAPER` decisions when the decision score is at least `TELEGRAM_MIN_ENTRY_ALERT_SCORE` and the shared decision is not blocked.
-- `REAL_REVIEW`: keep A+ real-review style gating with real setup/RR/option-quality thresholds, top-1 candidate, and persistence.
+- `PAPER` (default): alert eligible scanner/paper decisions when the action is alertable, the entry gate passes, the alert score is at least `TELEGRAM_MIN_ENTRY_ALERT_SCORE`, and notification limits/cooldowns allow it. PAPER policy does not require the `HIGH CONVICTION` signal label.
+- `REAL_REVIEW`: keep A+ real-review style gating with real setup/RR/option-quality thresholds, top-1 candidate, persistence, and a required `HIGH CONVICTION BULLISH` / `HIGH CONVICTION BEARISH` signal label.
 - `CUSTOM`: use the explicit Telegram threshold settings such as `TELEGRAM_MIN_RR`, `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, and spread limits.
 
 Telegram still keeps notification controls separate from the decision itself: entry alert enablement, duplicate alert protection, cooldowns, daily caps, active-alert caps, time-of-day limits, and symbol cooldowns remain notification policy. This makes Telegram operationally useful again without loosening real-money review criteria.

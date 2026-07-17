@@ -30,6 +30,7 @@ from app.config.settings import (
     validate_runtime_settings
 )
 from app.gates import (
+    build_entry_gate_diagnostics,
     EntryGateConfig,
     evaluate_entry_gate
 )
@@ -1723,6 +1724,18 @@ def build_status_result_row(
         "Action Reason": explanation,
         "Explanation": explanation,
         "Next Condition": next_condition,
+        "Setup %": None,
+        "ENTRY_GATE_SETUP": None,
+        "ENTRY_GATE_MIN_SETUP": None,
+        "ENTRY_GATE_RR": None,
+        "ENTRY_GATE_MIN_RR": None,
+        "ENTRY_GATE_OPTION_QUALITY": None,
+        "ENTRY_GATE_MIN_OPTION_QUALITY": None,
+        "ENTRY_GATE_SPREAD": None,
+        "ENTRY_GATE_MAX_SPREAD": None,
+        "ENTRY_GATE_RESULT": None,
+        "ENTRY_GATE_FAILURE": None,
+        "ENTRY_GATE_DIAGNOSTICS": None,
         "Market Data Delay Minutes": market_data_status.get(
             "delay_minutes"
         ),
@@ -2006,6 +2019,96 @@ def _compact_entry_type(entry_type):
         entry_type,
         entry_type or "NONE"
     )
+
+
+def _entry_is_valid(entry):
+
+    return str(entry or "").upper() not in [
+        "",
+        "NAN",
+        "NONE",
+        "NO_ENTRY",
+        "NO_SETUP"
+    ]
+
+
+def _compute_setup_percent_for_gate(row):
+
+    score = abs(_row_float(row, "15m Score"))
+    rr = _row_float(row, "Risk Reward")
+    action = str(row.get("Action Status", "WAIT")).upper()
+    entry = row.get("Entry")
+    setup_valid = _row_bool(row.get("Setup Valid"))
+    score_points = min(score / 10, 1) * 40
+    rr_points = min(rr / 2.5, 1) * 25
+    entry_points = 15 if _entry_is_valid(entry) else 0
+
+    if action in ["ENTER", "ENTER_PAPER"]:
+
+        action_points = 20
+
+    elif action in ["WATCH", "REVIEW_TV_CHART"]:
+
+        action_points = 15
+
+    elif action == "QUALITY_BUT_TOO_EXPENSIVE":
+
+        action_points = 10
+
+    elif action == "WAIT":
+
+        action_points = 5
+
+    else:
+
+        action_points = 0
+
+    readiness = score_points + rr_points + entry_points + action_points
+
+    if not setup_valid and action != "REVIEW_TV_CHART":
+
+        readiness = min(readiness, 59)
+
+    if action in [
+        "AVOID",
+        "NO_TRADE_MARKET_CLOSED",
+        "OPTION_MARKET_CLOSED",
+        "NO_BID_ASK",
+        "NO_QUOTE_SNAPSHOT",
+        "RATE_LIMITED",
+        "PROVIDER_ERROR"
+    ]:
+
+        readiness = min(readiness, 49)
+
+    return round(max(0, min(readiness, 100)), 0)
+
+
+def _add_entry_gate_diagnostics(row):
+
+    row = dict(row)
+    row["Setup %"] = _compute_setup_percent_for_gate(row)
+    diagnostics = build_entry_gate_diagnostics(
+        row,
+        SCANNER_ENTRY_GATE_CONFIG,
+        mode="paper"
+    )
+    row["ENTRY_GATE_SETUP"] = diagnostics.get("setup")
+    row["ENTRY_GATE_MIN_SETUP"] = diagnostics.get("min_setup")
+    row["ENTRY_GATE_RR"] = diagnostics.get("rr")
+    row["ENTRY_GATE_MIN_RR"] = diagnostics.get("min_rr")
+    row["ENTRY_GATE_OPTION_QUALITY"] = diagnostics.get("option_quality")
+    row["ENTRY_GATE_MIN_OPTION_QUALITY"] = diagnostics.get("min_option_quality")
+    row["ENTRY_GATE_SPREAD"] = diagnostics.get("spread")
+    row["ENTRY_GATE_MAX_SPREAD"] = diagnostics.get("max_spread")
+    row["ENTRY_GATE_RESULT"] = diagnostics.get("result")
+    row["ENTRY_GATE_FAILURE"] = diagnostics.get("failure")
+    row["ENTRY_GATE_DIAGNOSTICS"] = json.dumps(
+        diagnostics,
+        default=str
+    )
+
+    return row
 
 
 def build_explanation_and_hint(
@@ -2532,6 +2635,17 @@ def _dispatch_telegram_entry_alerts(df_results):
 
         return summary
 
+    for column in [
+        "Telegram Eligibility",
+        "Telegram Block Reason",
+        "Telegram Sent",
+        "Telegram Alert Score"
+    ]:
+
+        if column not in df_results.columns:
+
+            df_results[column] = None
+
     if "Action Status" in df_results.columns:
 
         summary["enter_paper_count"] = int(
@@ -2540,7 +2654,7 @@ def _dispatch_telegram_entry_alerts(df_results):
 
     rows = []
 
-    for _, row in df_results.iterrows():
+    for index, row in df_results.iterrows():
 
         option_quality_score = _row_float(
             row,
@@ -2567,11 +2681,12 @@ def _dispatch_telegram_entry_alerts(df_results):
         rows.append(
             (
                 alert_score,
+                index,
                 row
             )
         )
 
-    for alert_score, row in sorted(
+    for alert_score, index, row in sorted(
         rows,
         key=lambda item: item[0],
         reverse=True
@@ -2629,6 +2744,14 @@ def _dispatch_telegram_entry_alerts(df_results):
             )
             reason = telegram_result.get("reason") or "UNKNOWN"
             sent = bool(telegram_result.get("sent"))
+            df_results.at[index, "Telegram Eligibility"] = reason
+            df_results.at[index, "Telegram Block Reason"] = (
+                None
+                if sent
+                else reason
+            )
+            df_results.at[index, "Telegram Sent"] = sent
+            df_results.at[index, "Telegram Alert Score"] = alert_score
             summary["attempted_count"] += 1
             summary["sent_count"] += int(sent)
             summary["blocked_count"] += int(not sent)
@@ -2652,6 +2775,10 @@ def _dispatch_telegram_entry_alerts(df_results):
             summary["blocked_count"] += 1
             summary["error_count"] += 1
             summary["reasons"]["ERROR"] = summary["reasons"].get("ERROR", 0) + 1
+            df_results.at[index, "Telegram Eligibility"] = "ERROR"
+            df_results.at[index, "Telegram Block Reason"] = "ERROR"
+            df_results.at[index, "Telegram Sent"] = False
+            df_results.at[index, "Telegram Alert Score"] = alert_score
             summary["alerts"].append({
                 "symbol": row.get("Symbol"),
                 "action_status": row.get("Action Status"),
@@ -5101,6 +5228,9 @@ def run_scanner():
 
             }
 
+            result_row = _add_entry_gate_diagnostics(
+                result_row
+            )
             result_row = _align_action_status_with_entry_gate(
                 result_row
             )

@@ -206,6 +206,16 @@ def _entry_alert_policy():
     }
 
 
+def _entry_alert_policy_mode():
+
+    return str(
+        os.getenv(
+            "TELEGRAM_ALERT_POLICY",
+            _streamlit_secret(["TELEGRAM_ALERT_POLICY"], "PAPER")
+        )
+    ).strip().upper()
+
+
 def _streamlit_secret(path, default=None):
 
     try:
@@ -1326,8 +1336,9 @@ def maybe_send_scanner_entry_alert(
         }
 
     action_status = action_decision.get("action_status")
+    policy_mode = _entry_alert_policy_mode()
 
-    if final_signal not in [
+    if policy_mode == "REAL_REVIEW" and final_signal not in [
         "HIGH CONVICTION BULLISH",
         "HIGH CONVICTION BEARISH"
     ]:
