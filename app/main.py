@@ -2619,6 +2619,28 @@ def _row_float(row, column, default=0):
         return default
 
 
+def _telegram_setup_score(row):
+
+    for column in [
+        "ENTRY_GATE_SETUP",
+        "Setup %",
+        "setup_percent",
+        "15m Score"
+    ]:
+
+        value = _row_float(
+            row,
+            column,
+            None
+        )
+
+        if value is not None:
+
+            return value
+
+    return 0
+
+
 def _dispatch_telegram_entry_alerts(df_results):
 
     summary = {
@@ -2669,8 +2691,9 @@ def _dispatch_telegram_entry_alerts(df_results):
             row,
             "Risk Reward"
         )
+        setup_score = _telegram_setup_score(row)
         alert_score = calculate_entry_alert_score(
-            setup_score=_row_float(row, "15m Score"),
+            setup_score=setup_score,
             alignment_score=_row_float(row, "Alignment Score"),
             rs_rank_score=_row_float(row, "RS Rank Score"),
             option_quality_score=option_quality_score,
@@ -2681,12 +2704,13 @@ def _dispatch_telegram_entry_alerts(df_results):
         rows.append(
             (
                 alert_score,
+                setup_score,
                 index,
                 row
             )
         )
 
-    for alert_score, index, row in sorted(
+    for alert_score, setup_score, index, row in sorted(
         rows,
         key=lambda item: item[0],
         reverse=True
@@ -2731,7 +2755,7 @@ def _dispatch_telegram_entry_alerts(df_results):
                 option_spread_pct=row.get("Option Spread %"),
                 event_blocked=_row_bool(row.get("Event Blocked")),
                 regime_blocked=_row_bool(row.get("Regime Blocked")),
-                setup_score=row.get("15m Score"),
+                setup_score=setup_score,
                 alignment_score=row.get("Alignment Score"),
                 rs_rank_score=row.get("RS Rank Score"),
                 relative_volume=row.get("Relative Volume")
