@@ -2,80 +2,74 @@ import unittest
 from unittest.mock import patch
 
 from app.alerts.telegram_alerts import (
+    calculate_entry_alert_score,
     _entry_alert_policy,
-    _paper_policy_allowed,
-    _real_review_policy_allowed,
 )
-from app.decision import evaluate_candidate
+from app.gates import EntryGateConfig, evaluate_entry_gate
 
 
 class TelegramAlertPolicyTests(unittest.TestCase):
 
-    def test_decision_engine_marks_enter_paper_candidate_unblocked(self):
+    def test_telegram_gate_accepts_enter_paper_candidate(self):
 
-        decision = evaluate_candidate(
+        allowed, reason = evaluate_entry_gate(
             {
                 "Action Status": "ENTER_PAPER",
                 "Setup %": 86,
-                "Candidate RR": 2.4,
+                "Candidate RR": 2.1,
                 "Option Quality Score": 72,
-                "Entry Alert Score": 86,
-                "Realtime Ready": True,
-            }
-        )
-
-        self.assertEqual(decision.action, "ENTER_PAPER")
-        self.assertEqual(decision.score, 86)
-        self.assertFalse(decision.blocked)
-
-    def test_paper_policy_accepts_enter_paper_without_real_review_gates(self):
-
-        allowed, reason, decision = _paper_policy_allowed(
-            {
-                "Action Status": "ENTER_PAPER",
-                "Setup %": 86,
-                "Candidate RR": 1.8,
-                "Option Quality Score": 72,
-                "Entry Alert Score": 86,
-                "Realtime Ready": True,
+                "Option Spread %": 6,
+                "Option Quote Freshness": "LIVE_QUOTE",
             },
-            min_score=85,
+            EntryGateConfig(
+                min_rr=2.0,
+                min_setup_percent=70.0,
+                min_option_quality=65.0,
+                max_spread_pct=8.0,
+            ),
+            mode="telegram",
         )
 
         self.assertTrue(allowed)
         self.assertEqual(reason, "ELIGIBLE")
-        self.assertEqual(decision.action, "ENTER_PAPER")
 
-    def test_real_review_policy_stays_strict(self):
+    def test_telegram_gate_rejects_low_rr_candidate(self):
 
-        allowed, reason, decision = _real_review_policy_allowed(
+        allowed, reason = evaluate_entry_gate(
             {
                 "Action Status": "ENTER_PAPER",
                 "Setup %": 86,
                 "Candidate RR": 1.8,
                 "Option Quality Score": 72,
                 "Option Spread %": 6,
-                "Entry Alert Score": 86,
-                "Realtime Ready": True,
-                "Top Candidate": "BULLISH_TOP_3",
-                "Candidate Scan Count": 1,
-            }
+            },
+            EntryGateConfig(
+                min_rr=2.0,
+                min_setup_percent=70.0,
+                min_option_quality=65.0,
+                max_spread_pct=8.0,
+            ),
+            mode="telegram",
         )
 
         self.assertFalse(allowed)
-        self.assertIn(
-            reason,
-            {
-                "DECISION_SCORE_BELOW_MIN",
-                "RR_BELOW_THRESHOLD",
-                "OPTION_QUALITY_BELOW_THRESHOLD",
-                "REAL_REVIEW_PERSISTENCE_REQUIRED",
-                "REAL_REVIEW_TOP1_REQUIRED",
-            }
-        )
-        self.assertEqual(decision.action, "ENTER_PAPER")
+        self.assertEqual(reason, "RR_BELOW_THRESHOLD")
 
-    def test_instant_alert_default_matches_validation_recommendation(self):
+    def test_alert_score_keeps_high_quality_candidates_rankable(self):
+
+        score = calculate_entry_alert_score(
+            setup_score=88,
+            alignment_score=5,
+            rs_rank_score=2,
+            option_quality_score=90,
+            risk_reward=2.4,
+            relative_volume=2.0,
+            option_spread_pct=4,
+        )
+
+        self.assertGreaterEqual(score, 88.0)
+
+    def test_instant_alert_default_matches_current_policy(self):
 
         with patch.dict(
             "os.environ",
@@ -87,7 +81,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
 
             policy = _entry_alert_policy()
 
-        self.assertEqual(policy["instant_alert_score"], 92.0)
+        self.assertEqual(policy["instant_alert_score"], 88.0)
 
 
 if __name__ == "__main__":

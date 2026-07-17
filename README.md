@@ -364,12 +364,24 @@ If `DB_WRITES_ACTIVE` is false in Streamlit Cloud logs, check that Streamlit Sec
 
 Polygon/Massive aggregate freshness accounts for candle bucket-start timestamps, so a current 5-minute aggregate is not marked stale solely because the timestamp is at the start of the candle.
 
+## Entry Timing Notes
+
+- Dashboard refresh can run every 1, 5, or 15 minutes, but full scanner cadence is currently selectable at 5 or 15 minutes. Because a full scan may occur one candle after an EMA touch/rejection, bearish EMA rejection detection uses a recent 3-bar EMA9 touch window while still requiring the current candle to close below EMA9 and EMA9 to remain below EMA20.
+- Entry diagnostics use the same recent 3-bar EMA9 touch window for `EMA_REJECTION_SHORT`, so `REJECTED_EMA9` should no longer fail solely because the latest candle itself did not touch EMA9.
+- Regime comparisons accept both short and long aliases where scoring/projection bonuses are applied: `TRENDING_BEAR`/`TRENDING_BEARISH` and `TRENDING_BULL`/`TRENDING_BULLISH`.
+
 ## Option Affordability
 
 The scanner keeps two option concepts separate:
 
 - Best quality contract: the strongest technical/liquidity contract, even if it is too expensive for the active account profile.
 - Active affordable contract: the best contract that still passes quality gates and fits the configured capital profile.
+- `app/options/options_recommender.py` returns a best-quality `primary` contract, a best affordable `affordable` contract when available, and an actionable `active` contract. `active` uses the affordable contract in `SOFT`/`HARD` modes when one exists; otherwise it falls back to the best-quality primary.
+- The scanner validates the bundle's `active` contract first, then falls back through `primary`, `affordable`, `short_dte`, `longer_dte`, and ranked contracts before rejecting a setup for option liquidity. Duplicate tickers are skipped, so a fallback may appear as `ranked #2` when `ranked #1` is the same ticker as `active` or `primary`.
+- Fallback execution is visible in logs as `[LIQUIDITY FALLBACK] Try ...`, `[LIQUIDITY FALLBACK] ... liquidity failed`, and `[LIQUIDITY FALLBACK] Accepted ...`. Scanner output also includes `Option Liquidity Attempts`, a JSON list of attempted source/ticker/code/reason/spread values for review.
+- Each scan appends long-form liquidity diagnostics to `option_liquidity_attempts.csv` under the trading day's daily data folder. Rows include symbol, selected option ticker, attempt index/source/ticker/code/reason/spread, whether the attempt was liquid, and whether it was accepted.
+- Each scan also writes a candidate funnel line to `candidate_funnel.jsonl` with counts for scanned, directional, entry ready, risk passed, option selected, liquidity passed, affordability passed, `EMA_REJECTION_SHORT`, `ENTER_PAPER`, Telegram attempted, Telegram sent, Telegram blocked, and Telegram block reasons. This is the quick check for whether the bottleneck is setup, options, affordability, or alerts. If `EMA_REJECTION_SHORT` exceeds `EMA_REJECTION_SHORT_WARNING_THRESHOLD` (default `10`), the scanner prints a warning that the recent rejection window may be too wide.
+- The focused fallback validation is `d:/Dravya_Trade_Works/.venv/Scripts/python.exe -m unittest tests.test_option_liquidity_fallback`. Full local validation uses `d:/Dravya_Trade_Works/.venv/Scripts/python.exe -m unittest discover tests`.
 
 In `OPTION_AFFORDABILITY_MODE=HARD`, a high-quality but expensive option is marked `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER` at the scanner action layer. The dashboard still shows the best-quality contract for review, and research visibility can ignore affordability through `SUGGESTIONS_IGNORE_AFFORDABILITY=true` and `PAPER_IGNORE_AFFORDABILITY=true`. Paper entries opened under that override are tagged with `Paper Affordability Override` and original affordability/cost fields. Real-trade readiness remains affordability-gated by default through `REAL_REQUIRE_AFFORDABILITY=true`.
 

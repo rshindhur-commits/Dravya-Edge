@@ -12,6 +12,44 @@ ENTRY_BASE_SCORES = {
 }
 
 
+def _normalized_market_regime(value):
+
+    regime = str(value or "").strip().upper()
+
+    if regime == "TRENDING_BULL":
+
+        return "TRENDING_BULLISH"
+
+    if regime == "TRENDING_BEAR":
+
+        return "TRENDING_BEARISH"
+
+    return regime
+
+
+def _recent_ema_touch(df, price_column="High", ema_column="EMA9", window=3):
+
+    if df is None or df.empty:
+
+        return False, None
+
+    if price_column not in df.columns or ema_column not in df.columns:
+
+        return False, None
+
+    recent = df.tail(window)
+
+    try:
+
+        touches = recent[price_column] >= recent[ema_column]
+
+        return bool(touches.any()), recent.loc[touches, price_column].max() if touches.any() else recent[price_column].max()
+
+    except Exception:
+
+        return False, None
+
+
 def _entry_score(setup_type, analysis, latest, avoid_chasing, direction):
 
     base_score = ENTRY_BASE_SCORES.get(setup_type, 70)
@@ -24,7 +62,9 @@ def _entry_score(setup_type, analysis, latest, avoid_chasing, direction):
 
         analysis_score = 0
 
-    market_regime = str(analysis.get("market_regime") or "").upper()
+    market_regime = _normalized_market_regime(
+        analysis.get("market_regime")
+    )
     market_regime_bonus = 0
 
     if direction == "CALL" and market_regime == "TRENDING_BULLISH":
@@ -50,6 +90,12 @@ def detect_entry(df, analysis):
     best_score = 0
 
     latest = df.iloc[-1]
+    recent_ema9_touch, recent_ema9_touch_high = _recent_ema_touch(
+        df,
+        "High",
+        "EMA9",
+        window=3
+    )
 
     if analysis["signal"] in [
         "NEUTRAL",
@@ -252,7 +298,7 @@ def detect_entry(df, analysis):
          and
 
         latest["Close"] < latest["EMA9"]
-        and latest["High"] >= latest["EMA9"]
+        and recent_ema9_touch
         and latest["EMA9"] < latest["EMA20"]
 
     ):
@@ -261,6 +307,7 @@ def detect_entry(df, analysis):
             f"[EMA REJECTION DEBUG] "
             f"close={latest['Close']:.2f} "
             f"high={latest['High']:.2f} "
+            f"recent_touch_high={recent_ema9_touch_high:.2f} "
             f"ema9={latest['EMA9']:.2f} "
             f"ema20={latest['EMA20']:.2f}"
         )        

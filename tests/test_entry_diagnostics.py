@@ -86,6 +86,66 @@ class EntryDiagnosticsTests(unittest.TestCase):
             "BODY_STRENGTH",
         )
 
+    def test_ema_rejection_diagnostics_use_recent_touch_window(self):
+
+        df = pd.DataFrame(
+            [
+                {
+                    "Open": 100,
+                    "High": 100.5,
+                    "Low": 98,
+                    "Close": 98.5,
+                    "VWAP": 99,
+                    "EMA9": 99,
+                    "EMA20": 101,
+                    "ATR": 2,
+                    "REL_VOLUME": 1.0,
+                    "BODY_STRENGTH": 0.4,
+                    "BREAKDOWN": False,
+                    "LOWER_HIGH": False,
+                },
+                {
+                    "Open": 98.5,
+                    "High": 99.4,
+                    "Low": 97,
+                    "Close": 97.5,
+                    "VWAP": 98.5,
+                    "EMA9": 99,
+                    "EMA20": 100.5,
+                    "ATR": 2,
+                    "REL_VOLUME": 1.0,
+                    "BODY_STRENGTH": 0.4,
+                    "BREAKDOWN": False,
+                    "LOWER_HIGH": False,
+                },
+                {
+                    "Open": 97.5,
+                    "High": 98.1,
+                    "Low": 96,
+                    "Close": 96.5,
+                    "VWAP": 98,
+                    "EMA9": 98.8,
+                    "EMA20": 100.2,
+                    "ATR": 2,
+                    "REL_VOLUME": 1.0,
+                    "BODY_STRENGTH": 0.4,
+                    "BREAKDOWN": False,
+                    "LOWER_HIGH": False,
+                },
+            ]
+        )
+
+        diagnostics = build_entry_diagnostics(
+            "AMD",
+            df,
+            {"signal": "BEARISH", "score": -8},
+            market_regime="TRENDING_BEAR",
+            selected_entry={"entry_type": "NO_ENTRY"},
+        )
+
+        self.assertEqual(diagnostics["candidate_setup"], "EMA_REJECTION_SHORT")
+        self.assertNotIn("REJECTED_EMA9", diagnostics["failed_conditions"])
+
     def test_replays_from_persisted_indicator_snapshot(self):
 
         diagnostics = build_entry_diagnostics_from_snapshot(
