@@ -68,6 +68,51 @@ class EngineHealth:
         return round(self.fresh_quotes / total * 100, 1)
 
 
+def _safe_int(value, default=0):
+
+    try:
+
+        if pd.isna(value):
+
+            return default
+
+        return int(value)
+
+    except Exception:
+
+        return default
+
+
+def _safe_float(value, default=None):
+
+    try:
+
+        if pd.isna(value):
+
+            return default
+
+        return float(value)
+
+    except Exception:
+
+        return default
+
+
+def _safe_text(value, default=None):
+
+    try:
+
+        if pd.isna(value):
+
+            return default
+
+        return value
+
+    except Exception:
+
+        return default
+
+
 def calculate_health_score(health: EngineHealth):
 
     score = 100
@@ -168,28 +213,51 @@ def build_engine_health(report_date: str):
 
     if latest_metrics:
 
-        health.scan_runtime_sec = latest_metrics.get("runtime")
-        health.scanner_runtime = latest_metrics.get("runtime")
-        health.worker_count = latest_metrics.get("workers")
-        health.polygon_calls = latest_metrics.get("requests")
-        health.polygon_requests = latest_metrics.get("polygon_requests")
-        health.cache_hits = int(latest_metrics.get("polygon_cache_hits") or 0)
-        health.cache_misses = int(latest_metrics.get("polygon_cache_misses") or 0)
-        health.average_api_time = latest_metrics.get("average_api_time")
-        health.average_cache_read_time = latest_metrics.get("average_cache_read_time")
-        health.background_pending_jobs = int(latest_metrics.get("background_pending_jobs") or 0)
-        health.background_completed_jobs = int(latest_metrics.get("background_completed_jobs") or 0)
-        health.background_failed_jobs = int(latest_metrics.get("background_failed_jobs") or 0)
-        health.background_queue_depth = int(latest_metrics.get("background_queue_depth") or 0)
-        health.background_longest_job_time = latest_metrics.get("background_longest_job_time")
-        health.background_longest_job_name = latest_metrics.get("background_longest_job_name")
-        health.background_average_job_time = latest_metrics.get("background_average_job_time")
-        health.exceptions = int(latest_metrics.get("exceptions") or 0)
-        health.average_symbol_runtime = latest_metrics.get("average_symbol_runtime")
-        health.average_symbol_time = latest_metrics.get("average_symbol_runtime")
-        health.symbols_completed = int(latest_metrics.get("symbols_completed") or 0)
-        health.symbols_failed = int(latest_metrics.get("symbols_failed") or 0)
-        health.health_score = latest_metrics.get("health_score")
+        health.scan_runtime_sec = _safe_float(latest_metrics.get("runtime"))
+        health.scanner_runtime = _safe_float(latest_metrics.get("runtime"))
+        health.worker_count = _safe_int(latest_metrics.get("workers"), None)
+        health.polygon_calls = _safe_int(latest_metrics.get("requests"), None)
+        health.polygon_requests = _safe_int(
+            latest_metrics.get("polygon_requests"),
+            None
+        )
+        health.cache_hits = _safe_int(latest_metrics.get("polygon_cache_hits"))
+        health.cache_misses = _safe_int(latest_metrics.get("polygon_cache_misses"))
+        health.average_api_time = _safe_float(latest_metrics.get("average_api_time"))
+        health.average_cache_read_time = _safe_float(
+            latest_metrics.get("average_cache_read_time")
+        )
+        health.background_pending_jobs = _safe_int(
+            latest_metrics.get("background_pending_jobs")
+        )
+        health.background_completed_jobs = _safe_int(
+            latest_metrics.get("background_completed_jobs")
+        )
+        health.background_failed_jobs = _safe_int(
+            latest_metrics.get("background_failed_jobs")
+        )
+        health.background_queue_depth = _safe_int(
+            latest_metrics.get("background_queue_depth")
+        )
+        health.background_longest_job_time = _safe_float(
+            latest_metrics.get("background_longest_job_time")
+        )
+        health.background_longest_job_name = _safe_text(
+            latest_metrics.get("background_longest_job_name")
+        )
+        health.background_average_job_time = _safe_float(
+            latest_metrics.get("background_average_job_time")
+        )
+        health.exceptions = _safe_int(latest_metrics.get("exceptions"))
+        health.average_symbol_runtime = _safe_float(
+            latest_metrics.get("average_symbol_runtime")
+        )
+        health.average_symbol_time = _safe_float(
+            latest_metrics.get("average_symbol_runtime")
+        )
+        health.symbols_completed = _safe_int(latest_metrics.get("symbols_completed"))
+        health.symbols_failed = _safe_int(latest_metrics.get("symbols_failed"))
+        health.health_score = _safe_int(latest_metrics.get("health_score"), None)
 
     if scanner is not None and not scanner.empty:
 
