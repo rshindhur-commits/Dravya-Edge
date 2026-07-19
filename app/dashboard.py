@@ -11,6 +11,14 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
+try:
+
+    import plotly.express as px
+
+except Exception:
+
+    px = None
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -42,6 +50,12 @@ def _verify_app_imports():
 _verify_app_imports()
 
 from app.config.settings import settings
+from app.config.performance import (
+    DEVELOPER_CACHE_TTL,
+    TRADING_CACHE_TTL,
+    TRADING_DASHBOARD_STATE_ONLY,
+    VALIDATION_CACHE_TTL,
+)
 from app.gates import (
     EntryGateConfig,
     env_int,
@@ -61,11 +75,10 @@ from app.storage.auto_paper_decision_store import (
     classify_decision_time,
     update_recent_auto_paper_log
 )
-from app.dashboard_components.market_coverage import render_market_coverage
+from app.runtime import measure_runtime
 from app.storage.daily_paths import daily_path, get_daily_dir
 from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
 from app.ui.components import kpi_card
-from app.ui.dashboard_state import build_dashboard_state
 
 try:
 
@@ -1214,21 +1227,249 @@ def _load_scanner_output():
 
 def _load_dashboard_state(df=None):
 
-    try:
+    cached = _load_cached_state("dashboard_state.json", profile="trading")
 
-        if LIVE_DASHBOARD_STATE_FILE.exists() and LIVE_DASHBOARD_STATE_FILE.stat().st_size > 0:
+    if cached:
 
-            return json.loads(LIVE_DASHBOARD_STATE_FILE.read_text(encoding="utf-8"))
-
-    except Exception:
-
-        pass
+        return cached
 
     if df is not None and not df.empty:
+
+        from app.ui.dashboard_state import build_dashboard_state
 
         return build_dashboard_state(df)
 
     return {}
+
+
+def _state_file_mtime(filename):
+
+    path = ROOT_DIR / "data" / "live" / filename
+
+    try:
+
+        if path.exists() and path.stat().st_size > 0:
+
+            return path.stat().st_mtime
+
+    except Exception:
+
+        return None
+
+    return None
+
+
+def _read_cached_state_file(filename):
+
+    path = ROOT_DIR / "data" / "live" / filename
+
+    try:
+
+        if path.exists() and path.stat().st_size > 0:
+
+            return json.loads(path.read_text(encoding="utf-8"))
+
+    except Exception:
+
+        return {}
+
+    return {}
+
+
+@st.cache_data(ttl=TRADING_CACHE_TTL)
+def _load_trading_cached_state(filename, mtime):
+
+    return _read_cached_state_file(filename)
+
+
+@st.cache_data(ttl=VALIDATION_CACHE_TTL)
+def _load_validation_cached_state(filename, mtime):
+
+    return _read_cached_state_file(filename)
+
+
+@st.cache_data
+def _load_static_cached_state(filename, mtime):
+
+    return _read_cached_state_file(filename)
+
+
+@st.cache_data(ttl=DEVELOPER_CACHE_TTL)
+def _load_developer_cached_state(filename, mtime):
+
+    return _read_cached_state_file(filename)
+
+
+def _load_cached_state(filename, profile="static"):
+
+    mtime = _state_file_mtime(filename)
+
+    if mtime is None:
+
+        return {}
+
+    if profile == "trading":
+
+        return _load_trading_cached_state(filename, mtime)
+
+    if profile == "validation":
+
+        return _load_validation_cached_state(filename, mtime)
+
+    if profile == "developer":
+
+        return _load_developer_cached_state(filename, mtime)
+
+    return _load_static_cached_state(filename, mtime)
+
+
+def _render_cached_recommendations(recommendations):
+
+    recommendations = recommendations or []
+
+    if not recommendations:
+
+        return
+
+    st.markdown("### Engineering Recommendations")
+    st.dataframe(
+        _display_safe_dataframe(pd.DataFrame(recommendations)),
+        width="stretch",
+        hide_index=True
+    )
+
+
+def _render_cached_validation_state(state):
+
+    st.subheader("Validation")
+    st.caption(f"Cached validation state generated: {state.get('generated_at', 'unknown')}")
+    kpis = state.get("kpis", {})
+    scanner = kpis.get("scanner", {})
+    paper = kpis.get("paper", {})
+    trend = kpis.get("trend_capture", {})
+    _render_compact_card_grid([
+        ("Rows", scanner.get("rows", 0)),
+        ("ENTER_PAPER", scanner.get("enter_paper", 0)),
+        ("Review", scanner.get("review", 0)),
+        ("Closed Trades", paper.get("closed_trades", 0)),
+        ("Win Rate", f"{paper.get('win_rate')}%" if paper.get("win_rate") is not None else "-"),
+        ("Total R", paper.get("total_r", 0)),
+        ("Avg Capture", _format_efficiency_pct(trend.get("average_capture"))),
+        ("TES", _format_efficiency_number(trend.get("trade_efficiency_score"))),
+    ])
+    trend_payload = state.get("trend_capture", {})
+
+    for title, key in [
+        ("Exit Verdict Distribution", "exit_verdict_distribution"),
+        ("Trend Capture by Setup", "by_setup"),
+        ("Trend Capture by Regime", "by_regime"),
+        ("Trend Capture by Exit Reason", "by_exit_reason"),
+    ]:
+
+        rows = trend_payload.get(key) or []
+
+        if rows:
+
+            st.markdown(f"### {title}")
+            st.dataframe(
+                _display_safe_dataframe(pd.DataFrame(rows)),
+                width="stretch",
+                hide_index=True
+            )
+
+    _render_cached_recommendations(state.get("recommendations"))
+    _render_daily_validation_report_panel()
+
+
+def _render_cached_replay_state(state, trading_day):
+    st.subheader("Replay")
+    st.caption(f"Cached replay state generated: {state.get('generated_at', 'unknown')}")
+    _render_compact_card_grid([
+        ("Status", state.get("status", "UNKNOWN")),
+        ("Scanner Rows", state.get("scanner_rows", 0)),
+        ("Replay Rows", state.get("replay_rows", 0)),
+        ("Coverage", f"{state.get('coverage_pct', 0)}%"),
+        ("Missing Indicators", state.get("missing_indicators", 0)),
+        ("Partial Replay", state.get("partial_replay", 0)),
+    ])
+
+    if st.button("Generate Replay", key="generate_offline_replay_cached"):
+
+        try:
+
+            _generate_offline_replay(trading_day)
+            st.success("Offline replay generated.")
+
+        except Exception as exc:
+
+            st.error(f"Offline replay failed: {exc}")
+
+    if state.get("errors"):
+
+        for error in state.get("errors", []):
+
+            st.info(error)
+
+    blockers = state.get("blockers") or []
+
+    if blockers:
+
+        st.markdown("### Today's Biggest Blockers")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(blockers)),
+            width="stretch",
+            hide_index=True
+        )
+
+    top_misses = state.get("top_misses") or []
+
+    if top_misses:
+
+        st.markdown("### Top Misses")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(top_misses)),
+            width="stretch",
+            hide_index=True
+        )
+
+    summary = state.get("replay_summary") or []
+
+    if summary:
+
+        st.markdown("### Replay Summary")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(summary)),
+            width="stretch",
+            hide_index=True
+        )
+
+
+def _render_cached_report_state(state):
+    st.subheader("Reports")
+    st.caption(f"Cached report state generated: {state.get('generated_at', 'unknown')}")
+    daily_report = state.get("daily_report", {})
+    root_report = state.get("root_report", {})
+    _render_compact_card_grid([
+        ("Status", state.get("status", "UNKNOWN")),
+        ("Daily Report", "YES" if daily_report.get("exists") else "NO"),
+        ("Root Report", "YES" if root_report.get("exists") else "NO"),
+        ("Daily Size", daily_report.get("size_bytes", 0)),
+    ])
+
+    if state.get("errors"):
+
+        for error in state.get("errors", []):
+
+            st.info(error)
+
+    _render_daily_validation_report_panel()
+
+
+def _render_market_coverage_lazy(report_date):
+
+    from app.dashboard_components.market_coverage import render_market_coverage
+
+    render_market_coverage(report_date)
 
 
 def _candidate_rows_for_suggestions(df):
@@ -2337,33 +2578,54 @@ def _generate_daily_validation_report(report_date, finalize_report=True):
 
     from types import SimpleNamespace
     from tools.daily_validation_report import build_report
+    from app.ui.cache.report_state_builder import write_report_state
 
-    return build_report(
-        SimpleNamespace(
-            date=report_date,
-            output=None,
-            archive=True,
-            update_daily=True,
-            finalize=finalize_report
+    with measure_runtime(
+        "dashboard",
+        "validation_report_generation",
+        trading_day=report_date,
+        page="Validation"
+    ):
+
+        output_path = build_report(
+            SimpleNamespace(
+                date=report_date,
+                output=None,
+                archive=True,
+                update_daily=True,
+                finalize=finalize_report
+            )
         )
-    )
+        write_report_state(report_date)
+
+        return output_path
 
 
 def _generate_offline_replay(report_date):
 
     from tools.replay_today import build_replay_summary, replay_scanner_snapshot
+    from app.ui.cache.replay_state_builder import write_replay_state
 
-    input_path = daily_path(report_date, "scanner_output_close.csv")
-    output_path = daily_path(report_date, "offline_replay.csv")
-    replay, _summary = replay_scanner_snapshot(input_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    replay.to_csv(output_path, index=False)
-    summary_path = output_path.with_name("offline_replay_summary.csv")
-    build_replay_summary(replay).to_csv(
-        summary_path,
-        index=False
-    )
-    return output_path, summary_path
+    with measure_runtime(
+        "dashboard",
+        "offline_replay_generation",
+        trading_day=report_date,
+        page="Replay"
+    ):
+
+        input_path = daily_path(report_date, "scanner_output_close.csv")
+        output_path = daily_path(report_date, "offline_replay.csv")
+        replay, _summary = replay_scanner_snapshot(input_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        replay.to_csv(output_path, index=False)
+        summary_path = output_path.with_name("offline_replay_summary.csv")
+        build_replay_summary(replay).to_csv(
+            summary_path,
+            index=False
+        )
+        write_replay_state(report_date)
+
+        return output_path, summary_path
 
 
 def _render_daily_validation_report_controls():
@@ -5608,17 +5870,73 @@ def _render_trading_page(state, df, refresh_state):
     _render_missed_opportunities(state)
 
 
+def _render_trading_page_from_state(state, refresh_state):
+
+    metadata = {
+        "scan_id": state.get("scan_id") or state.get("data_version") or "N/A",
+        "scanner_started": "cached",
+        "scanner_finished": state.get("generated_at") or "cached",
+        "last_refreshed": datetime.now(ZoneInfo("America/New_York")).strftime("%m/%d/%Y %H:%M:%S ET"),
+        "scan_age": "cached",
+        "symbols": (state.get("summary") or {}).get("scanned", 0),
+        "status": state.get("scanner") or "LIVE",
+    }
+    _render_metadata_card(
+        "Trading Session",
+        [
+            ("Scanner Status", _status_label(metadata["status"])),
+            ("Current Scan ID", metadata["scan_id"]),
+            ("Scanner Started", metadata["scanner_started"]),
+            ("Scanner Finished", metadata["scanner_finished"]),
+            ("Last Refreshed", metadata["last_refreshed"]),
+            ("Scan Age", metadata["scan_age"]),
+            ("Symbols Scanned", metadata["symbols"]),
+            ("Status", _status_label(metadata["status"])),
+        ]
+    )
+    _render_command_center(state, pd.DataFrame(), refresh_state)
+    _render_current_opportunities(state)
+    _render_why_no_trade(state)
+    _render_missed_opportunities(state)
+
+
+def _paper_automation_active(auto_paper_controls):
+
+    auto_paper_controls = auto_paper_controls or {}
+
+    return bool(
+        auto_paper_controls.get("auto_paper_enabled")
+        or auto_paper_controls.get("auto_exit_enabled")
+        or auto_paper_controls.get("eod_close_enabled")
+    )
+
+
 def _render_validation_page(df):
+
+    cached = _load_cached_state("validation_state.json", profile="validation")
+
+    if cached:
+
+        _render_cached_validation_state(cached)
+        return
 
     st.subheader("Validation")
     _render_paper_validation_performance()
+    _render_trade_efficiency_card()
     _render_daily_validation_report_panel()
 
 
 def _render_replay_page(df=None, refresh_state=None):
 
-    st.subheader("Replay")
     trading_day = _current_trading_day()
+    cached = _load_cached_state("replay_state.json", profile="replay")
+
+    if cached:
+
+        _render_cached_replay_state(cached, trading_day)
+        return
+
+    st.subheader("Replay")
     input_path = daily_path(trading_day, "scanner_output_close.csv")
     output_path = daily_path(trading_day, "offline_replay.csv")
     summary_path = output_path.with_name("offline_replay_summary.csv")
@@ -5777,7 +6095,180 @@ def _render_replay_page(df=None, refresh_state=None):
 
 def _render_reports_page(df):
 
+    cached = _load_cached_state("report_state.json", profile="reports")
+
+    if cached:
+
+        _render_cached_report_state(cached)
+        return
+
     _render_daily_validation_report_panel()
+
+
+def _load_runtime_json_state():
+
+    return _load_cached_state("runtime_state.json", profile="developer")
+
+
+def _load_runtime_health_state():
+
+    return _load_cached_state("runtime_health.json", profile="developer")
+
+
+def _load_runtime_performance_df():
+
+    return _read_csv_safe(ROOT_DIR / "data" / "runtime_performance.csv")
+
+
+def _load_runtime_metrics_df():
+
+    return _read_csv_safe(ROOT_DIR / "data" / "runtime_metrics.csv")
+
+
+def _load_runtime_performance_summary():
+
+    return _load_cached_state("runtime_performance_summary.json", profile="developer")
+
+
+def _render_runtime_performance_panel():
+
+    st.subheader("Runtime Performance")
+    runtime_state = _load_runtime_json_state()
+    runtime_health = _load_runtime_health_state()
+
+    if runtime_health:
+
+        st.markdown("**Runtime Health**")
+        _render_compact_card_grid([
+            ("Healthy", runtime_health.get("healthy")),
+            ("Score", runtime_health.get("score")),
+            ("Warnings", len(runtime_health.get("warnings") or [])),
+            ("Errors", len(runtime_health.get("errors") or [])),
+        ])
+
+        for warning in runtime_health.get("warnings") or []:
+
+            st.warning(warning)
+
+        for error in runtime_health.get("errors") or []:
+
+            st.error(error)
+
+    if runtime_state:
+
+        cards = [
+            ("Critical", runtime_state.get("critical_jobs", 0)),
+            ("High", runtime_state.get("high_jobs", 0)),
+            ("Normal", runtime_state.get("normal_jobs", 0)),
+            ("Low", runtime_state.get("low_jobs", 0)),
+            ("Running", runtime_state.get("running_jobs", 0)),
+            ("Telegram Queue", runtime_state.get("telegram_queue", 0)),
+        ]
+        _render_compact_card_grid(cards)
+    else:
+
+        st.info("runtime_state.json has not been written yet.")
+
+    performance = _load_runtime_performance_df()
+    performance_summary = _load_runtime_performance_summary()
+
+    if performance_summary.get("average_seconds_by_stage"):
+
+        st.markdown("**Slowest Runtime Stages**")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(performance_summary["average_seconds_by_stage"])),
+            width="stretch",
+            hide_index=True
+        )
+
+    if not performance.empty:
+
+        st.markdown("**Recent Runtime Timings**")
+        columns = [
+            column for column in [
+                "observed_at_utc",
+                "category",
+                "stage",
+                "page",
+                "seconds",
+                "scan_id"
+            ]
+            if column in performance.columns
+        ]
+        st.dataframe(
+            _display_safe_dataframe(performance[columns].tail(25).iloc[::-1]),
+            width="stretch",
+            hide_index=True
+        )
+    else:
+
+        st.caption("No runtime_performance.csv rows yet.")
+
+    metrics = _load_runtime_metrics_df()
+
+    if performance_summary.get("average_runtime_by_job"):
+
+        st.markdown("**Slowest Runtime Jobs**")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(performance_summary["average_runtime_by_job"])),
+            width="stretch",
+            hide_index=True
+        )
+
+    if not metrics.empty:
+
+        st.markdown("**Recent Runtime Jobs**")
+        columns = [
+            column for column in [
+                "observed_at_utc",
+                "job_name",
+                "priority",
+                "queue_wait",
+                "queue_runtime",
+                "total_runtime",
+                "status",
+                "scan_id"
+            ]
+            if column in metrics.columns
+        ]
+        st.dataframe(
+            _display_safe_dataframe(metrics[columns].tail(25).iloc[::-1]),
+            width="stretch",
+            hide_index=True
+        )
+    else:
+
+        st.caption("No runtime_metrics.csv rows yet.")
+
+
+def _render_lazy_developer_section(title, key, render_fn, expanded=False):
+
+    with st.expander(title, expanded=expanded):
+
+        if not st.toggle(
+            f"Load {title}",
+            key=f"load_developer_{key}",
+            value=False
+        ):
+
+            st.caption("Enable this section to load its diagnostics.")
+            return
+
+        render_fn()
+
+
+def _render_telemetry_debug_panel(df):
+
+    st.subheader("Last Seen Candidates")
+    _render_last_seen_candidates(df)
+
+    st.subheader("Alert + Paper Performance Review")
+    telemetry_metrics = _telemetry_summary()
+    telemetry_cols = st.columns(3)
+
+    for col, (label, value) in zip(telemetry_cols, telemetry_metrics.items()):
+
+        col.metric(label, value)
 
 
 def _render_developer_page(df, auto_paper_controls, refresh_state=None):
@@ -5799,40 +6290,61 @@ def _render_developer_page(df, auto_paper_controls, refresh_state=None):
 
     with st.expander("Developer Diagnostics", expanded=True):
 
-        render_market_coverage(_current_trading_day())
-        _render_action_center(df, auto_paper_controls)
-        _render_scanner_watchlist(df)
-        _render_paper_exit_controls(df)
-        _render_compact_auto_paper_summary()
-
-        with st.expander("Suggestion Lifecycle", expanded=False):
-
-            _render_suggestion_lifecycle(df)
-
-        with st.expander("Entry Diagnostics", expanded=False):
-
-            _render_entry_diagnostics(df)
-
-        with st.expander("Full Auto-Paper Decision Log", expanded=False):
-
-            _render_auto_paper_decision_log(show_full_expander=False)
-
-        with st.expander("Validation Data Health", expanded=False):
-
-            _render_validation_data_health(df)
-
-        with st.expander("Telemetry & Debug", expanded=False):
-
-            st.subheader("Last Seen Candidates")
-            _render_last_seen_candidates(df)
-
-            st.subheader("Alert + Paper Performance Review")
-            telemetry_metrics = _telemetry_summary()
-            telemetry_cols = st.columns(3)
-
-            for col, (label, value) in zip(telemetry_cols, telemetry_metrics.items()):
-
-                col.metric(label, value)
+        _render_lazy_developer_section(
+            "Runtime Performance",
+            "runtime_performance",
+            _render_runtime_performance_panel
+        )
+        _render_lazy_developer_section(
+            "Market Coverage",
+            "market_coverage",
+            lambda: _render_market_coverage_lazy(_current_trading_day())
+        )
+        _render_lazy_developer_section(
+            "Action Center",
+            "action_center",
+            lambda: _render_action_center(df, auto_paper_controls)
+        )
+        _render_lazy_developer_section(
+            "Scanner Watchlist",
+            "scanner_watchlist",
+            lambda: _render_scanner_watchlist(df)
+        )
+        _render_lazy_developer_section(
+            "Paper Exit Controls",
+            "paper_exit_controls",
+            lambda: _render_paper_exit_controls(df)
+        )
+        _render_lazy_developer_section(
+            "Auto-Paper Summary",
+            "auto_paper_summary",
+            _render_compact_auto_paper_summary
+        )
+        _render_lazy_developer_section(
+            "Suggestion Lifecycle",
+            "suggestion_lifecycle",
+            lambda: _render_suggestion_lifecycle(df)
+        )
+        _render_lazy_developer_section(
+            "Entry Diagnostics",
+            "entry_diagnostics",
+            lambda: _render_entry_diagnostics(df)
+        )
+        _render_lazy_developer_section(
+            "Full Auto-Paper Decision Log",
+            "auto_paper_decision_log",
+            lambda: _render_auto_paper_decision_log(show_full_expander=False)
+        )
+        _render_lazy_developer_section(
+            "Validation Data Health",
+            "validation_data_health",
+            lambda: _render_validation_data_health(df)
+        )
+        _render_lazy_developer_section(
+            "Telemetry & Debug",
+            "telemetry_debug",
+            lambda: _render_telemetry_debug_panel(df)
+        )
 
 
 def _latest_decisions_df(minutes=30):
@@ -6485,6 +6997,587 @@ def _render_paper_validation_performance():
             ascending=[False, False],
             na_position="last"
         )
+        st.dataframe(
+            _display_safe_dataframe(display),
+            width="stretch",
+            hide_index=True
+        )
+
+
+def _format_efficiency_pct(value):
+
+    try:
+
+        if value is None or pd.isna(value):
+
+            return "-"
+
+        return f"{float(value):.1f}%"
+
+    except Exception:
+
+        return "-"
+
+
+def _format_efficiency_number(value):
+
+    try:
+
+        if value is None or pd.isna(value):
+
+            return "-"
+
+        return f"{float(value):.2f}"
+
+    except Exception:
+
+        return "-"
+
+
+def _trend_capture_numeric(df):
+
+    if df is None or df.empty:
+
+        return pd.DataFrame()
+
+    output = df.copy()
+
+    for column in [
+        "Trend Capture %",
+        "Left On Table",
+        "Available Move",
+        "Captured Move",
+        "Maximum Favorable Excursion",
+        "Maximum Adverse Excursion",
+        "Trend Health Score",
+        "Risk Reward",
+        "Profit +1 Bar",
+        "Profit +2 Bars",
+        "Profit +3 Bars",
+        "Profit +5 Bars",
+        "Best Profit",
+        "Trade Efficiency Score"
+    ]:
+
+        if column in output.columns:
+
+            output[column] = pd.to_numeric(
+                output[column],
+                errors="coerce"
+            )
+
+    return output
+
+
+def _trend_capture_summary_table(df, group_column, include_left=True):
+
+    if df.empty or group_column not in df.columns:
+
+        return pd.DataFrame()
+
+    aggregations = {
+        "Trades": ("Symbol", "count"),
+        "AvgCapture": ("Trend Capture %", "mean")
+    }
+
+    if include_left and "Left On Table" in df.columns:
+
+        aggregations["AvgLeft"] = ("Left On Table", "mean")
+
+    summary = (
+        df.groupby(group_column, dropna=True)
+        .agg(**aggregations)
+        .reset_index()
+    )
+
+    for column in ["AvgCapture", "AvgLeft"]:
+
+        if column in summary.columns:
+
+            summary[column] = summary[column].round(2)
+
+    return summary.sort_values(
+        by="AvgCapture",
+        ascending=False,
+        na_position="last"
+    )
+
+
+def _exit_trigger_frequency_table(trend_capture):
+
+    rows = []
+
+    for label, column in [
+        ("EMA", "Triggered EMA"),
+        ("VWAP", "Triggered VWAP"),
+        ("MACD", "Triggered MACD"),
+        ("STOP", "Triggered Stop"),
+        ("TARGET", "Triggered Target"),
+        ("TIME", "Triggered Time Exit"),
+        ("NEAR_CLOSE", "Triggered Near Close"),
+    ]:
+
+        if column not in trend_capture.columns:
+
+            continue
+
+        mask = trend_capture[column].astype(str).str.lower().isin(["true", "1", "yes"])
+        subset = trend_capture[mask]
+
+        if subset.empty:
+
+            continue
+
+        avg_capture = None
+
+        if "Trend Capture %" in subset.columns:
+
+            avg_capture = round(float(subset["Trend Capture %"].mean()), 2)
+
+        rows.append({
+            "Trigger": label,
+            "Count": int(len(subset)),
+            "Avg Capture": avg_capture
+        })
+
+    return pd.DataFrame(rows)
+
+
+def _format_trend_capture_table(df):
+
+    if df is None or df.empty:
+
+        return pd.DataFrame()
+
+    output = df.copy()
+
+    for column in ["Trend Capture %", "AvgCapture", "Avg Capture"]:
+
+        if column in output.columns:
+
+            output[column] = output[column].map(
+                lambda value: "-"
+                if pd.isna(value)
+                else f"{float(value):.1f}%"
+            )
+
+    for column in ["Left On Table", "AvgLeft"]:
+
+        if column in output.columns:
+
+            output[column] = output[column].map(
+                lambda value: "-"
+                if pd.isna(value)
+                else f"{float(value):.2f}"
+            )
+
+    return output
+
+
+def _average_percent_left_on_table(trend_capture):
+
+    if trend_capture.empty:
+
+        return None
+
+    if "Available Move" not in trend_capture.columns or "Left On Table" not in trend_capture.columns:
+
+        return None
+
+    available = trend_capture["Available Move"]
+    left = trend_capture["Left On Table"]
+    valid = available > 0
+
+    if not valid.any():
+
+        return None
+
+    return round(float((left[valid] / available[valid] * 100).mean()), 2)
+
+
+def _render_trade_efficiency_card():
+
+    from app.analytics.trend_capture import summarize_trend_capture
+
+    st.subheader("Trade Efficiency Analytics")
+    trading_day = _current_trading_day()
+    trend_capture = _read_csv_safe(
+        daily_path(
+            trading_day,
+            "trend_capture_analysis.csv"
+        )
+    )
+
+    if trend_capture.empty:
+
+        st.info(
+            "No trend capture rows found yet. Metrics will appear after paper trades close."
+        )
+        return
+
+    trend_capture = _trend_capture_numeric(
+        trend_capture
+    )
+    summary = summarize_trend_capture(trend_capture)
+    today_rows = trend_capture[
+        trend_capture.get(
+            "Trading Day",
+            pd.Series(dtype=object)
+        ).astype(str).eq(trading_day)
+    ]
+    today_summary = summarize_trend_capture(
+        today_rows
+    )
+    average_capture = summary.get("average_capture")
+    average_left_pct = _average_percent_left_on_table(trend_capture)
+    exit_quality = (
+        round(max(0, 100 - average_left_pct), 2)
+        if average_left_pct is not None
+        else None
+    )
+    profit_left_on_table = (
+        round(float(trend_capture["Left On Table"].sum()), 2)
+        if "Left On Table" in trend_capture.columns
+        else None
+    )
+    cols = st.columns(4)
+
+    with cols[0]:
+
+        kpi_card(
+            "Trade Efficiency Score",
+            _format_efficiency_pct(average_capture)
+        )
+
+    with cols[1]:
+
+        kpi_card(
+            "Today's Capture",
+            _format_efficiency_pct(today_summary.get("average_capture"))
+        )
+
+    with cols[2]:
+
+        kpi_card(
+            "Profit Left On Table",
+            _format_efficiency_number(profit_left_on_table)
+        )
+
+    with cols[3]:
+
+        kpi_card(
+            "Exit Quality",
+            _format_efficiency_pct(exit_quality)
+        )
+
+    verdicts = (
+        trend_capture.get("Exit Verdict", pd.Series(dtype=object))
+        .fillna("UNKNOWN")
+        .astype(str)
+        .str.upper()
+    )
+    cols = st.columns(6)
+
+    with cols[0]:
+
+        kpi_card("Trades", str(len(trend_capture)))
+
+    with cols[1]:
+
+        kpi_card("Exited Early", str(int(verdicts.eq("EXIT_TOO_EARLY").sum())))
+
+    with cols[2]:
+
+        kpi_card("Correct Exit", str(int(verdicts.eq("CORRECT_EXIT").sum())))
+
+    with cols[3]:
+
+        kpi_card("Late Exit", str(int(verdicts.eq("LATE_EXIT").sum())))
+
+    with cols[4]:
+
+        kpi_card(
+            "Avg Opportunity Cost",
+            _format_efficiency_number(summary.get("average_left_on_table"))
+        )
+
+    with cols[5]:
+
+        kpi_card(
+            "Avg Delay Gain",
+            _format_efficiency_number(summary.get("average_delay_gain"))
+        )
+
+    cols = st.columns(4)
+
+    with cols[0]:
+
+        kpi_card(
+            "Average Capture",
+            _format_efficiency_pct(average_capture)
+        )
+
+    with cols[1]:
+
+        kpi_card(
+            "Best Capture",
+            _format_efficiency_pct(summary.get("best_capture"))
+        )
+
+    with cols[2]:
+
+        kpi_card(
+            "Avg Left On Table",
+            _format_efficiency_number(summary.get("average_left_on_table"))
+        )
+
+    with cols[3]:
+
+        kpi_card(
+            "Most Left On Table",
+            _format_efficiency_number(summary.get("most_left_on_table"))
+        )
+
+    if px is not None:
+
+        if {"Symbol", "Trend Capture %"}.issubset(trend_capture.columns):
+
+            fig = px.bar(
+                trend_capture,
+                x="Symbol",
+                y="Trend Capture %",
+                color=("Setup" if "Setup" in trend_capture.columns else None),
+                title="Trend Capture by Trade"
+            )
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+        if {"Available Move", "Captured Move"}.issubset(trend_capture.columns):
+
+            hover_data = [
+                column for column in ["Symbol", "Exit Reason"]
+                if column in trend_capture.columns
+            ]
+            fig = px.scatter(
+                trend_capture,
+                x="Available Move",
+                y="Captured Move",
+                color=("Setup" if "Setup" in trend_capture.columns else None),
+                hover_data=hover_data,
+                title="Trade Efficiency"
+            )
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+        if {"Trend Capture %", "Trend Health Score"}.issubset(trend_capture.columns):
+
+            hover_data = [
+                column for column in ["Symbol", "Exit Reason", "Exit Verdict"]
+                if column in trend_capture.columns
+            ]
+            fig = px.scatter(
+                trend_capture,
+                x="Trend Capture %",
+                y="Trend Health Score",
+                color=("Exit Verdict" if "Exit Verdict" in trend_capture.columns else None),
+                hover_data=hover_data,
+                title="Trend Health vs Trend Capture"
+            )
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+        if {"Trend Capture %", "Left On Table"}.issubset(trend_capture.columns):
+
+            bubble_df = trend_capture.copy()
+            size_column = "Risk Reward" if "Risk Reward" in bubble_df.columns else None
+            fig = px.scatter(
+                bubble_df,
+                x="Trend Capture %",
+                y="Left On Table",
+                size=size_column,
+                color=("Exit Verdict" if "Exit Verdict" in bubble_df.columns else None),
+                hover_data=[
+                    column for column in ["Symbol", "Setup", "Exit Reason"]
+                    if column in bubble_df.columns
+                ],
+                title="Opportunity Cost"
+            )
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+        delay_columns = [
+            column for column in [
+                "Profit +1 Bar",
+                "Profit +2 Bars",
+                "Profit +3 Bars",
+                "Profit +5 Bars",
+            ]
+            if column in trend_capture.columns
+        ]
+
+        if delay_columns:
+
+            delay_df = pd.DataFrame({
+                "Delay": [column.replace("Profit +", "+").replace(" Bars", "") for column in delay_columns],
+                "Avg Extra Profit": [round(float(trend_capture[column].mean()), 4) for column in delay_columns]
+            })
+            fig = px.bar(
+                delay_df,
+                x="Delay",
+                y="Avg Extra Profit",
+                title="Delay Analysis"
+            )
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+    else:
+
+        st.caption("Install plotly to enable Trade Efficiency charts.")
+
+    st.markdown("### Trend Capture by Setup")
+    st.dataframe(
+        _format_trend_capture_table(
+            _trend_capture_summary_table(trend_capture, "Setup")
+        ),
+        width="stretch",
+        hide_index=True
+    )
+
+    st.markdown("### Trend Capture by Market Regime")
+    st.dataframe(
+        _format_trend_capture_table(
+            _trend_capture_summary_table(
+                trend_capture,
+                "Market Regime",
+                include_left=False
+            )
+        ),
+        width="stretch",
+        hide_index=True
+    )
+
+    st.markdown("### Exit Effectiveness")
+    st.dataframe(
+        _format_trend_capture_table(
+            _trend_capture_summary_table(trend_capture, "Exit Reason")
+        ),
+        width="stretch",
+        hide_index=True
+    )
+
+    verdict_distribution = summary.get("exit_verdict_distribution")
+
+    if verdict_distribution is not None and not verdict_distribution.empty:
+
+        st.markdown("### Exit Quality Summary")
+        st.dataframe(
+            _display_safe_dataframe(verdict_distribution),
+            width="stretch",
+            hide_index=True
+        )
+
+    trigger_frequency = _exit_trigger_frequency_table(trend_capture)
+
+    if not trigger_frequency.empty:
+
+        st.markdown("### Exit Trigger Frequency")
+        st.dataframe(
+            _format_trend_capture_table(trigger_frequency),
+            width="stretch",
+            hide_index=True
+        )
+
+    display_columns = [
+        column for column in [
+            "Symbol",
+            "Setup",
+            "Trend Capture %",
+            "Left On Table",
+            "Exit Reason"
+        ]
+        if column in trend_capture.columns
+    ]
+
+    if display_columns:
+
+        st.markdown("### Biggest Missed Opportunities")
+        worst = trend_capture.sort_values(
+            "Trend Capture %",
+            ascending=True,
+            na_position="last"
+        ).head(10)
+        st.dataframe(
+            _format_trend_capture_table(worst[display_columns]),
+            width="stretch",
+            hide_index=True
+        )
+
+        st.markdown("### Best Trend Captures")
+        best = trend_capture.sort_values(
+            "Trend Capture %",
+            ascending=False,
+            na_position="last"
+        ).head(10)
+        st.dataframe(
+            _format_trend_capture_table(best[display_columns]),
+            width="stretch",
+            hide_index=True
+        )
+
+    st.markdown("### Engineering Recommendation")
+
+    if average_capture is None:
+
+        st.info("Trend capture data is not available yet.")
+
+    elif average_capture < 50:
+
+        st.error(
+            "Average trend capture is below 50%. Entries are identifying trends, "
+            "but exits are harvesting profits too early. Priority: improve trend management."
+        )
+
+    elif average_capture < 70:
+
+        st.warning(
+            "Average trend capture is acceptable. Review trailing exits and EMA hold logic."
+        )
+
+    elif average_capture < 85:
+
+        st.info(
+            "Trend capture is healthy. Continue validation before changing exit logic."
+        )
+
+    else:
+
+        st.success(
+            "Excellent trend capture. Current exit strategy is capturing most available trends. "
+            "Focus future work on entries and coverage."
+        )
+
+    with st.expander("Trend capture rows", expanded=False):
+
+        display = trend_capture
+
+        if "Exit Time" in display.columns:
+
+            display = display.sort_values(
+                by="Exit Time",
+                ascending=False,
+                na_position="last"
+            )
+
         st.dataframe(
             _display_safe_dataframe(display),
             width="stretch",
@@ -7320,6 +8413,52 @@ def main():
 
                 st.error(f"Scanner failed: {exc}")
 
+    if (
+        TRADING_DASHBOARD_STATE_ONLY
+        and page == "Trading"
+        and not _paper_automation_active(auto_paper_controls)
+    ):
+
+        cached_state = _load_cached_state("dashboard_state.json", profile="trading")
+
+        if cached_state:
+
+            from app.ui.pages.trading import render_from_state
+
+            render_from_state(
+                cached_state,
+                refresh_state
+            )
+            st.caption("Trading page rendered from dashboard_state.json. Auto-refresh controls are in the sidebar.")
+            return
+
+    if page == "Validation" and _load_cached_state("validation_state.json", profile="validation"):
+
+        from app.ui.pages.validation import render
+
+        render(pd.DataFrame())
+        st.caption("Validation page rendered from validation_state.json. Auto-refresh controls are in the sidebar.")
+        return
+
+    if page == "Replay" and _load_cached_state("replay_state.json", profile="replay"):
+
+        from app.ui.pages.replay import render
+
+        render(
+            df=pd.DataFrame(),
+            refresh_state=refresh_state
+        )
+        st.caption("Replay page rendered from replay_state.json. Auto-refresh controls are in the sidebar.")
+        return
+
+    if page == "Reports" and _load_cached_state("report_state.json", profile="reports"):
+
+        from app.ui.pages.reports import render
+
+        render(pd.DataFrame())
+        st.caption("Reports page rendered from report_state.json. Auto-refresh controls are in the sidebar.")
+        return
+
     df = _load_scanner_output()
 
     if df.empty:
@@ -7340,7 +8479,12 @@ def main():
         latest_scanner_run = latest_time.iloc[0]
         st.caption(f"Last scanner run: {latest_scanner_run}")
 
-    auto_closed = _run_auto_paper_exits(
+    from app.runtime.paper_automation import (
+        run_auto_paper_entries,
+        run_auto_paper_exits
+    )
+
+    auto_closed = run_auto_paper_exits(
         df,
         auto_paper_controls
     )
@@ -7353,7 +8497,7 @@ def main():
         )
         st.rerun()
 
-    auto_opened = _run_auto_paper_entries(
+    auto_opened = run_auto_paper_entries(
         df,
         auto_paper_controls
     )
@@ -7368,36 +8512,53 @@ def main():
 
     dashboard_state = _load_dashboard_state(df)
 
-    if page == "Trading":
+    with measure_runtime(
+        "dashboard",
+        "page_render",
+        trading_day=_current_trading_day(),
+        page=page
+    ):
 
-        _render_trading_page(
-            dashboard_state,
-            df,
-            refresh_state
-        )
+        if page == "Trading":
 
-    elif page == "Validation":
+            from app.ui.pages.trading import render
 
-        _render_validation_page(df)
+            render(
+                dashboard_state,
+                df,
+                refresh_state
+            )
 
-    elif page == "Replay":
+        elif page == "Validation":
 
-        _render_replay_page(
-            df=df,
-            refresh_state=refresh_state
-        )
+            from app.ui.pages.validation import render
 
-    elif page == "Reports":
+            render(df)
 
-        _render_reports_page(df)
+        elif page == "Replay":
 
-    else:
+            from app.ui.pages.replay import render
 
-        _render_developer_page(
-            df,
-            auto_paper_controls,
-            refresh_state=refresh_state
-        )
+            render(
+                df=df,
+                refresh_state=refresh_state
+            )
+
+        elif page == "Reports":
+
+            from app.ui.pages.reports import render
+
+            render(df)
+
+        else:
+
+            from app.ui.pages.developer import render
+
+            render(
+                df,
+                auto_paper_controls,
+                refresh_state=refresh_state
+            )
 
     st.caption("Auto-refresh controls are in the sidebar. Market-hours default is ON at 5 minutes; after-hours default is OFF.")
 

@@ -3,10 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+from app.runtime.scan_generation import metadata_from_generation
 
 
 def _clean(value):
@@ -262,7 +265,70 @@ def _best_by_direction(candidates, direction):
     return None
 
 
-def build_dashboard_state(df: pd.DataFrame, generated_at: str | None = None, scanner_status: str = "LIVE") -> dict[str, Any]:
+def _scan_generation_metadata(rows, generated_at, scan_id):
+
+    source_timestamps = []
+
+    for row in rows:
+
+        timestamp = _clean(
+            _row_get(
+                row,
+                "generated_at",
+                "Generated At",
+                "scan_generated_at",
+                "Scan Generated At",
+                "Timestamp",
+                "timestamp",
+            )
+        )
+
+        if timestamp is not None:
+
+            source_timestamps.append(timestamp)
+
+    unique_timestamps = sorted({str(timestamp) for timestamp in source_timestamps})
+
+    return {
+        "scan_id": scan_id,
+        "generated_at": generated_at,
+        "row_count": len(rows),
+        "data_version": scan_id or generated_at,
+        "source_timestamps": unique_timestamps[:10],
+    }
+
+
+def _write_json_atomic(path: Path, payload: str):
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+
+    try:
+
+        temp_path.write_text(payload, encoding="utf-8")
+        temp_path.replace(path)
+
+    finally:
+
+        try:
+
+            if temp_path.exists():
+
+                temp_path.unlink()
+
+        except Exception:
+
+            pass
+
+
+def build_dashboard_state(
+    df: pd.DataFrame,
+    generated_at: str | None = None,
+    scanner_status: str = "LIVE",
+    scanner_health: dict[str, Any] | None = None,
+    telegram_summary: dict[str, Any] | None = None,
+    generation=None,
+) -> dict[str, Any]:
 
     rows = df.to_dict("records") if df is not None and not df.empty else []
     generated_at = generated_at or datetime.now().isoformat(timespec="seconds")
@@ -273,14 +339,25 @@ def build_dashboard_state(df: pd.DataFrame, generated_at: str | None = None, sca
     summary = _summary(rows)
     blockers = _top_blockers(rows)
     best = best_put or best_call
+    scan_generation = _scan_generation_metadata(rows, generated_at, scan_id)
+    metadata = metadata_from_generation(generation, scan_id=scan_id) or {
+        "scan_id": scan_id,
+        "generation": scan_generation["data_version"],
+        "schema": 1,
+        "created_at": generated_at,
+    }
 
     return {
+        "metadata": metadata,
         "generated_at": generated_at,
         "scan_id": scan_id,
-        "data_version": scan_id,
+        "data_version": scan_generation["data_version"],
+        "scan_generation": scan_generation,
         "scanner": scanner_status,
         "decision_engine": "v4",
         "telegram": "CONFIGURED",
+        "telegram_summary": telegram_summary or {},
+        "scanner_health": scanner_health or {},
         "market_bias": _market_bias(rows),
         "best_call": best_call,
         "best_put": best_put,
@@ -292,14 +369,26 @@ def build_dashboard_state(df: pd.DataFrame, generated_at: str | None = None, sca
     }
 
 
-def write_dashboard_state(df: pd.DataFrame, paths: list[Path], generated_at: str | None = None) -> dict[str, Any]:
+def write_dashboard_state(
+    df: pd.DataFrame,
+    paths: list[Path],
+    generated_at: str | None = None,
+    scanner_health: dict[str, Any] | None = None,
+    telegram_summary: dict[str, Any] | None = None,
+    generation=None,
+) -> dict[str, Any]:
 
-    state = build_dashboard_state(df, generated_at=generated_at)
+    state = build_dashboard_state(
+        df,
+        generated_at=generated_at,
+        scanner_health=scanner_health,
+        telegram_summary=telegram_summary,
+        generation=generation,
+    )
     payload = json.dumps(state, indent=2, default=str)
 
     for path in paths:
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(payload, encoding="utf-8")
+        _write_json_atomic(path, payload)
 
     return state

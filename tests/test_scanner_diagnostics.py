@@ -6,8 +6,10 @@ import pandas as pd
 from app.main import (
     _build_candidate_funnel,
     _dispatch_telegram_entry_alerts,
+    _finalize_scan_outputs,
     _json_list,
 )
+from app.runtime.scan_generation import ScanGeneration
 
 
 class ScannerDiagnosticsTests(unittest.TestCase):
@@ -173,6 +175,55 @@ class ScannerDiagnosticsTests(unittest.TestCase):
             "NOT_ACTIONABLE_STATUS"
         )
         self.assertFalse(df_results.loc[1, "Telegram Sent"])
+
+    def test_finalize_scan_outputs_persists_and_queues_cache_jobs(self):
+
+        df_results = pd.DataFrame([
+            {
+                "Symbol": "NVDA",
+                "Action Status": "ENTER_PAPER",
+                "Final Signal": "BULLISH",
+                "Entry": "EMA_PULLBACK",
+                "Candidate Direction": "CALL",
+                "Risk Reward": 2.5,
+                "Option Quote Freshness": "LIVE_QUOTE",
+            }
+        ])
+
+        with patch(
+            "app.main._add_candidate_persistence",
+            side_effect=lambda df, *_args, **_kwargs: df
+        ), patch(
+            "app.main._add_relative_strength_rankings",
+            side_effect=lambda df: df
+        ), patch(
+            "app.main._dispatch_telegram_entry_alerts",
+            return_value={"sent_count": 1}
+        ), patch(
+            "app.main._persist_scan_outputs"
+        ) as persist, patch(
+            "app.main.get_runtime_scheduler"
+        ) as scheduler_factory:
+
+            scheduler = scheduler_factory.return_value
+            _finalize_scan_outputs(
+                df_results=df_results,
+                table=None,
+                generation=ScanGeneration.new("scan"),
+                trading_day="2026-07-18",
+                scan_id="scan",
+                scanner_watchlist=["NVDA"],
+                symbol_runtimes={"NVDA": 1.0},
+                symbol_failures={},
+                scan_runtime_sec=2.0,
+                output_file="scanner_output.xlsx",
+                foreground_timings={},
+                observed_at=pd.Timestamp("2026-07-18T10:00:00")
+            )
+
+        persist.assert_called_once()
+        self.assertEqual(scheduler.submit_normal.call_count, 1)
+        self.assertEqual(scheduler.submit_low.call_count, 3)
 
 
 if __name__ == "__main__":

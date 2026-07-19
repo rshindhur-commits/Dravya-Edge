@@ -1,0 +1,27 @@
+{
+  "generated_at_utc": "2026-07-19T06:47:04.345901+00:00",
+  "performance_rows": 1,
+  "metrics_rows": 0,
+  "recent_timings": [
+    {
+      "observed_at_utc": "2026-07-19T06:47:04.341483+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "scanner",
+      "stage": "decision_engine",
+      "page": NaN,
+      "seconds": 0.1234,
+      "metadata": "{\"symbol\": \"NVDA\"}"
+    }
+  ],
+  "recent_jobs": [],
+  "average_seconds_by_stage": [
+    {
+      "category": "scanner",
+      "stage": "decision_engine",
+      "page": NaN,
+      "average_seconds": 0.1234
+    }
+  ],
+  "average_runtime_by_job": []
+}

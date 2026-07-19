@@ -112,7 +112,8 @@ from app.analytics.scanner_profiler import (
 from app.analytics.candidate_snapshot_writer import (
     append_candidate_snapshots
 )
-from app.background import run_background
+from app.runtime import RuntimeJob, get_runtime_scheduler
+from app.runtime.scan_generation import ScanGeneration
 from app.storage.signal_lifecycle_store import (
     record_signal_lifecycle_events_for_scan
 )
@@ -136,9 +137,22 @@ from app.db.persistence import (
     record_scanner_run_start
 )
 from app.utils.runtime_logging import debug_print
+from app.runtime import append_runtime_performance
 from app.storage.daily_paths import (
     daily_path,
     live_path
+)
+from app.ui.dashboard_state import (
+    write_dashboard_state
+)
+from app.ui.cache.validation_state_builder import (
+    write_validation_state
+)
+from app.ui.cache.replay_state_builder import (
+    write_replay_state
+)
+from app.ui.cache.report_state_builder import (
+    write_report_state
 )
 from app.storage.session_manager import (
     get_scan_id,
@@ -2907,6 +2921,7 @@ def _write_scanner_output_files(df_results, trading_day, output_file):
 
 def _persist_scan_outputs(
     df_results,
+    generation,
     trading_day,
     scan_id,
     health_payload,
@@ -2923,6 +2938,73 @@ def _persist_scan_outputs(
 
     snapshot_result = None
     records = df_results.to_dict("records")
+
+    with profile_timer.stage("Market opportunity audit"):
+
+        audit_result = _append_market_opportunity_audit(
+            df_results,
+            trading_day,
+            scan_id
+        )
+
+    if audit_result:
+
+        print(
+            "[MARKET OPPORTUNITY AUDIT] "
+            f"saved {audit_result['rows']} rows to "
+            f"{audit_result['path']}"
+        )
+
+    with profile_timer.stage("Option liquidity audit"):
+
+        liquidity_audit_result = _append_option_liquidity_audit(
+            df_results,
+            trading_day,
+            scan_id
+        )
+
+    if liquidity_audit_result:
+
+        print(
+            "[OPTION LIQUIDITY AUDIT] "
+            f"saved {liquidity_audit_result['rows']} attempts to "
+            f"{liquidity_audit_result['path']}"
+        )
+
+    with profile_timer.stage("Candidate funnel"):
+
+        funnel_result = _write_candidate_funnel(
+            health_payload.get("candidate_funnel") or {},
+            trading_day,
+            scan_id,
+            health_payload.get("telegram_summary")
+        )
+
+    if funnel_result:
+
+        print(
+            "[CANDIDATE FUNNEL] "
+            f"saved to {funnel_result['path']}"
+        )
+
+    with profile_timer.stage("Dashboard state"):
+
+        dashboard_state = write_dashboard_state(
+            df_results,
+            [
+                live_path("dashboard_state.json"),
+                daily_path(trading_day, "dashboard_state.json")
+            ],
+            generated_at=observed_at.isoformat(),
+            scanner_health=health_payload,
+            telegram_summary=health_payload.get("telegram_summary"),
+            generation=generation
+        )
+
+    print(
+        "[DASHBOARD STATE] "
+        f"wrote scan_id={dashboard_state.get('scan_id')}"
+    )
 
     with profile_timer.stage("Engine Health"):
 
@@ -3029,7 +3111,153 @@ def _persist_scan_outputs(
         )
 
 
-def run_scanner():   
+def _finalize_scan_outputs(
+    df_results,
+    table,
+    generation,
+    trading_day,
+    scan_id,
+    scanner_watchlist,
+    symbol_runtimes,
+    symbol_failures,
+    scan_runtime_sec,
+    output_file,
+    foreground_timings,
+    observed_at
+):
+
+    stage_timer = StageTimer()
+
+    if table is not None:
+
+        console.print(table)
+
+    with stage_timer.stage("Dashboard"):
+
+        df_results = _add_candidate_persistence(
+            df_results,
+            trading_day,
+            scan_id
+        )
+        df_results = _add_relative_strength_rankings(
+            df_results
+        )
+
+    option_freshness = df_results.get("Option Quote Freshness", pd.Series(dtype=object)).astype(str).str.upper()
+    successful_runtimes = [
+        runtime for symbol, runtime in symbol_runtimes.items()
+        if symbol not in symbol_failures and runtime is not None
+    ]
+    average_symbol_runtime = (
+        round(sum(successful_runtimes) / len(successful_runtimes), 2)
+        if successful_runtimes
+        else None
+    )
+    health = EngineHealth(
+        scan_runtime_sec=scan_runtime_sec,
+        scanner_runtime=scan_runtime_sec,
+        worker_count=SCANNER_MAX_WORKERS,
+        polygon_calls=len(scanner_watchlist),
+        polygon_failures=len(symbol_failures),
+        exceptions=len(symbol_failures),
+        average_symbol_runtime=average_symbol_runtime,
+        average_symbol_time=average_symbol_runtime,
+        symbols_completed=len(scanner_watchlist) - len(symbol_failures),
+        symbols_failed=len(symbol_failures),
+        fresh_quotes=int(option_freshness.eq("LIVE_QUOTE").sum()),
+        stale_quotes=int(option_freshness.eq("STALE_QUOTE").sum()),
+        delayed_quotes=int(option_freshness.eq("DELAYED_QUOTE").sum()),
+    )
+    health.health_score = calculate_health_score(health)
+
+    with stage_timer.stage("Telegram"):
+
+        telegram_summary = _dispatch_telegram_entry_alerts(
+            df_results
+        )
+
+    candidate_funnel = _build_candidate_funnel(
+        df_results,
+        telegram_summary
+    )
+    _print_candidate_funnel(
+        candidate_funnel,
+        telegram_summary
+    )
+    timings = dict(foreground_timings or {})
+    timings.update(stage_timer.timings)
+    health_payload = {
+        "timestamp": now_et().isoformat(),
+        "scan_runtime_sec": health.scan_runtime_sec,
+        "health_score": health.health_score,
+        "cache_hit_rate": health.cache_hit_rate,
+        "worker_count": health.worker_count,
+        "polygon_calls": health.polygon_calls,
+        "exceptions": health.exceptions,
+        "symbols_completed": health.symbols_completed,
+        "symbols_failed": health.symbols_failed,
+        "average_symbol_runtime": health.average_symbol_runtime,
+        "candidate_funnel": candidate_funnel,
+        "telegram_summary": telegram_summary,
+    }
+
+    _persist_scan_outputs(
+        df_results.copy(),
+        generation,
+        trading_day,
+        scan_id,
+        health_payload,
+        output_file,
+        timings,
+        observed_at
+    )
+
+    runtime_scheduler = get_runtime_scheduler()
+    runtime_scheduler.submit_normal(
+        RuntimeJob(
+            name="write_validation_state",
+            priority=3,
+            func=write_validation_state,
+            args=(trading_day,),
+            kwargs={"scan_id": scan_id, "generation": generation},
+            cancelable=True,
+            scan_id=scan_id
+        )
+    )
+    runtime_scheduler.submit_low(
+        RuntimeJob(
+            name="write_replay_state",
+            priority=4,
+            func=write_replay_state,
+            args=(trading_day,),
+            kwargs={"scan_id": scan_id, "generation": generation},
+            cancelable=True,
+            scan_id=scan_id
+        )
+    )
+    runtime_scheduler.submit_low(
+        RuntimeJob(
+            name="write_report_state",
+            priority=4,
+            func=write_report_state,
+            args=(trading_day,),
+            kwargs={"scan_id": scan_id, "generation": generation},
+            cancelable=True,
+            scan_id=scan_id
+        )
+    )
+    runtime_scheduler.submit_low(
+        RuntimeJob(
+            name="summarize_telemetry",
+            priority=4,
+            func=summarize_telemetry,
+            cancelable=True,
+            scan_id=scan_id
+        )
+    )
+
+
+def _run_scanner_impl():   
 
     scan_perf_start = time.perf_counter()
     stage_timer = StageTimer()
@@ -3039,18 +3267,29 @@ def run_scanner():
     scan_timestamp = now_et()
     trading_day = get_trading_day(scan_timestamp)
     scan_id = get_scan_id(trading_day, scan_timestamp)
+    generation = ScanGeneration.new(scan_id)
     register_scan(
         trading_day=trading_day,
         scan_id=scan_id,
         scan_timestamp=scan_timestamp
     )
-    run_background(
-        record_scanner_run_start,
-        scan_id,
-        {
-            "trading_day": trading_day,
-            "scan_timestamp": scan_timestamp.strftime("%Y-%m-%d %H:%M:%S")
-        }
+    runtime_scheduler = get_runtime_scheduler()
+    runtime_scheduler.cancel_old_jobs(scan_id)
+    runtime_scheduler.submit_high(
+        RuntimeJob(
+            name="record_scanner_run_start",
+            priority=2,
+            func=record_scanner_run_start,
+            args=(
+                scan_id,
+                {
+                    "trading_day": trading_day,
+                    "scan_timestamp": scan_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                }
+            ),
+            cancelable=False,
+            scan_id=scan_id
+        )
     )
 
     table = Table(
@@ -5773,134 +6012,64 @@ def run_scanner():
 
     df_results = pd.DataFrame(results)
     scan_runtime_sec = round(time.perf_counter() - scan_perf_start, 2)
-    with stage_timer.stage("Dashboard"):
-
-        df_results = _add_candidate_persistence(
-            df_results,
-            trading_day,
-            scan_id
-        )
-        df_results = _add_relative_strength_rankings(
-            df_results
-        )
-        audit_result = _append_market_opportunity_audit(
-            df_results,
-            trading_day,
-            scan_id
-        )
-        liquidity_audit_result = _append_option_liquidity_audit(
-            df_results,
-            trading_day,
-            scan_id
-        )
-
-    if audit_result:
-
-        print(
-            "[MARKET OPPORTUNITY AUDIT] "
-            f"saved {audit_result['rows']} rows to "
-            f"{audit_result['path']}"
-        )
-
-    if liquidity_audit_result:
-
-        print(
-            "[OPTION LIQUIDITY AUDIT] "
-            f"saved {liquidity_audit_result['rows']} attempts to "
-            f"{liquidity_audit_result['path']}"
-        )
-
-    option_freshness = df_results.get("Option Quote Freshness", pd.Series(dtype=object)).astype(str).str.upper()
-    successful_runtimes = [
-        runtime for symbol, runtime in symbol_runtimes.items()
-        if symbol not in symbol_failures and runtime is not None
-    ]
-    average_symbol_runtime = (
-        round(sum(successful_runtimes) / len(successful_runtimes), 2)
-        if successful_runtimes
-        else None
+    append_runtime_performance(
+        category="scanner",
+        stage="run_scanner",
+        seconds=scan_runtime_sec,
+        trading_day=trading_day,
+        scan_id=scan_id,
+        metadata={
+            "symbols": len(scanner_watchlist),
+            "workers": SCANNER_MAX_WORKERS,
+        }
     )
-    health = EngineHealth(
-        scan_runtime_sec=scan_runtime_sec,
-        scanner_runtime=scan_runtime_sec,
-        worker_count=SCANNER_MAX_WORKERS,
-        polygon_calls=len(scanner_watchlist),
-        polygon_failures=len(symbol_failures),
-        exceptions=len(symbol_failures),
-        average_symbol_runtime=average_symbol_runtime,
-        average_symbol_time=average_symbol_runtime,
-        symbols_completed=len(scanner_watchlist) - len(symbol_failures),
-        symbols_failed=len(symbol_failures),
-        fresh_quotes=int(option_freshness.eq("LIVE_QUOTE").sum()),
-        stale_quotes=int(option_freshness.eq("STALE_QUOTE").sum()),
-        delayed_quotes=int(option_freshness.eq("DELAYED_QUOTE").sum()),
-    )
-    health.health_score = calculate_health_score(health)
-
-    with stage_timer.stage("Telegram"):
-
-        telegram_summary = _dispatch_telegram_entry_alerts(
-            df_results
-        )
-
-    candidate_funnel = _build_candidate_funnel(
-        df_results,
-        telegram_summary
-    )
-    _print_candidate_funnel(
-        candidate_funnel,
-        telegram_summary
-    )
-    funnel_result = _write_candidate_funnel(
-        candidate_funnel,
-        trading_day,
-        scan_id,
-        telegram_summary
-    )
-
-    if funnel_result:
-
-        print(
-            "[CANDIDATE FUNNEL] "
-            f"saved to {funnel_result['path']}"
-        )
 
     output_file = (
         settings.scanner_output_file
     )
 
-    run_background(
-        _persist_scan_outputs,
-        df_results.copy(),
-        trading_day,
-        scan_id,
-        {
-            "timestamp": now_et().isoformat(),
-            "scan_runtime_sec": health.scan_runtime_sec,
-            "health_score": health.health_score,
-            "cache_hit_rate": health.cache_hit_rate,
-            "worker_count": health.worker_count,
-            "polygon_calls": health.polygon_calls,
-            "exceptions": health.exceptions,
-            "symbols_completed": health.symbols_completed,
-            "symbols_failed": health.symbols_failed,
-            "average_symbol_runtime": health.average_symbol_runtime,
-            "candidate_funnel": candidate_funnel,
-            "telegram_summary": telegram_summary,
-        },
-        output_file,
-        dict(stage_timer.timings),
-        now_et()
+    runtime_scheduler.submit_high(
+        RuntimeJob(
+            name="finalize_scan_outputs",
+            priority=2,
+            func=_finalize_scan_outputs,
+            args=(
+                df_results.copy(),
+                table,
+                generation,
+                trading_day,
+                scan_id,
+                scanner_watchlist,
+                dict(symbol_runtimes),
+                dict(symbol_failures),
+                scan_runtime_sec,
+                output_file,
+                dict(stage_timer.timings),
+                now_et()
+            ),
+            cancelable=False,
+            scan_id=scan_id
+        )
     )
 
     print(
         "[BACKGROUND] queued scanner persistence "
-        "(DB, snapshots, lifecycle, health, Excel, profile)"
+        "(finalize, DB, snapshots, lifecycle, health, Excel, profile, validation/replay/report cache)"
     )
 
-    console.print(table)
 
-    summarize_telemetry()
+def run_scanner():
+
+    runtime_scheduler = get_runtime_scheduler()
+    runtime_scheduler.set_scanner_running(True)
+
+    try:
+
+        return _run_scanner_impl()
+
+    finally:
+
+        runtime_scheduler.set_scanner_running(False)
 
 
 if __name__ == "__main__":

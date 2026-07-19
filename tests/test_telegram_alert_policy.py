@@ -112,6 +112,58 @@ class TelegramAlertPolicyTests(unittest.TestCase):
         self.assertFalse(result["sent"])
         self.assertEqual(result["reason"], "NOT_HIGH_CONVICTION")
 
+    def test_scanner_alert_queued_mode_returns_queued_without_marking_sent(self):
+
+        with patch.dict(
+            "os.environ",
+            {
+                "TELEGRAM_ALERT_POLICY": "PAPER",
+                "TELEGRAM_ALERTS_ENABLED": "1",
+                "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+                "TELEGRAM_MIN_ENTRY_ALERT_SCORE": "0",
+                "TELEGRAM_DISPATCH_MODE": "QUEUED",
+            },
+            clear=False,
+        ), patch(
+            "app.alerts.telegram_alerts._entry_alert_time_bucket",
+            return_value="MORNING"
+        ), patch(
+            "app.alerts.telegram_alerts._load_alert_state",
+            return_value={}
+        ), patch(
+            "app.alerts.telegram_alerts._entry_alerts_today",
+            return_value=0
+        ), patch(
+            "app.alerts.telegram_alerts._active_entry_alerts",
+            return_value=[]
+        ), patch(
+            "app.alerts.telegram_alerts._entry_alerts_in_bucket",
+            return_value=0
+        ), patch(
+            "app.alerts.telegram_alerts._recent_matching_entry_alert",
+            return_value=False
+        ), patch(
+            "app.alerts.telegram_alerts._recent_closed_symbol_alert",
+            return_value=False
+        ), patch(
+            "app.alerts.telegram_alerts.alert_was_sent",
+            return_value=False
+        ), patch(
+            "app.runtime.telegram_dispatcher.get_runtime_scheduler"
+        ) as scheduler_factory, patch(
+            "app.alerts.telegram_alerts.mark_alert_sent"
+        ) as mark_sent:
+
+            scheduler_factory.return_value.submit_critical.return_value = "job-id"
+            result = maybe_send_scanner_entry_alert(
+                **self._scanner_alert_kwargs()
+            )
+
+        self.assertFalse(result["sent"])
+        self.assertTrue(result["queued"])
+        self.assertEqual(result["reason"], "QUEUED")
+        mark_sent.assert_not_called()
+
     def test_telegram_gate_accepts_enter_paper_candidate(self):
 
         allowed, reason = evaluate_entry_gate(
