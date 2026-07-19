@@ -12,6 +12,8 @@ from app.gates import (
     EntryGateConfig,
     evaluate_entry_gate
 )
+from app.runtime import measure_runtime
+from app.runtime.telegram_dispatcher import dispatch_telegram_message
 from app.utils.json_store import load_json_file, save_json_file
 
 
@@ -453,7 +455,7 @@ def _telegram_attempt_logger(alert_type):
     return decorator
 
 
-def send_telegram_alert(message):
+def _send_telegram_alert_direct(message):
 
     token, chat_id = get_telegram_credentials()
 
@@ -469,12 +471,48 @@ def send_telegram_alert(message):
         "disable_web_page_preview": True
     }
 
-    response = requests.post(
-        url,
-        json=payload,
-        timeout=10
-    )
+    with measure_runtime(
+        "telegram",
+        "send_telegram_alert"
+    ):
+
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=10
+        )
     response.raise_for_status()
+
+
+def send_telegram_alert(message, after_success=None, scan_id=None, dispatch_metadata=None):
+
+    return dispatch_telegram_message(
+        _send_telegram_alert_direct,
+        message,
+        name="send_telegram_alert",
+        scan_id=scan_id,
+        after_success=after_success,
+        dispatch_metadata=dispatch_metadata
+    )
+
+
+def _queued_send_result(result, alert_key):
+
+    if isinstance(result, dict) and result.get("queued"):
+
+        return {
+            "sent": False,
+            "queued": True,
+            "reason": "QUEUED",
+            "alert_key": alert_key,
+            "job_id": result.get("job_id")
+        }
+
+    return {
+        "sent": True,
+        "reason": "SENT",
+        "alert_key": alert_key
+    }
 
 
 def _load_alert_state():
@@ -1075,29 +1113,29 @@ def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
         scanner_context,
         reason=reason
     )
-    send_telegram_alert(message)
-    mark_alert_sent(
-        alert_key,
-        {
-            "symbol": symbol,
-            "option_ticker": option_ticker,
-            "event_type": ENTRY_EVENT_TYPE,
-            "source": "paper_entry",
-            "action_status": action_status,
-            "setup_key": "_".join([
-                str(symbol),
-                str(direction),
-                str(trade.get("entry_type"))
-            ]),
-            "closed": False
+    metadata = {
+        "symbol": symbol,
+        "option_ticker": option_ticker,
+        "event_type": ENTRY_EVENT_TYPE,
+        "source": "paper_entry",
+        "action_status": action_status,
+        "setup_key": "_".join([
+            str(symbol),
+            str(direction),
+            str(trade.get("entry_type"))
+        ]),
+        "closed": False
+    }
+    send_result = send_telegram_alert(
+        message,
+        after_success=lambda _result: mark_alert_sent(alert_key, metadata),
+        dispatch_metadata={
+            "alert_key": alert_key,
+            "metadata": metadata,
         }
     )
 
-    return {
-        "sent": True,
-        "reason": "SENT",
-        "alert_key": alert_key
-    }
+    return _queued_send_result(send_result, alert_key)
 
 
 def build_trade_exit_alert_message(
@@ -1267,41 +1305,45 @@ def maybe_send_trade_exit_alert(
         price_source=price_source
     )
 
-    send_telegram_alert(message)
-    if event_type == "EXIT":
+    def after_success(_result):
 
-        mark_alert_closed(
-            symbol,
-            option_ticker
-        )
-        trade["exit_alert_sent"] = True
-        trade["exit_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+        if event_type == "EXIT":
 
-    if event_type == "PARTIAL_EXIT":
+            mark_alert_closed(
+                symbol,
+                option_ticker
+            )
+            trade["exit_alert_sent"] = True
+            trade["exit_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
 
-        trade["partial_exit_alert_sent"] = True
-        trade["partial_exit_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+        if event_type == "PARTIAL_EXIT":
 
-    mark_alert_sent(
-        alert_key,
-        {
-            "symbol": symbol,
-            "option_ticker": option_ticker,
-            "event_type": event_type,
-            "exit_reason": exit_reason,
-            "outcome": outcome,
-            "current_price": current_price,
-            "expected_underlying_price": expected_underlying_price,
-            "price_source": price_source,
-            "scanner_row_symbol": scanner_row_symbol
+            trade["partial_exit_alert_sent"] = True
+            trade["partial_exit_alert_sent_at"] = datetime.now(timezone.utc).isoformat()
+
+        mark_alert_sent(alert_key, metadata)
+
+    metadata = {
+        "symbol": symbol,
+        "option_ticker": option_ticker,
+        "event_type": event_type,
+        "exit_reason": exit_reason,
+        "outcome": outcome,
+        "current_price": current_price,
+        "expected_underlying_price": expected_underlying_price,
+        "price_source": price_source,
+        "scanner_row_symbol": scanner_row_symbol
+    }
+    send_result = send_telegram_alert(
+        message,
+        after_success=after_success,
+        dispatch_metadata={
+            "alert_key": alert_key,
+            "metadata": metadata,
         }
     )
 
-    return {
-        "sent": True,
-        "reason": "SENT",
-        "alert_key": alert_key
-    }
+    return _queued_send_result(send_result, alert_key)
 
 
 @_telegram_attempt_logger("SCANNER_ENTRY")
@@ -1575,26 +1617,26 @@ def maybe_send_scanner_entry_alert(
         alert_score=alert_score
     )
 
-    send_telegram_alert(message)
-    mark_alert_sent(
-        alert_key,
-        {
-            "symbol": symbol,
-            "option_ticker": option_ticker,
-            "event_type": ENTRY_EVENT_TYPE,
-            "action_status": action_status,
-            "final_signal": final_signal,
-            "setup_key": setup_key,
-            "top_candidate": top_candidate,
-            "time_bucket": time_bucket,
-            "alert_score": alert_score,
-            "instant_alert": instant_alert,
-            "closed": False
+    metadata = {
+        "symbol": symbol,
+        "option_ticker": option_ticker,
+        "event_type": ENTRY_EVENT_TYPE,
+        "action_status": action_status,
+        "final_signal": final_signal,
+        "setup_key": setup_key,
+        "top_candidate": top_candidate,
+        "time_bucket": time_bucket,
+        "alert_score": alert_score,
+        "instant_alert": instant_alert,
+        "closed": False
+    }
+    send_result = send_telegram_alert(
+        message,
+        after_success=lambda _result: mark_alert_sent(alert_key, metadata),
+        dispatch_metadata={
+            "alert_key": alert_key,
+            "metadata": metadata,
         }
     )
 
-    return {
-        "sent": True,
-        "reason": "SENT",
-        "alert_key": alert_key
-    }
+    return _queued_send_result(send_result, alert_key)

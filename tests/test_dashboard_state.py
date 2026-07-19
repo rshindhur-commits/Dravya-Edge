@@ -1,8 +1,10 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import pandas as pd
 
-from app.ui.dashboard_state import build_dashboard_state
+from app.ui.dashboard_state import build_dashboard_state, write_dashboard_state
 
 
 class DashboardStateTests(unittest.TestCase):
@@ -43,6 +45,30 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(state["summary"]["scanned"], 2)
         self.assertEqual(state["summary"]["trades"], 0)
         self.assertEqual(state["top_candidates"][0]["blocked"], "Risk")
+
+    def test_writes_dashboard_state_with_runtime_metadata(self):
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            output = Path(temp_dir) / "dashboard_state.json"
+            state = write_dashboard_state(
+                pd.DataFrame([
+                    {
+                        "Symbol": "NVDA",
+                        "Scan ID": "2026-07-18_100000",
+                        "Final Signal": "BULLISH",
+                        "Action Status": "ENTER_PAPER",
+                    }
+                ]),
+                [output],
+                generated_at="2026-07-18T10:00:00",
+                scanner_health={"health_score": 95},
+                telegram_summary={"sent_count": 1}
+            )
+
+            self.assertTrue(output.exists())
+            self.assertEqual(state["scanner_health"]["health_score"], 95)
+            self.assertEqual(state["telegram_summary"]["sent_count"], 1)
 
 
 if __name__ == "__main__":

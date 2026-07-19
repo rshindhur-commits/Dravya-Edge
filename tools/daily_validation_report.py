@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.analytics.expectancy_report import build_grouped_expectancy_reports
+from app.analytics.trend_capture import summarize_trend_capture
 from app.gates.entry_gate import price_geometry_error
 from app.storage.daily_paths import (
     daily_path,
@@ -1489,6 +1490,8 @@ def render_report(
     lifecycle_review_metrics,
     lifecycle_expiry_metrics,
     missed_opportunity_replay_df,
+    trend_capture_summary,
+    trend_capture_df,
     suggestions,
     archived_files
 ):
@@ -1520,6 +1523,76 @@ def render_report(
     lifecycle_expiry_rows = "".join(
         _metric_row(label, value)
         for label, value in lifecycle_expiry_metrics.items()
+    )
+    trend_capture_rows = "".join(
+        _metric_row(label, value)
+        for label, value in {
+            "Average Trend Capture %": trend_capture_summary.get("average_capture"),
+            "Median Trend Capture %": trend_capture_summary.get("median_capture"),
+            "Average MFE": trend_capture_summary.get("average_mfe"),
+            "Average MAE": trend_capture_summary.get("average_mae"),
+            "Average Left On Table": trend_capture_summary.get("average_left_on_table"),
+            "Best Capture": trend_capture_summary.get("best_capture"),
+            "Worst Capture": trend_capture_summary.get("worst_capture"),
+            "Average Trend Health at Exit": trend_capture_summary.get("average_trend_health"),
+            "Average Bars Remaining After Exit": trend_capture_summary.get("average_bars_remaining"),
+            "Average Delay Gain": trend_capture_summary.get("average_delay_gain"),
+            "Trade Efficiency Score": trend_capture_summary.get("trade_efficiency_score"),
+        }.items()
+    )
+    trend_capture_df = trend_capture_df if trend_capture_df is not None else pd.DataFrame()
+    top_exit_too_early = (
+        trend_capture_df[
+            trend_capture_df.get("Exit Verdict", pd.Series(dtype=object)).astype(str).eq("EXIT_TOO_EARLY")
+        ].head(10)
+        if not trend_capture_df.empty and "Exit Verdict" in trend_capture_df.columns
+        else pd.DataFrame()
+    )
+    trigger_rows = []
+
+    for label, column in [
+        ("EMA", "Triggered EMA"),
+        ("VWAP", "Triggered VWAP"),
+        ("MACD", "Triggered MACD"),
+        ("STOP", "Triggered Stop"),
+        ("TARGET", "Triggered Target"),
+        ("TIME", "Triggered Time Exit"),
+        ("NEAR_CLOSE", "Triggered Near Close"),
+    ]:
+
+        if column not in trend_capture_df.columns or "Trend Capture %" not in trend_capture_df.columns:
+
+            continue
+
+        mask = trend_capture_df[column].astype(str).str.lower().isin(["true", "1", "yes"])
+        subset = trend_capture_df[mask]
+
+        if subset.empty:
+
+            continue
+
+        trigger_rows.append({
+            "Trigger": label,
+            "Count": int(len(subset)),
+            "Avg Capture": round(float(pd.to_numeric(subset["Trend Capture %"], errors="coerce").mean()), 2)
+        })
+
+    trigger_frequency_df = pd.DataFrame(trigger_rows)
+    recommendation_detail = trend_capture_summary.get("engineering_recommendation") or {}
+    recommendation_rows = "".join(
+        _metric_row(label, value)
+        for label, value in {
+            "Priority": recommendation_detail.get("priority"),
+            "Reason": recommendation_detail.get("reason"),
+            "Recommendation": recommendation_detail.get("recommendation"),
+        }.items()
+    )
+    top_excellent_exit = (
+        trend_capture_df[
+            trend_capture_df.get("Exit Verdict", pd.Series(dtype=object)).astype(str).eq("EXCELLENT_EXIT")
+        ].head(10)
+        if not trend_capture_df.empty and "Exit Verdict" in trend_capture_df.columns
+        else pd.DataFrame()
     )
     metric_rows = "".join(
         _metric_row(label, value)
@@ -1627,6 +1700,26 @@ def render_report(
         <h2>Missed Opportunity Replay</h2>
         {_html_table(missed_opportunity_replay_df, "No expired/promoted suggestions found for candle replay.")}
 
+  <h2>Trade Efficiency Analytics</h2>
+  <p>Observational only. These metrics do not influence entries or exits.</p>
+  <table class="metric-table">{trend_capture_rows}</table>
+    <h3>Exit Verdict Distribution</h3>
+    {_html_table(trend_capture_summary.get("exit_verdict_distribution"), "No exit verdict distribution yet.")}
+    <h3>Exit Trigger Frequency</h3>
+    {_html_table(trigger_frequency_df, "No exit trigger frequency yet.")}
+    <h3>Engineering Recommendation</h3>
+    <table class="metric-table">{recommendation_rows}</table>
+    <h3>Top 10 EXIT_TOO_EARLY Trades</h3>
+    {_html_table(top_exit_too_early, "No EXIT_TOO_EARLY trades found.")}
+    <h3>Top 10 EXCELLENT_EXIT Trades</h3>
+    {_html_table(top_excellent_exit, "No EXCELLENT_EXIT trades found.")}
+  <h3>By Setup</h3>
+  {_html_table(trend_capture_summary.get("by_setup"), "No trend capture rows by setup yet.")}
+  <h3>By Regime</h3>
+  {_html_table(trend_capture_summary.get("by_regime"), "No trend capture rows by regime yet.")}
+  <h3>By Exit Reason</h3>
+  {_html_table(trend_capture_summary.get("by_exit_reason"), "No trend capture rows by exit reason yet.")}
+
   <h2>Best Skipped Opportunities</h2>
   {_html_table(skipped_df, "No skipped/block candidate data found.")}
 
@@ -1671,6 +1764,7 @@ def build_report(args):
     candles_df = _read_daily_candles(report_date)
     lifecycle_events_df = _read_csv(daily_path(report_date, "signal_lifecycle_events.csv"))
     lifecycle_transitions_df = _read_csv(daily_path(report_date, "signal_state_transitions.csv"))
+    trend_capture_df = _read_csv(daily_path(report_date, "trend_capture_analysis.csv"))
     data_health, data_health_warnings = build_data_health(
         scanner_df,
         telemetry_df,
@@ -1731,12 +1825,22 @@ def build_report(args):
         suggested_trade_state,
         candles_df
     )
+    trend_capture_summary = summarize_trend_capture(
+        trend_capture_df
+    )
     suggestions = build_rule_suggestions(
         trade_metrics,
         gate_metrics_full,
         replay_df,
         expectancy_reports
     )
+
+    if trend_capture_summary.get("recommendation"):
+
+        suggestions.append(
+            trend_capture_summary["recommendation"]
+        )
+
     archived_files = []
 
     if args.update_daily:
@@ -1791,6 +1895,8 @@ def build_report(args):
             lifecycle_review_metrics,
             lifecycle_expiry_metrics,
             missed_opportunity_replay_df,
+            trend_capture_summary,
+            trend_capture_df,
             suggestions,
             archived_files
         ),

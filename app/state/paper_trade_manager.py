@@ -99,6 +99,36 @@ def _timestamp_for_key(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _parse_datetime(value):
+
+    if not value:
+
+        return None
+
+    if isinstance(value, datetime):
+
+        return value
+
+    try:
+
+        return datetime.fromisoformat(str(value))
+
+    except Exception:
+
+        pass
+
+    try:
+
+        return datetime.strptime(
+            str(value),
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+    except Exception:
+
+        return None
+
+
 def _safe_float(value):
 
     try:
@@ -180,6 +210,113 @@ def _append_paper_trade_event(trade, event_type, exit_price=None):
     except Exception as exc:
 
         print(f"[PAPER EVENT LOG ERROR] {exc}")
+
+
+def _append_trend_capture_for_closed_trade(trade):
+
+    try:
+
+        from app.analytics.trend_capture import (
+            analyze_trend_capture,
+            append_trend_capture_row,
+            build_trend_capture_row
+        )
+        from app.analytics.trade_snapshot import (
+            append_trade_exit_snapshot,
+            build_trade_snapshot
+        )
+        from app.analytics.trend_health import evaluate_trend_health
+        from app.indicators.technical_indicators import compute_indicators
+        from app.indicators.technical_indicators import get_polygon_data
+
+        symbol = trade.get("symbol")
+
+        if not symbol:
+
+            return None
+
+        df_5m = get_polygon_data(
+            symbol,
+            5,
+            "minute",
+            1
+        )
+        df_5m = compute_indicators(
+            df_5m,
+            interval="5m",
+            symbol=symbol
+        )
+        trend_capture = analyze_trend_capture(
+            trade,
+            df_5m
+        )
+        latest_bar = {}
+
+        if df_5m is not None and not df_5m.empty:
+
+            close_time = _parse_datetime(
+                trade.get("closed_at_et")
+                or trade.get("closed_at")
+            )
+
+            try:
+
+                index = df_5m.index
+
+                if close_time is not None:
+
+                    index = index.tz_localize(None) if getattr(index, "tz", None) is not None else index
+                    close_time = close_time.replace(tzinfo=None)
+                    exit_bars = df_5m.loc[index <= close_time]
+                    latest_bar = (
+                        exit_bars.iloc[-1].to_dict()
+                        if not exit_bars.empty
+                        else df_5m.iloc[-1].to_dict()
+                    )
+
+                else:
+
+                    latest_bar = df_5m.iloc[-1].to_dict()
+
+            except Exception:
+
+                latest_bar = df_5m.iloc[-1].to_dict()
+        base_snapshot = build_trade_snapshot(
+            trade,
+            latest_bar,
+            latest_bar,
+            {}
+        )
+        trend_health = evaluate_trend_health(
+            base_snapshot
+        )
+        snapshot = build_trade_snapshot(
+            {
+                **trade,
+                "bars_held": trend_capture.get("bars_held")
+            },
+            latest_bar,
+            latest_bar,
+            trend_health
+        )
+        append_trade_exit_snapshot(
+            trade.get("trading_day", get_trading_day()),
+            snapshot
+        )
+        row = build_trend_capture_row(
+            trade,
+            trend_capture,
+            snapshot
+        )
+        return append_trend_capture_row(
+            trade.get("trading_day", get_trading_day()),
+            row
+        )
+
+    except Exception as exc:
+
+        print(f"[TREND CAPTURE WARNING] {exc}")
+        return None
 
 
 def _paper_trade_result(trade, close_price):
@@ -634,6 +771,7 @@ def close_paper_trade(
         event_type,
         exit_price=close_price
     )
+    _append_trend_capture_for_closed_trade(trade)
     _save_paper_trade_telemetry(trade)
 
     try:
