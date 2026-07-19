@@ -4,12 +4,34 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.ui.cache.report_state_builder import (
+    build_historical_trade_efficiency,
     build_report_state_payload,
     write_report_state,
 )
 
 
 class ReportStateBuilderTests(unittest.TestCase):
+
+    def test_builds_historical_efficiency_from_validation_caches(self):
+
+        history = build_historical_trade_efficiency([
+            {
+                "trading_day": "2026-07-18",
+                "kpis": {"paper": {"win_rate": 50}},
+                "trade_efficiency": {
+                    "summary": {"average_capture": 72, "average_tes": 86, "average_r": 0.84},
+                    "charts": {
+                        "capture_by_setup": [{"Setup": "EMA Pullback", "Average Trend Capture %": 72}],
+                        "capture_by_regime": [{"Market Regime": "TRENDING_BULL", "Average Trend Capture %": 72}],
+                        "exit_verdict": [{"Exit Verdict": "EXCELLENT_EXIT", "Count": 1}],
+                    },
+                },
+            },
+        ])
+
+        self.assertEqual(history["daily"][0]["Capture"], 72)
+        self.assertEqual(history["setup"][0]["Setup"], "EMA Pullback")
+        self.assertEqual(history["exit"][0]["Count"], 1)
 
     def test_builds_ready_report_state_payload(self):
 

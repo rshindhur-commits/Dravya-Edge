@@ -10,6 +10,7 @@ import pandas as pd
 from app.analytics.trend_capture import summarize_trend_capture
 from app.runtime.scan_generation import atomic_write_json, metadata_from_generation
 from app.storage.daily_paths import daily_path, live_path
+from app.ui.dashboard_state import build_today_performance_summary
 
 
 def _read_csv(path: Path):
@@ -153,6 +154,57 @@ def _recommendations(trend_summary, paper_summary, scanner_kpis):
     return recommendations
 
 
+def build_trade_efficiency_state(trend_capture, paper_events=None):
+
+    trend_capture = trend_capture if trend_capture is not None else pd.DataFrame()
+    paper_events = paper_events if paper_events is not None else pd.DataFrame()
+    trend_summary = summarize_trend_capture(trend_capture)
+    today_performance = build_today_performance_summary(paper_events, trend_capture)
+    columns = [
+        "Trade Key", "Symbol", "Direction", "Trend Capture %",
+        "Trade Efficiency Score", "Exit Verdict", "Exit Quality",
+        "Trend Health State", "Left On Table", "Exit Reason", "Bars Held",
+    ]
+    trades = trend_capture[[column for column in columns if column in trend_capture.columns]].copy()
+    trades = trades.rename(columns={
+        "Trade Key": "Trade",
+        "Trend Capture %": "Capture %",
+        "Trade Efficiency Score": "TES",
+        "Trend Health State": "Trend Health",
+    })
+    chart_columns = ["Trade Key", "Trend Capture %", "Trade Efficiency Score", "Left On Table", "Trend Health Score"]
+    chart_rows = trend_capture[[column for column in chart_columns if column in trend_capture.columns]]
+
+    return {
+        "summary": {
+            "average_capture": trend_summary.get("average_capture"),
+            "today_capture": trend_summary.get("average_capture"),
+            "best_capture": trend_summary.get("best_capture"),
+            "worst_capture": trend_summary.get("worst_capture"),
+            "average_tes": today_performance.get("average_tes"),
+            "average_r": today_performance.get("average_r"),
+            "average_left_on_table": trend_summary.get("average_left_on_table"),
+        },
+        "trades": _json_records(trades),
+        "charts": {
+            "capture_histogram": _json_records(chart_rows[[column for column in ["Trade Key", "Trend Capture %"] if column in chart_rows.columns]]),
+            "tes_histogram": _json_records(chart_rows[[column for column in ["Trade Key", "Trade Efficiency Score"] if column in chart_rows.columns]]),
+            "capture_by_setup": _json_records(trend_summary.get("by_setup")),
+            "capture_by_regime": _json_records(trend_summary.get("by_regime")),
+            "exit_verdict": _json_records(trend_summary.get("exit_verdict_distribution")),
+            "opportunity_cost": _json_records(chart_rows[[column for column in ["Trade Key", "Left On Table"] if column in chart_rows.columns]]),
+            "trend_health_scatter": _json_records(chart_rows),
+        },
+        "recommendations": [
+            recommendation for recommendation in [
+                trend_summary.get("engineering_recommendation"),
+                {"priority": "MEDIUM", "reason": "Average capture", "recommendation": trend_summary.get("recommendation")}
+                if trend_summary.get("recommendation") else None,
+            ] if recommendation
+        ],
+    }
+
+
 def build_validation_state_payload(
     report_date: str,
     scanner: pd.DataFrame | None = None,
@@ -169,6 +221,7 @@ def build_validation_state_payload(
     trend_summary = summarize_trend_capture(trend_capture)
     paper = _paper_summary(paper_events)
     scanner_kpis = _scanner_kpis(scanner)
+    trade_efficiency = build_trade_efficiency_state(trend_capture, paper_events)
 
     return {
         "metadata": metadata_from_generation(generation, scan_id=scan_id) or {
@@ -202,6 +255,7 @@ def build_validation_state_payload(
             "by_regime": _json_records(trend_summary.get("by_regime")),
             "by_exit_reason": _json_records(trend_summary.get("by_exit_reason")),
         },
+        "trade_efficiency": trade_efficiency,
         "recommendations": _recommendations(
             trend_summary,
             paper,
@@ -231,5 +285,27 @@ def write_validation_state(report_date: str, scan_id: str | None = None, generat
     for path in paths:
 
         atomic_write_json(path, payload)
+
+    try:
+
+        performance = build_today_performance_summary(
+            paper_events,
+            trend_capture,
+        )
+
+        for dashboard_path in [
+            live_path("dashboard_state.json"),
+            daily_path(report_date, "dashboard_state.json"),
+        ]:
+
+            if dashboard_path.exists():
+
+                dashboard = json.loads(dashboard_path.read_text(encoding="utf-8"))
+                dashboard["today_performance"] = performance
+                atomic_write_json(dashboard_path, dashboard)
+
+    except Exception:
+
+        pass
 
     return payload

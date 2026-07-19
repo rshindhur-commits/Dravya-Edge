@@ -1378,7 +1378,58 @@ def _render_cached_validation_state(state):
             )
 
     _render_cached_recommendations(state.get("recommendations"))
+    _render_trade_efficiency(state.get("trade_efficiency"))
     _render_daily_validation_report_panel()
+
+
+def _render_trade_efficiency(efficiency):
+
+    efficiency = efficiency or {}
+    summary = efficiency.get("summary") or {}
+
+    st.subheader("Trade Efficiency Analytics")
+    _render_compact_card_grid([
+        ("Average Capture", _format_efficiency_pct(summary.get("average_capture"))),
+        ("Today's Capture", _format_efficiency_pct(summary.get("today_capture"))),
+        ("Best Capture", _format_efficiency_pct(summary.get("best_capture"))),
+        ("Worst Capture", _format_efficiency_pct(summary.get("worst_capture"))),
+        ("Average TES", _format_efficiency_number(summary.get("average_tes"))),
+        ("Average R", _format_efficiency_number(summary.get("average_r"))),
+        ("Average Left On Table", _format_efficiency_number(summary.get("average_left_on_table"))),
+    ])
+
+    trades = efficiency.get("trades") or []
+
+    if trades:
+
+        st.markdown("### Trade Efficiency Table")
+        st.dataframe(_display_safe_dataframe(pd.DataFrame(trades)), width="stretch", hide_index=True)
+
+    charts = efficiency.get("charts") or {}
+
+    if charts:
+
+        st.markdown("### Charts")
+
+        for title, key, category, value in [
+            ("Capture %", "capture_histogram", "Trade Key", "Trend Capture %"),
+            ("TES Histogram", "tes_histogram", "Trade Key", "Trade Efficiency Score"),
+            ("Capture by Setup", "capture_by_setup", "Setup", "Average Trend Capture %"),
+            ("Capture by Regime", "capture_by_regime", "Market Regime", "Average Trend Capture %"),
+            ("Exit Verdict", "exit_verdict", "Exit Verdict", "Count"),
+            ("Opportunity Cost", "opportunity_cost", "Trade Key", "Left On Table"),
+            ("Trend Health Scatter", "trend_health_scatter", "Trend Health Score", "Trend Capture %"),
+        ]:
+
+            rows = charts.get(key) or []
+
+            if rows and category in rows[0] and value in rows[0]:
+
+                st.markdown(f"**{title}**")
+                chart = pd.DataFrame(rows).set_index(category)
+                st.bar_chart(chart[[value]])
+
+    _render_cached_recommendations(efficiency.get("recommendations"))
 
 
 def _render_cached_replay_state(state, trading_day):
@@ -1463,6 +1514,52 @@ def _render_cached_report_state(state):
             st.info(error)
 
     _render_daily_validation_report_panel()
+    _render_trade_efficiency_history(state.get("historical_trade_efficiency"))
+
+
+def _render_trade_efficiency_history(history):
+
+    history = history or {}
+    daily = pd.DataFrame(history.get("daily") or [])
+    st.subheader("Trade Efficiency Summary")
+
+    if daily.empty:
+
+        st.info("Trade efficiency history will appear after validation caches are available.")
+        return
+
+    periods = [
+        ("Today", daily.tail(1)),
+        ("Yesterday", daily.iloc[-2:-1]),
+        ("5 Day", daily.tail(5)),
+        ("20 Day", daily.tail(20)),
+    ]
+    cards = []
+
+    for label, window in periods:
+        cards.extend([
+            (f"{label} Capture", _format_efficiency_pct(window["Capture"].mean())),
+            (f"{label} TES", _format_efficiency_number(window["TES"].mean())),
+            (f"{label} Avg R", _format_efficiency_number(window["Average R"].mean())),
+            (f"{label} Win Rate", _format_efficiency_pct(window["Win Rate"].mean())),
+        ])
+
+    _render_compact_card_grid(cards)
+    st.markdown("### Daily Trend Capture %")
+    st.line_chart(daily.set_index("Trading Day")[["Capture", "Rolling Average Capture"]])
+
+    for title, key in [
+        ("Weekly TES", "weekly"), ("Monthly TES", "monthly"),
+        ("Capture by Setup", "setup"), ("Capture by Regime", "regime"),
+        ("Capture by Exit", "exit"), ("Capture by Weekday", "weekday"),
+    ]:
+
+        rows = history.get(key) or []
+
+        if rows:
+
+            st.markdown(f"### {title}")
+            st.dataframe(_display_safe_dataframe(pd.DataFrame(rows)), width="stretch", hide_index=True)
 
 
 def _render_market_coverage_lazy(report_date):
@@ -5787,6 +5884,27 @@ def _render_current_opportunities(state):
     )
 
 
+def _render_today_performance(state):
+
+    performance = state.get("today_performance") or {}
+
+    st.subheader("Today's Performance")
+
+    if not performance.get("completed_trades"):
+
+        st.info("No completed trades yet")
+        return
+
+    _render_compact_card_grid([
+        ("Completed", performance.get("completed_trades", 0)),
+        ("Win Rate", _format_efficiency_pct(performance.get("win_rate"))),
+        ("Avg R", _format_efficiency_number(performance.get("average_r"))),
+        ("Trend Capture", _format_efficiency_pct(performance.get("average_trend_capture"))),
+        ("Avg TES", _format_efficiency_number(performance.get("average_tes"))),
+        ("Left On Table", _format_efficiency_pct(performance.get("left_on_table"))),
+    ])
+
+
 def _render_why_no_trade(state):
 
     st.subheader("Why No Trade Today?")
@@ -5866,6 +5984,7 @@ def _render_trading_page(state, df, refresh_state):
     )
     _render_command_center(state, df, refresh_state)
     _render_current_opportunities(state)
+    _render_today_performance(state)
     _render_why_no_trade(state)
     _render_missed_opportunities(state)
 
@@ -5896,6 +6015,7 @@ def _render_trading_page_from_state(state, refresh_state):
     )
     _render_command_center(state, pd.DataFrame(), refresh_state)
     _render_current_opportunities(state)
+    _render_today_performance(state)
     _render_why_no_trade(state)
     _render_missed_opportunities(state)
 
