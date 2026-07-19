@@ -55,6 +55,8 @@ class ValidationStateBuilderTests(unittest.TestCase):
         self.assertEqual(payload["kpis"]["paper"]["closed_trades"], 1)
         self.assertEqual(payload["kpis"]["trend_capture"]["average_capture"], 60)
         self.assertEqual(payload["trend_capture"]["exit_verdict_distribution"][0]["Exit Verdict"], "NEEDS_REVIEW")
+        self.assertEqual(payload["trade_efficiency"]["summary"]["average_capture"], 60)
+        self.assertEqual(payload["trade_efficiency"]["trades"][0]["Capture %"], 60)
 
     def test_write_validation_state_writes_live_and_daily_json(self):
 

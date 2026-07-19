@@ -4,10 +4,53 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.ui.dashboard_state import build_dashboard_state, write_dashboard_state
+from app.ui.dashboard_state import (
+    build_dashboard_state,
+    build_today_performance_summary,
+    write_dashboard_state,
+)
 
 
 class DashboardStateTests(unittest.TestCase):
+
+    def test_builds_today_performance_from_cached_analytics_frames(self):
+
+        summary = build_today_performance_summary(
+            pd.DataFrame([
+                {
+                    "event_type": "AUTO_EXIT",
+                    "r_multiple": 1.2,
+                    "closed_at": "2026-07-18T10:00:00-04:00",
+                },
+                {
+                    "event_type": "AUTO_EXIT",
+                    "r_multiple": -0.4,
+                    "closed_at": "2026-07-18T10:15:00-04:00",
+                },
+            ]),
+            pd.DataFrame([
+                {
+                    "Trend Capture %": 72.4,
+                    "Trade Efficiency Score": 86,
+                    "Left On Table": 18.5,
+                    "Exit Verdict": "EXCELLENT_EXIT",
+                },
+            ]),
+        )
+
+        self.assertEqual(summary["completed_trades"], 2)
+        self.assertEqual(summary["win_rate"], 50)
+        self.assertEqual(summary["average_r"], 0.4)
+        self.assertEqual(summary["average_trend_capture"], 72.4)
+        self.assertEqual(summary["excellent_exits"], 1)
+        self.assertEqual(summary["last_completed_trade"], "2026-07-18T14:15:00+00:00")
+
+    def test_today_performance_has_no_completion_timestamp_before_first_exit(self):
+
+        summary = build_today_performance_summary()
+
+        self.assertEqual(summary["completed_trades"], 0)
+        self.assertIsNone(summary["last_completed_trade"])
 
     def test_builds_command_center_state_from_scanner_rows(self):
 

@@ -254,6 +254,53 @@ def _summary(rows):
     }
 
 
+def build_today_performance_summary(paper_events=None, trend_capture=None):
+
+    paper_events = paper_events if paper_events is not None else pd.DataFrame()
+    trend_capture = trend_capture if trend_capture is not None else pd.DataFrame()
+    events = paper_events.copy()
+    event_type = events.get("event_type", pd.Series(dtype=object)).astype(str).str.upper()
+    closed = events[event_type.isin(["AUTO_EXIT", "MANUAL_CLOSE", "CLOSE", "CLOSED", "EXIT"])]
+
+    if closed.empty:
+
+        closed = events[events.get("status", pd.Series(dtype=object)).astype(str).str.upper().eq("CLOSED")]
+
+    r_values = pd.to_numeric(closed.get("r_multiple", pd.Series(dtype=object)), errors="coerce").dropna()
+    capture = pd.to_numeric(trend_capture.get("Trend Capture %", pd.Series(dtype=object)), errors="coerce").dropna()
+    tes = pd.to_numeric(trend_capture.get("Trade Efficiency Score", pd.Series(dtype=object)), errors="coerce").dropna()
+    left_on_table = pd.to_numeric(trend_capture.get("Left On Table", pd.Series(dtype=object)), errors="coerce").dropna()
+    verdicts = trend_capture.get("Exit Verdict", pd.Series(dtype=object)).astype(str).str.upper()
+    completed_at = pd.Series(dtype=object)
+
+    for column in ["closed_at_et", "closed_at_utc", "closed_at", "event_timestamp", "timestamp"]:
+
+        if column in closed.columns:
+
+            completed_at = pd.to_datetime(closed[column], errors="coerce", utc=True).dropna()
+
+            if not completed_at.empty:
+
+                break
+
+    last_completed_trade = completed_at.max().isoformat() if not completed_at.empty else None
+
+    return {
+        "completed_trades": int(len(closed)),
+        "last_completed_trade": last_completed_trade,
+        "winning_trades": int((r_values > 0).sum()),
+        "losing_trades": int((r_values < 0).sum()),
+        "win_rate": round(float((r_values > 0).mean() * 100), 1) if not r_values.empty else None,
+        "average_r": round(float(r_values.mean()), 2) if not r_values.empty else None,
+        "average_trend_capture": round(float(capture.mean()), 1) if not capture.empty else None,
+        "best_capture": round(float(capture.max()), 1) if not capture.empty else None,
+        "average_tes": round(float(tes.mean()), 1) if not tes.empty else None,
+        "excellent_exits": int(verdicts.eq("EXCELLENT_EXIT").sum()),
+        "exit_too_early": int(verdicts.eq("EXIT_TOO_EARLY").sum()),
+        "left_on_table": round(float(left_on_table.mean()), 1) if not left_on_table.empty else None,
+    }
+
+
 def _best_by_direction(candidates, direction):
 
     for candidate in candidates:
@@ -327,6 +374,7 @@ def build_dashboard_state(
     scanner_status: str = "LIVE",
     scanner_health: dict[str, Any] | None = None,
     telegram_summary: dict[str, Any] | None = None,
+    today_performance: dict[str, Any] | None = None,
     generation=None,
 ) -> dict[str, Any]:
 
@@ -363,6 +411,7 @@ def build_dashboard_state(
         "best_put": best_put,
         "reason": best.get("blocked") if best else "NO_CANDIDATES",
         "summary": summary,
+        "today_performance": today_performance or build_today_performance_summary(),
         "top_candidates": candidates,
         "blockers": blockers,
         "missed_opportunities": [candidate for candidate in candidates if candidate.get("action") not in {"ENTER", "ENTER_PAPER", "OPENED"}][:5],
@@ -375,6 +424,7 @@ def write_dashboard_state(
     generated_at: str | None = None,
     scanner_health: dict[str, Any] | None = None,
     telegram_summary: dict[str, Any] | None = None,
+    today_performance: dict[str, Any] | None = None,
     generation=None,
 ) -> dict[str, Any]:
 
@@ -383,6 +433,7 @@ def write_dashboard_state(
         generated_at=generated_at,
         scanner_health=scanner_health,
         telegram_summary=telegram_summary,
+        today_performance=today_performance,
         generation=generation,
     )
     payload = json.dumps(state, indent=2, default=str)
