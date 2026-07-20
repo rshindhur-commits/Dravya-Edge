@@ -1,4 +1,5 @@
 from pathlib import Path
+import base64
 import os
 import re
 import sys
@@ -96,6 +97,63 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(
         0,
         str(ROOT_DIR)
+    )
+
+
+def render_app_header():
+
+    logo = ROOT_DIR / "assets" / "logo.png"
+
+    if not logo.exists():
+
+        st.title("Dravya Wallstreet Edge")
+        return
+
+    encoded_logo = base64.b64encode(logo.read_bytes()).decode("ascii")
+
+    st.markdown(
+        f"""
+        <style>
+        .dravya-header {{
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            margin-bottom: 0.8rem;
+        }}
+
+        .dravya-header img {{
+            height: 72px;
+            width: auto;
+            border-radius: 10px;
+        }}
+
+        .dravya-title {{
+            display: flex;
+            flex-direction: column;
+        }}
+
+        .dravya-title h1 {{
+            margin: 0;
+            font-size: 2.2rem;
+            line-height: 1.1;
+        }}
+
+        .dravya-title p {{
+            margin: 0;
+            color: #9aa0a6;
+            font-size: 0.95rem;
+        }}
+        </style>
+
+        <div class="dravya-header">
+            <img src="data:image/png;base64,{encoded_logo}" alt="Dravya Wallstreet Edge logo">
+            <div class="dravya-title">
+                <h1>Dravya Wallstreet Edge</h1>
+                <p>AI Powered Intraday Trading Workstation</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
@@ -8494,7 +8552,7 @@ def main():
 
     _inject_compact_dashboard_css()
 
-    st.title("Dravya Wallstreet Edge")
+    render_app_header()
     st.caption("Trading workstation. Developer diagnostics stay collapsed unless needed.")
 
     refresh_state = _render_auto_refresh_controls()
