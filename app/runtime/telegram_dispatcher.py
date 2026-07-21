@@ -92,6 +92,33 @@ def _audit_record(event, name, scan_id, attempt=None, job_id=None, error=None):
     }
 
 
+def _record_dispatch_db(event, scan_id, dispatch_metadata=None, error=None, result=None):
+    """Best-effort scheduler-only promotion of the dispatcher audit event."""
+    try:
+        from app.db.telegram_dispatch_repository import TelegramDispatchRepository
+
+        metadata = (dispatch_metadata or {}).get("metadata") or dispatch_metadata or {}
+        status = "ATTEMPTED" if event == "ATTEMPT" else "DELIVERED" if event == "SENT" else "FAILED"
+        get_runtime_scheduler().submit_normal(
+            TelegramDispatchRepository().insert,
+            {
+                "scan_id": scan_id,
+                "trade_id": metadata.get("trade_id"),
+                "symbol": metadata.get("symbol"),
+                "message_type": metadata.get("event_type") or metadata.get("message_type") or "UNKNOWN",
+                "decision": metadata.get("decision") or "ELIGIBLE",
+                "attempted": event in {"ATTEMPT", "SENT", "FAILED"},
+                "delivered": event == "SENT",
+                "status": status,
+                "failure_reason": str(error) if error else None,
+                "telegram_message_id": (result or {}).get("telegram_message_id") if isinstance(result, dict) else None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as exc:
+        print(f"[TELEGRAM DISPATCH DB WARNING] {exc}")
+
+
 def dispatch_telegram_message(
     send_func,
     message,
@@ -123,6 +150,7 @@ def dispatch_telegram_message(
                         job_id=job_id_holder.get("job_id")
                     )
                 )
+                _record_dispatch_db("ATTEMPT", scan_id, dispatch_metadata)
 
                 result = send_func(message)
 
@@ -140,6 +168,7 @@ def dispatch_telegram_message(
                         job_id=job_id_holder.get("job_id")
                     )
                 )
+                _record_dispatch_db("SENT", scan_id, dispatch_metadata, result=result)
 
                 return result
 
@@ -164,6 +193,7 @@ def dispatch_telegram_message(
                             error=exc
                         )
                     )
+                    _record_dispatch_db("FAILED", scan_id, dispatch_metadata, error=exc)
 
                     raise
 

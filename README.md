@@ -382,6 +382,7 @@ These keys should be at the root level of Streamlit Secrets. In TOML, keys place
 Current DB-backed tables are intentionally compact historical facts; CSV, JSON, Parquet, and Excel remain the live/debug artifacts and Streamlit reads them first:
 
 - `alert_events`: Telegram entry/exit attempts, sent status, skip/error reason, and dedupe key.
+- `telegram_dispatch`: first-class transport audit for attempted, delivered, and failed Telegram sends, including scan/trade/symbol context, decision, message type, failure reason, and Telegram message ID when supplied by the sender.
 - `paper_trades`: auto/manual paper trade opens and closes, with compact payload context.
 - `scanner_runs`: scanner start/end status, row count, output path, and small run summary.
 - `gate_decisions`: per-symbol action/gate summary for scanner rows.
@@ -395,6 +396,8 @@ Do not store full candle history, option chain snapshots, raw API responses, sca
 
 DB writes are optional audit persistence, not part of the live trading decision path. All promoted-artifact writes run only inside `RuntimeScheduler` jobs: scanner artifacts use a normal-priority job after CSV/JSON/Parquet persistence; immutable entry/exit snapshots are queued only after their corresponding paper-event and snapshot CSV artifacts; candidate outcomes are queued only after **Generate Validation Report** succeeds. Failed DB writes log warnings and must not block Telegram sends, scanner output, paper trade JSON/CSV state, report generation, or dashboard rendering.
 
+Telegram dispatcher ATTEMPT, SENT, and FAILED events continue to append to `data/live/telegram_dispatch_audit.jsonl` and now also queue best-effort `telegram_dispatch` rows through `RuntimeScheduler`. Dispatch database persistence cannot delay or alter message delivery.
+
 Candidate evolution does not have a separate entity. `signal_lifecycle_events.csv` retains each scan observation and now includes score, rank, entry readiness, RR, option quality, trend health, prior rank, rank change, and promotion/demotion reasons. `signal_state_transitions.csv` is also the source for delay attribution (`Rule`, `Scans`, `Minutes`). Telegram quality is objective and derived from candidate outcomes: a Telegram miss is an unsent candidate that became a winner; a false alert is a sent candidate that became a loser.
 
 The cached Validation page renders objective **Telegram Misses**, **False Alerts**, lifecycle-derived **Delay Attribution**, and the daily **Candidate Outcomes** table. These are generated after validation/report processing and do not trigger dashboard-time scanner recomputation.
@@ -404,6 +407,8 @@ The cached Validation page renders objective **Telegram Misses**, **False Alerts
 Use narrow idempotency keys only. `alert_events.dedupe_key` is the safest early unique key because Telegram duplicate protection already uses deterministic alert keys; failed send attempts and later successful retries can update the same audit row. Avoid broad unique constraints such as `UNIQUE(symbol)`, `UNIQUE(symbol, trading_day)`, `UNIQUE(trading_day)`, or `UNIQUE(option_ticker)`, because valid intraday flows can produce multiple scans, blocked decisions, opens, closes, re-entries, and refreshed option observations for the same symbol or contract. Add broader table constraints only through an explicit Neon migration and duplicate-write tests.
 
 `app/db/migrations/001_promote_scanner_artifacts.sql` has been applied to the configured database through `DATABASE_DIRECT_URL`. The application intentionally does not execute schema DDL during a scan. For another environment, apply the migration manually before enabling DB writes, then test connectivity from the workspace root:
+
+`app/db/migrations/002_telegram_dispatch.sql` creates the Telegram dispatch table and has also been applied to the configured database.
 
 ```powershell
 python tools\test_db_connection.py
