@@ -1018,6 +1018,17 @@ def build_paper_entry_alert_message(trade, scanner_context, reason=None):
     ])
 
 
+def build_telegram_rule_evaluations(scanner_context, result, scan_id, symbol, setup=None):
+    from app.gates.rule_evaluation import RuleEvaluation
+
+    result = result or {}
+    reason = result.get("reason")
+    sent = bool(result.get("sent"))
+    return [
+        RuleEvaluation(scan_id, symbol, setup, "Telegram Eligibility", "Telegram", reason, "ELIGIBLE", sent or reason == "ELIGIBLE", not (sent or reason == "ELIGIBLE"), 60)
+    ]
+
+
 @_telegram_attempt_logger("PAPER_ENTRY")
 def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
 

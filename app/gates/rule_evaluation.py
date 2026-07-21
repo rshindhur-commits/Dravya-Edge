@@ -51,3 +51,23 @@ def build_rule_evaluations(row, scan_id, config=None):
     if review is not None:
         evaluations.append(_evaluation(scan_id, row, "Review", "Review", review, "READY", str(review).upper() in {"READY", "PASS", "TRUE"}, 40))
     return evaluations
+
+
+def aggregate_rule_evaluations(*evaluation_groups):
+    """Merge native validator outputs without duplicating a rule per scanner row."""
+    merged = {}
+
+    for group in evaluation_groups:
+
+        for evaluation in group or []:
+
+            key = (
+                evaluation.scan_id,
+                evaluation.symbol,
+                evaluation.setup,
+                evaluation.rule_group,
+                evaluation.rule_name,
+            )
+            merged[key] = evaluation
+
+    return list(merged.values())
