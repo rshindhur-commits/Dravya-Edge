@@ -79,6 +79,16 @@ TREND_CAPTURE_COLUMNS = [
     "Triggered Target",
     "Triggered Time Exit",
     "Triggered Near Close",
+    "Entry Grade",
+    "Exit Grade",
+    "Exit Verdict",
+    "Exit Verdict Reason",
+    "Trend Capture %",
+    "Left On Table",
+    "MFE",
+    "MAE",
+    "Exit Trigger",
+    "Engineering Recommendation",
     "Profit +1 Bar",
     "Profit +2 Bars",
     "Profit +3 Bars",
@@ -523,10 +533,24 @@ def build_trend_capture_row(trade, trend_capture, snapshot=None):
         "Best Profit": exit_delay.get("best_profit"),
         "Delay Recommendation": exit_delay.get("delay_recommendation"),
         "Trade Efficiency Score": None,
+        "Entry Grade": None,
+        "Exit Grade": None,
+        "Exit Verdict Reason": exit_comments(exit_verdict),
+        "MFE": trend_capture.get("mfe"),
+        "MAE": trend_capture.get("mae"),
+        "Exit Trigger": primary_exit,
+        "Engineering Recommendation": None,
     }
     row["Trade Efficiency Score"] = calculate_trade_efficiency_score(
         pd.DataFrame([row])
     )
+
+    if row.get("Trend Capture %") is not None:
+        row["Entry Grade"] = "A" if float(row["Trend Capture %"]) >= 70 else "B" if float(row["Trend Capture %"]) >= 50 else "C"
+        row["Exit Grade"] = "A" if float(row["Trend Capture %"]) >= 70 else "B" if float(row["Trend Capture %"]) >= 50 else "C"
+
+    if row.get("Primary Exit"):
+        row["Exit Trigger"] = row.get("Primary Exit")
 
     return row
 

@@ -642,3 +642,26 @@ def build_entry_gate_diagnostics(
         "result": result,
         "failure": failure,
     }
+
+
+def build_entry_gate_rule_evaluations(row, config: EntryGateConfig, scan_id: str, mode: str = "paper"):
+    """The entry validator's native structured audit output."""
+    from app.gates.rule_evaluation import RuleEvaluation
+
+    diagnostics = build_entry_gate_diagnostics(row, config, mode=mode)
+    symbol = str(_row_get(row, "Symbol", "symbol", default=""))
+    setup_name = _row_get(row, "Entry", "setup", "setup_type")
+
+    def item(name, group, actual, required, passed, priority):
+        return RuleEvaluation(scan_id, symbol, setup_name, name, group, actual, required, bool(passed), not bool(passed), priority)
+
+    evaluations = [
+        item("Setup", "Entry", diagnostics["setup"], diagnostics["min_setup"], diagnostics["setup"] >= diagnostics["min_setup"], 80),
+        item("RR", "Risk", diagnostics["rr"], diagnostics["min_rr"], diagnostics["rr"] >= diagnostics["min_rr"], 90),
+        item("Option Quality", "Option", diagnostics["option_quality"], diagnostics["min_option_quality"], diagnostics["option_quality"] >= diagnostics["min_option_quality"], 80),
+        item("Quote Freshness", "Realtime", diagnostics["quote_freshness"], "LIVE_QUOTE", diagnostics["quote_freshness"] == "LIVE_QUOTE", 80),
+        item("Affordability", "Affordability", diagnostics["affordable"], True, not _bool_false(diagnostics["affordable"]), 70),
+    ]
+    if diagnostics["spread"] is not None:
+        evaluations.append(item("Option Spread", "Option", diagnostics["spread"], diagnostics["max_spread"], diagnostics["spread"] <= diagnostics["max_spread"], 70))
+    return evaluations

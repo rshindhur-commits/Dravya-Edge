@@ -146,7 +146,7 @@ Current scanner performance implementation:
 - `SCANNER_MAX_WORKERS` controls a bounded `ThreadPoolExecutor` for parallel market-data prefetch. Default: `5`.
 - `DYNAMIC_WATCHLIST_ENABLED=false` keeps the static watchlist. When enabled, Polygon snapshot movers are merged after core symbols and before the static fallback list.
 - Foreground scan work still computes strategies, entries, risk, options, paper-trade decisions, Telegram checks, candidate persistence, relative-strength rankings, opportunity audit, and the operator table sequentially.
-- Scanner finish persistence is queued through `run_background()`: engine health, DB gate decisions, candidate snapshots, signal lifecycle rows, Excel/CSV output, scanner-run finish, and scanner stage profile run after the foreground scan has queued the result.
+- Scanner finish persistence is queued through `RuntimeScheduler`: engine health, candidate snapshots, signal lifecycle rows, Excel/CSV output, and scanner stage profiles run after the foreground scan has queued the result. Database promotion is then submitted as a separate normal-priority scheduler job, so database latency cannot hold up file-backed artifacts.
 - Runtime performance instrumentation writes `data/runtime_performance.csv` and `data/daily/YYYY-MM-DD/runtime_performance.csv` for measured scanner, Telegram, dashboard page render, validation report generation, and replay generation stages.
 - `data/live/runtime_state.json` stores lightweight runtime queue state such as scanner/critical/high/normal/low job counts. This is instrumentation only; it does not change trading decisions.
 - `scanner_running` in `runtime_state.json` is now actively set around `run_scanner()` with a safe wrapper, so dashboard diagnostics can distinguish active scans from queued background work.
@@ -154,7 +154,7 @@ Current scanner performance implementation:
 - `data/runtime_metrics.csv` records priority scheduler queue wait, queue runtime, total runtime, status, job name, priority, job id, and scan id for submitted runtime jobs.
 - Production Runtime v2 Phase 2 routes scanner-run start persistence and the post-scan persistence bundle through `RuntimeScheduler` as high-priority jobs. New scans call `cancel_old_jobs(scan_id)` before queueing work so stale cancelable queued jobs can be skipped while critical trade/Telegram paths remain protected.
 - The high-priority scanner persistence job now writes enriched `data/live/dashboard_state.json` and daily `dashboard_state.json` before heavier DB, lifecycle, snapshot, and Excel persistence work. The payload includes command-center candidate state plus `scanner_health` and `telegram_summary` metadata for Trading-page rendering. Its `today_performance` object is refreshed asynchronously after validation analytics finish and contains completed/winning/losing trades, `last_completed_trade`, win rate, average R, average and best trend capture, average TES, exit-verdict counts, and average left on table.
-- Validation cache generation is handled by `app/ui/cache/validation_state_builder.py`. After each scanner run, a normal-priority runtime job writes `data/live/validation_state.json` and `data/daily/YYYY-MM-DD/validation_state.json` with scanner KPIs, paper-trade KPIs, trend-capture metrics, exit verdict breakdowns, and engineering recommendations. The cache also contains `trade_efficiency`, with summary KPIs, trade-level rows, chart-ready series, and recommendations for the Validation page.
+- Validation cache generation is handled by `app/ui/cache/validation_state_builder.py`. After each scanner run, a normal-priority runtime job writes `data/live/validation_state.json` and `data/daily/YYYY-MM-DD/validation_state.json` with scanner KPIs, paper-trade KPIs, trend-capture metrics, exit verdict breakdowns, and engineering recommendations. The cache also contains `trade_efficiency`, a structured `diagnosis`, and `strategy_confidence` for the Validation page.
 - Replay cache generation is handled by `app/ui/cache/replay_state_builder.py`. After each scanner run, a low-priority runtime job writes `data/live/replay_state.json` and `data/daily/YYYY-MM-DD/replay_state.json` summarizing existing offline replay artifacts, coverage, biggest blockers, top misses, stale/missing status, and replay errors without regenerating replay during dashboard refresh.
 - Manual offline replay generation refreshes `replay_state.json` immediately after writing `offline_replay.csv` and `offline_replay_summary.csv`, so the Replay page cache reflects the newly generated replay without waiting for another scanner run.
 - Report cache generation is handled by `app/ui/cache/report_state_builder.py`. After each scanner run, a low-priority runtime job writes `data/live/report_state.json` and `data/daily/YYYY-MM-DD/report_state.json` summarizing existing daily validation report artifacts, status, paths, sizes, modified times, and stale/missing state. Its `historical_trade_efficiency` object aggregates up to 20 existing daily `validation_state.json` caches into daily, weekly, monthly, setup, regime, exit, and weekday trends. Manual report generation refreshes this cache immediately after the report is built.
@@ -177,7 +177,7 @@ Current scanner performance implementation:
 - Scanner finalization now runs as a high-priority non-cancelable runtime job. The foreground scanner queues `finalize_scan_outputs` after raw rows are collected and returns; finalization handles operator table rendering, candidate persistence/ranking, health payload, Telegram dispatch, funnel, persistence, and cache job scheduling.
 - Dashboard paper automation orchestration now lives in `app/runtime/paper_automation.py`, with helper logic in `app/runtime/paper_automation_support.py`. The runtime paper automation path no longer imports `app.dashboard`; dashboard only calls the runtime entry points.
 - Telegram alert DB audit writes and paper-trade DB upserts are also queued through the background worker. Telegram sends, paper JSON state, and paper event CSV writes remain on the foreground path where needed for operator correctness.
-- Gate-decision DB writes use one batched insert per scan through `record_gate_decisions()` instead of one insert per symbol.
+- Gate-decision DB writes remain batched per scan. The same scheduler-only promotion job also batches structured `rule_evaluation` rows, retaining actual versus required values instead of relying on rejected-reason strings later.
 - Signal lifecycle events and transitions use batched CSV appends per scan through `record_signal_lifecycle_events_for_scan()` instead of one file append per candidate.
 - Polygon observability records total API requests, cache hits, cache misses, cache hit %, average API time, and average cache read time from `app/utils/polygon_client.py`.
 - Background queue observability records pending jobs, completed jobs, failed jobs, queue depth, average job time, longest job time, and longest job name from `app/background/background_queue.py`.
@@ -220,12 +220,22 @@ Trade Efficiency Analytics is observational only. It does not influence entries,
 - `app/analytics/trade_snapshot.py` writes `data/daily/YYYY-MM-DD/trade_exit_snapshots.csv` with an exit-time Trade Lifecycle Snapshot: indicators, structure flags, trend health, exit reason, and bars held.
 - `app/analytics/trend_health.py` scores trend health from configurable weights such as EMA alignment, price above EMA9/VWAP, structure, MACD, RSI, and relative volume.
 - Metrics include available move, captured move, Trend Capture %, MFE, MAE, left on table, post-exit continuation, delay analysis, trigger attribution, bars held, setup, regime, exit reason, trend health state, exit quality, exit verdict, and Trade Efficiency Score.
+- Each post-exit trend-capture row also includes an operator-facing trade-doctor layer: `Entry Grade`, `Exit Grade`, `Exit Verdict`, `Exit Verdict Reason`, `Exit Trigger`, and `Engineering Recommendation`. Grades are derived from Trend Capture % (`A` at 70% or higher, `B` at 50–69%, otherwise `C`); the trigger mirrors the primary exit and the engineering recommendation mirrors the delay-analysis recommendation. These fields explain completed paper trades only and never change exit execution.
+- The Validation page renders **Trade Doctor — Today's Diagnosis** from the cache. It gives scanner, entry, exit, replay, missed-winner, and tomorrow findings in engineering form: `Status`, `Reason`, `Evidence`, and `Action`; it does not generate generic performance prose. Entry findings cite each setup's completed-trade count and average Trend Capture %, exit findings cite the `EXIT_TOO_EARLY` verdict count, replay is only marked ready when cached replay output is ready, and missed winners cite the count plus the dominant attribution category.
+- Trade Doctor actions are deliberately conservative. Findings default to `Observe; DO NOT CHANGE RULE.` A setup is called an outperformer or underperformer only when at least two setups have completed-trade evidence; a one-setup day is reported as an observation, not a relative conclusion.
+- The validation cache also contains **Strategy Confidence**, an evidence-strength measure rather than a return forecast. It reports `Evidence` days, `Completed Trades`, `Confidence`, and decision status. No evidence returns 0%; approximately one evidence day / one completed trade returns 18%; 20 evidence days with 80+ completed trades returns approximately 92%. Until both 20 days and 80 completed trades are present, the state remains `OBSERVATIONAL_ONLY` and the UI says `DO NOT CHANGE RULE.` Reaching the threshold permits controlled-validation review only; it never changes strategy rules automatically.
 - The Validation dashboard page shows Average Capture, Today's Capture, Best Capture, and Most Left On Table.
 - Trading shows a cache-only `Today's Performance` row with Completed, Win Rate, Avg R, Trend Capture, Avg TES, and Left On Table. It reads `dashboard_state.today_performance` and does not calculate trade analytics during a page refresh. Before the first completed exit, it displays `No completed trades yet` instead of zero-valued post-trade KPI cards.
 - Validation renders cached Trade Efficiency Analytics: Average/Today/Best/Worst Capture, Average TES, Average R, and Average Left On Table; a per-trade table; capture, TES, setup, regime, exit-verdict, opportunity-cost, and trend-health charts; and recommendations.
 - Reports renders cached Trade Efficiency Summary windows for Today, Yesterday, 5 Day, and 20 Day, plus Daily Trend Capture with rolling average, Weekly TES, Monthly TES, and capture summaries by setup, regime, exit verdict, and weekday.
 - Daily validation reports include Trade Efficiency Analytics and Trade Lifecycle Diagnostics with averages by setup, market regime, exit reason, exit trigger frequency, exit verdict distribution, delay gain, Trade Efficiency Score, and top EXIT_TOO_EARLY / EXCELLENT_EXIT trades.
 - If average Trend Capture % is below 55, the report recommends improving trend management because entries are finding trends but exits are leaving significant profit.
+
+### Missed-Winner Attribution
+
+The Trading Scorecard's **Missed Winners / Loss Attribution** table identifies significant market moves that were not entered or ultimately resolved as winners. For each candidate it shows the setup, move percentage, classified reason, `root_cause`, `blocked_by`, relevant `rule`, observed `threshold`, optional `would_have_passed_if` value, a medium-confidence label, and a recommendation.
+
+Reason categories are `MOMENTUM`, `ENTRY`, `RISK`, `OPTION`, `AFFORDABILITY`, `EXIT`, and `UNKNOWN`. The attribution is generated from persisted daily audit data and is intentionally retrospective: it helps prioritize investigation of gates, quote/liquidity handling, affordability, or exit timing; it does not relax thresholds, create entries, send Telegram alerts, or alter paper/real trade behavior.
 
 ## Offline Decision Replay
 
@@ -367,20 +377,31 @@ DB_CONNECT_TIMEOUT_SECONDS = "10"
 
 These keys should be at the root level of Streamlit Secrets. In TOML, keys placed after `[telegram]` belong to the `telegram` table until another `[section]` starts, so put the root-level database block before `[telegram]`. If you use Streamlit native connections, the app can also fall back to a connection `url` under common names such as `[connections.trading_db]`, `[connections.neon]`, or `[connections.postgres]`. It also supports a `[database]` section with `url`, `direct_url`, and `write_enabled` keys. Root-level keys remain the clearest deployment path.
 
-Current DB-backed tables are intentionally small event/state tables:
+Current DB-backed tables are intentionally compact historical facts; CSV, JSON, Parquet, and Excel remain the live/debug artifacts and Streamlit reads them first:
 
 - `alert_events`: Telegram entry/exit attempts, sent status, skip/error reason, and dedupe key.
 - `paper_trades`: auto/manual paper trade opens and closes, with compact payload context.
 - `scanner_runs`: scanner start/end status, row count, output path, and small run summary.
 - `gate_decisions`: per-symbol action/gate summary for scanner rows.
+- `candidate_snapshot`: normalized scanner candidates promoted after the daily snapshot file has been written.
+- `rule_evaluation`: one structured gate record per scanner row/rule, including actual value, required value, pass/fail, blocked state, and priority. The entry gate emits these objects directly through `build_entry_gate_rule_evaluations()`; Telegram, Paper, and Review observations are normalized into the same batch when their scanner-row fields are available.
+- `trade`: the canonical immutable completed-trade aggregate. Its `entry_facts`, `exit_facts`, and `outcome` payloads retain entry geometry/rules and exit capture/penalty facts without separate mutable peer tables.
+- `event_stream`: the append-only timestamped event backbone. It records `CandidateCreated`, `CandidateStateChanged`, `Promoted`, `Demoted`, `RealtimeReady`, `RuleEvaluated`, `EntryOpened`, and `ExitTriggered`; the file-backed mirror is `data/daily/YYYY-MM-DD/trade_timeline.jsonl`.
+- `candidate_outcome`: post-validation outcome facts derived from the market opportunity audit and replay outcome.
 
 Do not store full candle history, option chain snapshots, raw API responses, scanner Excel blobs, or large CSV payloads in Neon during the free-tier phase.
 
-DB writes are optional audit persistence, not part of the live trading decision path. Failed DB writes should log warnings and must not block Telegram sends, scanner output, paper trade JSON/CSV state, or dashboard rendering.
+DB writes are optional audit persistence, not part of the live trading decision path. All promoted-artifact writes run only inside `RuntimeScheduler` jobs: scanner artifacts use a normal-priority job after CSV/JSON/Parquet persistence; immutable entry/exit snapshots are queued only after their corresponding paper-event and snapshot CSV artifacts; candidate outcomes are queued only after **Generate Validation Report** succeeds. Failed DB writes log warnings and must not block Telegram sends, scanner output, paper trade JSON/CSV state, report generation, or dashboard rendering.
+
+Candidate evolution does not have a separate entity. `signal_lifecycle_events.csv` retains each scan observation and now includes score, rank, entry readiness, RR, option quality, trend health, prior rank, rank change, and promotion/demotion reasons. `signal_state_transitions.csv` is also the source for delay attribution (`Rule`, `Scans`, `Minutes`). Telegram quality is objective and derived from candidate outcomes: a Telegram miss is an unsent candidate that became a winner; a false alert is a sent candidate that became a loser.
+
+The cached Validation page renders objective **Telegram Misses**, **False Alerts**, lifecycle-derived **Delay Attribution**, and the daily **Candidate Outcomes** table. These are generated after validation/report processing and do not trigger dashboard-time scanner recomputation.
+
+`Engineering Recommendation` is not an immutable trade fact. Trend capture retains factual capture, TES, verdict, trigger, and penalty information; reports and Trade Doctor generate current recommendations from those facts each time they run.
 
 Use narrow idempotency keys only. `alert_events.dedupe_key` is the safest early unique key because Telegram duplicate protection already uses deterministic alert keys; failed send attempts and later successful retries can update the same audit row. Avoid broad unique constraints such as `UNIQUE(symbol)`, `UNIQUE(symbol, trading_day)`, `UNIQUE(trading_day)`, or `UNIQUE(option_ticker)`, because valid intraday flows can produce multiple scans, blocked decisions, opens, closes, re-entries, and refreshed option observations for the same symbol or contract. Add broader table constraints only through an explicit Neon migration and duplicate-write tests.
 
-After creating the tables in Neon SQL Editor and setting local `DATABASE_URL`, test connectivity from the workspace root:
+`app/db/migrations/001_promote_scanner_artifacts.sql` has been applied to the configured database through `DATABASE_DIRECT_URL`. The application intentionally does not execute schema DDL during a scan. For another environment, apply the migration manually before enabling DB writes, then test connectivity from the workspace root:
 
 ```powershell
 python tools\test_db_connection.py
@@ -458,6 +479,10 @@ Use `OPTION_CAPITAL_PROFILE=GROWTH_ACCOUNT` as buying power grows, or `OPTION_AF
 Telegram entry and exit alerts are opt-in and use duplicate protection so dashboard/scanner refreshes do not resend the same signal. Keep real bot tokens in local `.streamlit/secrets.toml` or Streamlit Cloud Secrets; do not commit them.
 
 Exit alerts are only allowed for explicitly tracked `PAPER` or `REAL` trades. Legacy scanner-managed `trade_state.json` entries are treated as dashboard state and do not send Telegram exits unless promoted to a confirmed paper/real trade mode. Successful exit alerts mark `exit_alert_sent` on the trade, and deterministic alert keys include symbol, option ticker, open time, and exit reason.
+
+Scanner entry-dispatch results include `Telegram Error Type`, `Telegram Error Reason`, and `Telegram Stage` in addition to eligibility, block reason, sent status, and alert score. Normal evaluations use `ENTRY_EVALUATION`; caught dispatch failures use `ENTRY_DISPATCH` with a normalized `TELEGRAM_ERROR_<EXCEPTION_TYPE>` reason. The **Downloads > Advanced** area exposes `data/live/telegram_dispatch_audit.jsonl` for operational inspection. These fields are audit data only and do not bypass alert-policy, duplicate, cooldown, or rate-limit controls.
+
+Dashboard paper-entry audit rows record the resulting Telegram-entry outcome and `entry_source`, so manual paper entries are traceable alongside automated decisions. The paper trade itself is recorded independently of whether an optional Telegram notification succeeds.
 
 ```toml
 TELEGRAM_ALERTS_ENABLED = "true"
