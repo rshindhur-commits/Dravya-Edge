@@ -1526,6 +1526,36 @@ def _render_cached_validation_state(state):
     _render_validation_diagnosis(state.get("diagnosis"))
     _render_strategy_confidence(state.get("strategy_confidence"))
 
+    telegram_quality = state.get("telegram_quality") or {}
+    _render_compact_card_grid([
+        ("Telegram Misses", telegram_quality.get("misses", 0)),
+        ("False Alerts", telegram_quality.get("false_alerts", 0)),
+    ])
+
+    delay_attribution = state.get("delay_attribution") or []
+
+    if delay_attribution:
+
+        st.markdown("### Delay Attribution")
+        st.dataframe(_display_safe_dataframe(pd.DataFrame(delay_attribution)), width="stretch", hide_index=True)
+
+    candidate_outcomes = state.get("candidate_outcomes") or []
+
+    if candidate_outcomes:
+
+        st.markdown("### Candidate Outcomes")
+        columns = [
+            column for column in [
+                "symbol", "setup", "entered", "became_winner", "became_loser",
+                "telegram_sent", "telegram_miss", "false_alert",
+            ] if column in candidate_outcomes[0]
+        ]
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(candidate_outcomes)[columns]),
+            width="stretch",
+            hide_index=True,
+        )
+
     for title, key in [
         ("Exit Verdict Distribution", "exit_verdict_distribution"),
         ("Trend Capture by Setup", "by_setup"),

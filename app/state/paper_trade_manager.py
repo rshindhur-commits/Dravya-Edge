@@ -312,7 +312,7 @@ def _append_trend_capture_for_closed_trade(trade):
             trade.get("trading_day", get_trading_day()),
             row
         )
-        from app.db.artifact_persistence import persist_exit_snapshot
+        from app.db.artifact_persistence import persist_completed_trade
         from app.runtime import RuntimeJob, get_runtime_scheduler
         from app.trades.exit_snapshot import create_exit_snapshot
         from app.trades.timeline import append_trade_timeline_event
@@ -320,15 +320,15 @@ def _append_trend_capture_for_closed_trade(trade):
         timeline_event = append_trade_timeline_event(
             trade.get("trading_day", get_trading_day()),
             exit_snapshot.trade_id,
-            "EXIT",
+            "ExitTriggered",
             exit_snapshot.exit_time,
             exit_snapshot.to_record(),
         )
         get_runtime_scheduler().submit_normal(RuntimeJob(
-            name="persist_exit_snapshot_db",
+            name="persist_completed_trade_db",
             priority=3,
-            func=persist_exit_snapshot,
-            args=(exit_snapshot.to_record(), timeline_event),
+            func=persist_completed_trade,
+            args=(trade.copy(), exit_snapshot.to_record(), timeline_event),
             cancelable=True,
             scan_id=trade.get("scan_id"),
         ))
@@ -700,7 +700,7 @@ def open_paper_trade(
 
     try:
 
-        from app.db.artifact_persistence import persist_entry_snapshot
+        from app.db.artifact_persistence import persist_timeline_event
         from app.runtime import RuntimeJob, get_runtime_scheduler
         from app.trades.entry_snapshot import create_entry_snapshot
         from app.trades.timeline import append_trade_timeline_event
@@ -709,15 +709,15 @@ def open_paper_trade(
         timeline_event = append_trade_timeline_event(
             trading_day,
             entry_snapshot.trade_id,
-            "ENTRY",
+            "EntryOpened",
             entry_snapshot.entered_at,
             entry_snapshot.to_record(),
         )
         get_runtime_scheduler().submit_normal(RuntimeJob(
-            name="persist_entry_snapshot_db",
+            name="persist_trade_event_db",
             priority=3,
-            func=persist_entry_snapshot,
-            args=(entry_snapshot.to_record(), timeline_event),
+            func=persist_timeline_event,
+            args=(timeline_event,),
             cancelable=True,
             scan_id=trade.get("scan_id"),
         ))

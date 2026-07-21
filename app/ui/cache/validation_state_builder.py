@@ -488,6 +488,9 @@ def build_validation_state_payload(
     scanner = scanner if scanner is not None else pd.DataFrame()
     paper_events = paper_events if paper_events is not None else pd.DataFrame()
     trend_capture = trend_capture if trend_capture is not None else pd.DataFrame()
+    candidate_outcomes = _read_csv(daily_path(report_date, "candidate_outcomes.csv"))
+    from app.analytics.delay_attribution import build_delay_attribution
+    delay_attribution = build_delay_attribution(report_date)
     trend_summary = summarize_trend_capture(trend_capture)
     paper = _paper_summary(paper_events)
     scanner_kpis = _scanner_kpis(scanner)
@@ -533,6 +536,12 @@ def build_validation_state_payload(
             "by_exit_reason": _json_records(trend_summary.get("by_exit_reason")),
         },
         "trade_efficiency": trade_efficiency,
+        "candidate_outcomes": _json_records(candidate_outcomes),
+        "telegram_quality": {
+            "misses": int(candidate_outcomes.get("telegram_miss", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,
+            "false_alerts": int(candidate_outcomes.get("false_alert", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,
+        },
+        "delay_attribution": _json_records(delay_attribution),
         "strategy_confidence": strategy_confidence,
         "recommendations": _recommendations(
             trend_summary,

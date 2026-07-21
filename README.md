@@ -384,10 +384,9 @@ Current DB-backed tables are intentionally compact historical facts; CSV, JSON, 
 - `scanner_runs`: scanner start/end status, row count, output path, and small run summary.
 - `gate_decisions`: per-symbol action/gate summary for scanner rows.
 - `candidate_snapshot`: normalized scanner candidates promoted after the daily snapshot file has been written.
-- `rule_evaluation`: one structured gate record per scanner row/rule, including actual value, required value, pass/fail, blocked state, and priority.
-- `entry_snapshot`: immutable entry-time fact created once after a paper-entry event, including entry context, indicator geometry, diagnostics, and structured rule evaluations.
-- `exit_snapshot`: immutable close-time fact created once after the exit snapshot and trend-capture artifacts, including primary/secondary/ignored exits, capture, TES, best exit, and exit penalty.
-- `trade_timeline_event`: append-only entry/exit timeline events; the file-backed mirror is `data/daily/YYYY-MM-DD/trade_timeline.jsonl`.
+- `rule_evaluation`: one structured gate record per scanner row/rule, including actual value, required value, pass/fail, blocked state, and priority. The entry gate emits these objects directly through `build_entry_gate_rule_evaluations()`; Telegram, Paper, and Review observations are normalized into the same batch when their scanner-row fields are available.
+- `trade`: the canonical immutable completed-trade aggregate. Its `entry_facts`, `exit_facts`, and `outcome` payloads retain entry geometry/rules and exit capture/penalty facts without separate mutable peer tables.
+- `event_stream`: the append-only timestamped event backbone. It records `CandidateCreated`, `CandidateStateChanged`, `Promoted`, `Demoted`, `RealtimeReady`, `RuleEvaluated`, `EntryOpened`, and `ExitTriggered`; the file-backed mirror is `data/daily/YYYY-MM-DD/trade_timeline.jsonl`.
 - `candidate_outcome`: post-validation outcome facts derived from the market opportunity audit and replay outcome.
 
 Do not store full candle history, option chain snapshots, raw API responses, scanner Excel blobs, or large CSV payloads in Neon during the free-tier phase.
@@ -396,9 +395,13 @@ DB writes are optional audit persistence, not part of the live trading decision 
 
 Candidate evolution does not have a separate entity. `signal_lifecycle_events.csv` retains each scan observation and now includes score, rank, entry readiness, RR, option quality, trend health, prior rank, rank change, and promotion/demotion reasons. `signal_state_transitions.csv` is also the source for delay attribution (`Rule`, `Scans`, `Minutes`). Telegram quality is objective and derived from candidate outcomes: a Telegram miss is an unsent candidate that became a winner; a false alert is a sent candidate that became a loser.
 
+The cached Validation page renders objective **Telegram Misses**, **False Alerts**, lifecycle-derived **Delay Attribution**, and the daily **Candidate Outcomes** table. These are generated after validation/report processing and do not trigger dashboard-time scanner recomputation.
+
+`Engineering Recommendation` is not an immutable trade fact. Trend capture retains factual capture, TES, verdict, trigger, and penalty information; reports and Trade Doctor generate current recommendations from those facts each time they run.
+
 Use narrow idempotency keys only. `alert_events.dedupe_key` is the safest early unique key because Telegram duplicate protection already uses deterministic alert keys; failed send attempts and later successful retries can update the same audit row. Avoid broad unique constraints such as `UNIQUE(symbol)`, `UNIQUE(symbol, trading_day)`, `UNIQUE(trading_day)`, or `UNIQUE(option_ticker)`, because valid intraday flows can produce multiple scans, blocked decisions, opens, closes, re-entries, and refreshed option observations for the same symbol or contract. Add broader table constraints only through an explicit Neon migration and duplicate-write tests.
 
-Before enabling promoted-artifact DB writes, run `app/db/migrations/001_promote_scanner_artifacts.sql` manually in Neon SQL Editor using `DATABASE_DIRECT_URL`. The application intentionally does not execute schema DDL during a scan. After applying the migration and setting local `DATABASE_URL`, test connectivity from the workspace root:
+`app/db/migrations/001_promote_scanner_artifacts.sql` has been applied to the configured database through `DATABASE_DIRECT_URL`. The application intentionally does not execute schema DDL during a scan. For another environment, apply the migration manually before enabling DB writes, then test connectivity from the workspace root:
 
 ```powershell
 python tools\test_db_connection.py

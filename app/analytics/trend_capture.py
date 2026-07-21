@@ -539,7 +539,7 @@ def build_trend_capture_row(trade, trend_capture, snapshot=None):
         "MFE": trend_capture.get("mfe"),
         "MAE": trend_capture.get("mae"),
         "Exit Trigger": primary_exit,
-        "Engineering Recommendation": exit_delay.get("delay_recommendation"),
+        "Engineering Recommendation": None,
     }
     row["Trade Efficiency Score"] = calculate_trade_efficiency_score(
         pd.DataFrame([row])
@@ -551,9 +551,6 @@ def build_trend_capture_row(trade, trend_capture, snapshot=None):
 
     if row.get("Primary Exit"):
         row["Exit Trigger"] = row.get("Primary Exit")
-
-    if row.get("Delay Recommendation"):
-        row["Engineering Recommendation"] = row.get("Delay Recommendation")
 
     return row
 

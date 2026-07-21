@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-from app.gates.entry_gate import EntryGateConfig, build_entry_gate_diagnostics
+from app.gates.entry_gate import EntryGateConfig, build_entry_gate_rule_evaluations
 
 
 @dataclass(frozen=True)
@@ -40,23 +40,7 @@ def _evaluation(scan_id, row, name, group, actual, required, passed, priority=10
 def build_rule_evaluations(row, scan_id, config=None):
     """Create a uniform, queryable gate audit from an already-scored scanner row."""
     row = row or {}
-    diagnostics = build_entry_gate_diagnostics(
-        row,
-        config or EntryGateConfig(),
-        mode="paper",
-    )
-    quote = str(diagnostics.get("quote_freshness") or "").upper()
-    affordable = diagnostics.get("affordable")
-    spread = diagnostics.get("spread")
-    evaluations = [
-        _evaluation(scan_id, row, "Setup", "Entry", diagnostics["setup"], diagnostics["min_setup"], diagnostics["setup"] >= diagnostics["min_setup"], 80),
-        _evaluation(scan_id, row, "RR", "Risk", diagnostics["rr"], diagnostics["min_rr"], diagnostics["rr"] >= diagnostics["min_rr"], 90),
-        _evaluation(scan_id, row, "Option Quality", "Option", diagnostics["option_quality"], diagnostics["min_option_quality"], diagnostics["option_quality"] >= diagnostics["min_option_quality"], 80),
-        _evaluation(scan_id, row, "Quote Freshness", "Realtime", quote, "LIVE_QUOTE", quote == "LIVE_QUOTE", 80),
-        _evaluation(scan_id, row, "Affordability", "Affordability", affordable, True, str(affordable).lower() not in {"false", "0", "no"}, 70),
-    ]
-    if spread is not None:
-        evaluations.append(_evaluation(scan_id, row, "Option Spread", "Option", spread, diagnostics["max_spread"], spread <= diagnostics["max_spread"], 70))
+    evaluations = build_entry_gate_rule_evaluations(row, config or EntryGateConfig(), scan_id)
     telegram = row.get("Telegram Eligibility")
     if telegram is not None:
         evaluations.append(_evaluation(scan_id, row, "Telegram", "Telegram", telegram, "ELIGIBLE", str(telegram).upper() in {"ELIGIBLE", "SENT"}, 60))

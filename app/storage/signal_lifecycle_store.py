@@ -492,6 +492,37 @@ def record_signal_lifecycle_events_for_scan(
     )
     _atomic_write_json(STATE_FILE, latest_state)
 
+    try:
+
+        from app.db.artifact_persistence import persist_timeline_event
+        from app.runtime import get_runtime_scheduler
+
+        for event in events:
+
+            event_type = "RealtimeReady" if _bool_value(event.get("realtime_ready")) else "CandidateCreated"
+            get_runtime_scheduler().submit_normal(
+                persist_timeline_event,
+                {
+                    "trade_id": None,
+                    "event_type": event_type,
+                    "occurred_at": event.get("observed_at"),
+                    "payload": event,
+                },
+            )
+
+        for transition in transitions:
+
+            event_type = "Promoted" if (transition.get("rank_change") or 0) > 0 else "Demoted" if (transition.get("rank_change") or 0) < 0 else "CandidateStateChanged"
+            get_runtime_scheduler().submit_normal(
+                persist_timeline_event,
+                {
+                    "trade_id": None,
+                    "event_type": event_type,
+                    "occurred_at": transition.get("state_ended_at"),
+                    "payload": transition,
+                },
+            )
+
     return len(events)
 
 

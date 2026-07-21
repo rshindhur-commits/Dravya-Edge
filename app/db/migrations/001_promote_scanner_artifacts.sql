@@ -16,17 +16,14 @@ CREATE TABLE IF NOT EXISTS rule_evaluation (
  timestamp TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS idx_rule_evaluation_blocked ON rule_evaluation(rule_name,blocked_trade);
 
-CREATE TABLE IF NOT EXISTS entry_snapshot (
+CREATE TABLE IF NOT EXISTS trade (
  trade_id TEXT PRIMARY KEY, scan_id TEXT, trading_day DATE, symbol TEXT, direction TEXT, setup TEXT,
- entered_at TIMESTAMPTZ, payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS exit_snapshot (
- trade_id TEXT PRIMARY KEY REFERENCES entry_snapshot(trade_id), exit_time TIMESTAMPTZ,
- exit_price DOUBLE PRECISION, primary_exit TEXT, payload JSONB NOT NULL,
- created_at TIMESTAMPTZ NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS trade_timeline_event (
- id BIGSERIAL PRIMARY KEY, trade_id TEXT NOT NULL, event_type TEXT NOT NULL,
+ entry_facts JSONB NOT NULL, exit_facts JSONB NOT NULL, outcome JSONB NOT NULL,
+ completed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS event_stream (
+ id BIGSERIAL PRIMARY KEY, trade_id TEXT, event_type TEXT NOT NULL,
  occurred_at TIMESTAMPTZ, payload JSONB NOT NULL);
-CREATE INDEX IF NOT EXISTS idx_trade_timeline_trade_time ON trade_timeline_event(trade_id,occurred_at);
+CREATE INDEX IF NOT EXISTS idx_event_stream_trade_time ON event_stream(trade_id,occurred_at);
 
 CREATE TABLE IF NOT EXISTS candidate_outcome (
  candidate_id TEXT PRIMARY KEY, entered BOOLEAN, profitable BOOLEAN, trend_developed BOOLEAN,

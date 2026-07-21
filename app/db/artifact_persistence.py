@@ -20,6 +20,10 @@ def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output
         for evaluation in build_rule_evaluations(row, scan_id)
     ]
     RuleEvaluationRepository().batch_insert(rule_evaluations)
+    TradeFactRepository().batch_insert_events([
+        {"trade_id": None, "event_type": "RuleEvaluated", "occurred_at": (health_payload or {}).get("timestamp"), "payload": evaluation.to_record()}
+        for evaluation in rule_evaluations
+    ])
     record_gate_decisions(records, run_id=scan_id)
     record_scanner_run_finish(
         scan_id,
@@ -34,13 +38,21 @@ def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output
     )
 
 
-def persist_entry_snapshot(snapshot, timeline_event):
-    repository = TradeFactRepository()
-    repository.insert_entry_snapshot(snapshot)
-    repository.insert_timeline_event(timeline_event)
+def persist_timeline_event(timeline_event):
+    TradeFactRepository().insert_event(timeline_event)
 
 
-def persist_exit_snapshot(snapshot, timeline_event):
+def persist_completed_trade(trade, exit_snapshot, timeline_event):
     repository = TradeFactRepository()
-    repository.insert_exit_snapshot(snapshot)
-    repository.insert_timeline_event(timeline_event)
+    from app.trades.entry_snapshot import create_entry_snapshot
+    entry_snapshot = create_entry_snapshot(trade).to_record()
+    aggregate = {
+        "trade_id": entry_snapshot["trade_id"], "scan_id": entry_snapshot.get("scan_id"),
+        "trading_day": entry_snapshot.get("trading_day"), "symbol": entry_snapshot.get("symbol"),
+        "direction": entry_snapshot.get("direction"), "setup": entry_snapshot.get("setup"),
+        "entry_facts": entry_snapshot, "exit_facts": exit_snapshot,
+        "outcome": {"result": trade.get("outcome"), "r_multiple": trade.get("r_multiple"), "pnl_pct": trade.get("pnl_pct")},
+        "completed_at": exit_snapshot.get("exit_time"),
+    }
+    repository.insert_completed_trade(aggregate)
+    repository.insert_event(timeline_event)
