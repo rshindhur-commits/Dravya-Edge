@@ -181,6 +181,12 @@ class TrendCaptureTests(unittest.TestCase):
         self.assertEqual(row["Exit Quality"], "POOR")
         self.assertEqual(row["Exit Verdict"], "EXIT_TOO_EARLY")
         self.assertTrue(row["Trend Continued"])
+        self.assertEqual(row["Entry Grade"], "C")
+        self.assertEqual(row["Exit Grade"], "C")
+        self.assertEqual(
+            row["Exit Verdict Reason"],
+            "Trend remained strong after exit; review trailing/hold logic.",
+        )
 
     def test_paper_close_hook_appends_trend_capture_row(self):
 

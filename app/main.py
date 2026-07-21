@@ -132,10 +132,9 @@ from app.alerts.telegram_alerts import (
 )
 from app.db.persistence import (
     print_db_status,
-    record_gate_decisions,
-    record_scanner_run_finish,
     record_scanner_run_start
 )
+from app.db.artifact_persistence import persist_scan_artifacts
 from app.utils.runtime_logging import debug_print
 from app.runtime import append_runtime_performance
 from app.storage.daily_paths import (
@@ -2675,7 +2674,10 @@ def _dispatch_telegram_entry_alerts(df_results):
         "Telegram Eligibility",
         "Telegram Block Reason",
         "Telegram Sent",
-        "Telegram Alert Score"
+        "Telegram Alert Score",
+        "Telegram Error Type",
+        "Telegram Error Reason",
+        "Telegram Stage"
     ]:
 
         if column not in df_results.columns:
@@ -2790,6 +2792,9 @@ def _dispatch_telegram_entry_alerts(df_results):
             )
             df_results.at[index, "Telegram Sent"] = sent
             df_results.at[index, "Telegram Alert Score"] = alert_score
+            df_results.at[index, "Telegram Error Type"] = None
+            df_results.at[index, "Telegram Error Reason"] = None
+            df_results.at[index, "Telegram Stage"] = "ENTRY_EVALUATION"
             summary["attempted_count"] += 1
             summary["sent_count"] += int(sent)
             summary["blocked_count"] += int(not sent)
@@ -2805,6 +2810,9 @@ def _dispatch_telegram_entry_alerts(df_results):
 
         except Exception as e:
 
+            error_type = type(e).__name__.upper()
+            error_reason = f"TELEGRAM_ERROR_{error_type}"
+
             print(
                 f"[TELEGRAM ENTRY ALERT ERROR] "
                 f"{row.get('Symbol')}: {e}"
@@ -2812,19 +2820,22 @@ def _dispatch_telegram_entry_alerts(df_results):
             summary["attempted_count"] += 1
             summary["blocked_count"] += 1
             summary["error_count"] += 1
-            summary["reasons"]["ERROR"] = summary["reasons"].get("ERROR", 0) + 1
+            summary["reasons"][error_reason] = summary["reasons"].get(error_reason, 0) + 1
             df_results.at[index, "Telegram Eligibility"] = "ERROR"
-            df_results.at[index, "Telegram Block Reason"] = "ERROR"
+            df_results.at[index, "Telegram Block Reason"] = error_reason
             df_results.at[index, "Telegram Sent"] = False
             df_results.at[index, "Telegram Alert Score"] = alert_score
+            df_results.at[index, "Telegram Error Type"] = error_type
+            df_results.at[index, "Telegram Error Reason"] = error_reason
+            df_results.at[index, "Telegram Stage"] = "ENTRY_DISPATCH"
             summary["alerts"].append({
                 "symbol": row.get("Symbol"),
                 "action_status": row.get("Action Status"),
                 "sent": False,
-                "reason": "ERROR",
+                "reason": error_reason,
                 "alert_score": alert_score,
                 "option_ticker": row.get("Option Ticker"),
-                "error": str(e)
+                "error_type": error_type
             })
 
     return summary
@@ -3022,13 +3033,6 @@ def _persist_scan_outputs(
         f"{health_payload.get('polygon_calls')}"
     )
 
-    with profile_timer.stage("Database gate_decisions"):
-
-        record_gate_decisions(
-            records,
-            run_id=scan_id
-        )
-
     with profile_timer.stage("Candidate snapshot"):
 
         snapshot_result = append_candidate_snapshots(
@@ -3080,21 +3084,6 @@ def _persist_scan_outputs(
         f" {output_file}"
     )
 
-    with profile_timer.stage("Database scanner_run"):
-
-        record_scanner_run_finish(
-            scan_id,
-            status="FINISHED",
-            rows_count=len(df_results),
-            payload={
-                "trading_day": trading_day,
-                "output_file": str(output_file),
-                "snapshot_rows": (
-                    snapshot_result or {}
-                ).get("rows")
-            }
-        )
-
     profile_result = append_scanner_stage_profile(
         trading_day,
         scan_id,
@@ -3109,6 +3098,23 @@ def _persist_scan_outputs(
             f"saved {profile_result['rows']} stages to "
             f"{profile_result['path']}"
         )
+
+    get_runtime_scheduler().submit_normal(
+        RuntimeJob(
+            name="persist_scan_artifacts_db",
+            priority=3,
+            func=persist_scan_artifacts,
+            args=(
+                records,
+                trading_day,
+                scan_id,
+                health_payload,
+                output_file,
+            ),
+            cancelable=True,
+            scan_id=scan_id,
+        )
+    )
 
 
 def _finalize_scan_outputs(

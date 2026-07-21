@@ -127,15 +127,43 @@ def build_loss_attribution(report_date: str, move_threshold_pct: float = 2.0):
     for _, row in missed.iterrows():
 
         reason = _classify_row(row)
+        blocked_reason = row.get("blocked_reason") or row.get("Blocked By") or row.get("Action Reason")
+        rule = None
+        threshold = None
+        would_have_passed_if = None
+
+        if str(blocked_reason or "").upper().startswith("RR"):
+            rule = "RR Threshold"
+            threshold = row.get("Candidate RR") or row.get("Risk Reward")
+            would_have_passed_if = str(threshold or "")
+        elif str(blocked_reason or "").upper().startswith("SETUP"):
+            rule = "Setup Threshold"
+            threshold = row.get("Setup %") or row.get("Setup")
+            would_have_passed_if = str(threshold or "")
+        elif str(blocked_reason or "").upper().startswith("OPTION"):
+            rule = "Option Quality"
+            threshold = row.get("Option Quality Score")
+            would_have_passed_if = str(threshold or "")
+        else:
+            rule = "Gate"
+            threshold = blocked_reason
+            would_have_passed_if = None
+
         records.append({
             "symbol": row.get("symbol"),
             "setup": row.get("setup") or row.get("Entry"),
             "move_pct": row.get("_move_pct"),
             "reason": reason.value,
             "recommendation": RECOMMENDATIONS[reason],
-            "blocked_reason": row.get("blocked_reason") or row.get("Blocked By") or row.get("Action Reason"),
+            "blocked_reason": blocked_reason,
             "action": row.get("action") or row.get("Action Status"),
             "top_candidate": row.get("top_candidate") or row.get("Top Candidate"),
+            "root_cause": blocked_reason,
+            "blocked_by": blocked_reason,
+            "rule": rule,
+            "threshold": threshold,
+            "would_have_passed_if": would_have_passed_if,
+            "confidence": "MEDIUM",
         })
 
     return pd.DataFrame(records)

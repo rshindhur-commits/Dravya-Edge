@@ -76,7 +76,7 @@ from app.storage.auto_paper_decision_store import (
     classify_decision_time,
     update_recent_auto_paper_log
 )
-from app.runtime import measure_runtime
+from app.runtime import get_runtime_scheduler, measure_runtime
 from app.storage.daily_paths import daily_path, get_daily_dir
 from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
 from app.ui.components import kpi_card
@@ -172,6 +172,7 @@ AI_SUMMARY_CACHE_FILE = ROOT_DIR / settings.ai_summary_cache_file
 AUTO_PAPER_DECISION_LOG_FILE = ROOT_DIR / "app" / "state" / "auto_paper_decision_log.json"
 AUTO_PAPER_SETTINGS_FILE = ROOT_DIR / "app" / "state" / "auto_paper_settings.json"
 SUGGESTED_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "suggested_trade_state.json"
+TELEGRAM_DISPATCH_AUDIT_FILE = ROOT_DIR / "data" / "live" / "telegram_dispatch_audit.jsonl"
 
 REFRESH_INTERVALS = {
     "1 min": 1,
@@ -1397,6 +1398,111 @@ def _render_cached_recommendations(recommendations):
     )
 
 
+def _render_validation_diagnosis(diagnosis):
+
+    diagnosis = diagnosis or {}
+
+    if not diagnosis:
+
+        return
+
+    st.markdown("## Trade Doctor")
+    st.caption("Today's Diagnosis — evidence-backed review only. No rule changes are made from this panel.")
+
+    for area in ["scanner", "entry", "exit", "replay", "missed_winners", "tomorrow"]:
+
+        item = diagnosis.get(area) or {}
+        findings = item.get("findings") or []
+
+        if not findings:
+
+            continue
+
+        st.markdown(f"### {area.replace('_', ' ').title()}")
+        st.caption(str(item.get("status", "OBSERVE")).replace("_", " "))
+        rows = [
+            {
+                "Status": finding.get("status", "OBSERVE").replace("_", " "),
+                "Reason": finding.get("reason", "-"),
+                "Evidence": finding.get("evidence", "-"),
+                "Action": finding.get("action", "Observe; DO NOT CHANGE RULE."),
+            }
+            for finding in findings
+        ]
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(rows)),
+            width="stretch",
+            hide_index=True,
+        )
+
+
+def _render_strategy_confidence(confidence):
+
+    confidence = confidence or {}
+
+    if not confidence:
+
+        return
+
+    st.markdown("### Strategy Confidence")
+    st.caption("Evidence strength, not a prediction of future returns.")
+    _render_compact_card_grid([
+        ("Evidence", f"{confidence.get('evidence_days', 0)} Day(s)"),
+        ("Completed Trades", confidence.get("completed_trades", 0)),
+        ("Confidence", f"{confidence.get('confidence_pct', 0)}%"),
+        ("Decision Status", str(confidence.get("level", "INSUFFICIENT_EVIDENCE")).replace("_", " ")),
+    ])
+
+    message = confidence.get("message")
+
+    if message:
+
+        if confidence.get("rule_change_allowed"):
+
+            st.success(message)
+
+        else:
+
+            st.warning(message)
+
+
+def _trade_doctor_display_frame(trades):
+
+    frame = pd.DataFrame(trades).copy()
+
+    if frame.empty:
+
+        return frame
+
+    frame = frame.rename(columns={"Trade Key": "Trade"})
+    columns = [
+        "Trade", "Symbol", "Direction", "Setup", "Entry Grade", "Exit Grade",
+        "Exit Verdict", "Exit Verdict Reason", "Exit Trigger",
+        "Trend Capture %", "Left On Table", "Engineering Recommendation",
+    ]
+
+    return frame[[column for column in columns if column in frame.columns]]
+
+
+def _render_trade_doctor(trades):
+
+    doctor_rows = _trade_doctor_display_frame(trades)
+
+    if doctor_rows.empty:
+
+        return
+
+    st.markdown("### Trade Doctor")
+    st.caption(
+        "Post-exit review only. Grades, verdicts, triggers, and recommendations do not alter trade execution."
+    )
+    st.dataframe(
+        _format_trend_capture_table(doctor_rows),
+        width="stretch",
+        hide_index=True,
+    )
+
+
 def _render_cached_validation_state(state):
 
     st.subheader("Validation")
@@ -1416,6 +1522,9 @@ def _render_cached_validation_state(state):
         ("TES", _format_efficiency_number(trend.get("trade_efficiency_score"))),
     ])
     trend_payload = state.get("trend_capture", {})
+
+    _render_validation_diagnosis(state.get("diagnosis"))
+    _render_strategy_confidence(state.get("strategy_confidence"))
 
     for title, key in [
         ("Exit Verdict Distribution", "exit_verdict_distribution"),
@@ -1462,6 +1571,7 @@ def _render_trade_efficiency(efficiency):
 
         st.markdown("### Trade Efficiency Table")
         st.dataframe(_display_safe_dataframe(pd.DataFrame(trades)), width="stretch", hide_index=True)
+        _render_trade_doctor(trades)
 
     charts = efficiency.get("charts") or {}
 
@@ -2322,6 +2432,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "decision": decision,
         "reason": reason,
         "trade_key": trade.get("trade_key") if trade else None,
+        "entry_source": trade.get("entry_source") if trade else None,
         "top_candidate": row.get("Top Candidate") if row is not None else None,
         "setup_percent": row.get("Setup %") if row is not None else None,
         "rr": row.get("RR") if row is not None else None,
@@ -2681,6 +2792,11 @@ def _render_download_exports():
                 "mime": "application/json"
             },
             {
+                "label": "telegram_dispatch_audit.jsonl",
+                "path": TELEGRAM_DISPATCH_AUDIT_FILE,
+                "mime": "application/x-ndjson"
+            },
+            {
                 "label": "suggested_trade_state.json",
                 "path": SUGGESTED_TRADE_STATE_FILE,
                 "mime": "application/json"
@@ -2752,6 +2868,8 @@ def _generate_daily_validation_report(report_date, finalize_report=True):
             )
         )
         write_report_state(report_date)
+        from app.analytics.candidate_outcomes import write_candidate_outcomes
+        get_runtime_scheduler().submit_normal(write_candidate_outcomes, report_date)
 
         return output_path
 
@@ -3737,10 +3855,29 @@ def _open_paper_trade_from_row(row):
             trade_key=opened_trade.get("trade_key")
         )
 
-    maybe_send_paper_entry_alert(
+    telegram_entry_result = maybe_send_paper_entry_alert(
         opened_trade,
         scanner_context,
         reason="Manual dashboard paper entry"
+    )
+    opened_log_row = row_for_trade.copy()
+    opened_log_row["Paper Trade Opened"] = True
+    opened_log_row["Real Trade Readiness"] = _real_trade_readiness(opened_log_row)
+    opened_log_row["Real Entry Checklist"] = _real_entry_checklist(opened_log_row)
+
+    _record_auto_paper_decision(
+        row_for_trade.get("Symbol"),
+        "TELEGRAM_ENTRY_ALERT",
+        telegram_entry_result.get("reason"),
+        opened_log_row,
+        trade=opened_trade
+    )
+    _record_auto_paper_decision(
+        row_for_trade.get("Symbol"),
+        "OPENED",
+        "Manual dashboard paper entry",
+        opened_log_row,
+        trade=opened_trade
     )
 
 
@@ -7711,6 +7848,8 @@ def _render_trade_efficiency_card():
             width="stretch",
             hide_index=True
         )
+
+    _render_trade_doctor(trend_capture)
 
     st.markdown("### Engineering Recommendation")
 

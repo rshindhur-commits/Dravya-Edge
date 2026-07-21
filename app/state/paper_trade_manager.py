@@ -308,10 +308,31 @@ def _append_trend_capture_for_closed_trade(trade):
             trend_capture,
             snapshot
         )
-        return append_trend_capture_row(
+        output = append_trend_capture_row(
             trade.get("trading_day", get_trading_day()),
             row
         )
+        from app.db.artifact_persistence import persist_exit_snapshot
+        from app.runtime import RuntimeJob, get_runtime_scheduler
+        from app.trades.exit_snapshot import create_exit_snapshot
+        from app.trades.timeline import append_trade_timeline_event
+        exit_snapshot = create_exit_snapshot(trade, row)
+        timeline_event = append_trade_timeline_event(
+            trade.get("trading_day", get_trading_day()),
+            exit_snapshot.trade_id,
+            "EXIT",
+            exit_snapshot.exit_time,
+            exit_snapshot.to_record(),
+        )
+        get_runtime_scheduler().submit_normal(RuntimeJob(
+            name="persist_exit_snapshot_db",
+            priority=3,
+            func=persist_exit_snapshot,
+            args=(exit_snapshot.to_record(), timeline_event),
+            cancelable=True,
+            scan_id=trade.get("scan_id"),
+        ))
+        return output
 
     except Exception as exc:
 
@@ -672,21 +693,38 @@ def open_paper_trade(
     state[trade_key] = trade
     save_paper_trades(state)
 
-    try:
-
-        from app.background import run_background
-        from app.db.persistence import upsert_paper_trade
-
-        run_background(upsert_paper_trade, trade.copy())
-
-    except Exception as exc:
-
-        print(f"[DB PAPER TRADE WARNING] {exc}")
-
     _append_paper_trade_event(
         trade,
         "OPEN"
     )
+
+    try:
+
+        from app.db.artifact_persistence import persist_entry_snapshot
+        from app.runtime import RuntimeJob, get_runtime_scheduler
+        from app.trades.entry_snapshot import create_entry_snapshot
+        from app.trades.timeline import append_trade_timeline_event
+
+        entry_snapshot = create_entry_snapshot(trade)
+        timeline_event = append_trade_timeline_event(
+            trading_day,
+            entry_snapshot.trade_id,
+            "ENTRY",
+            entry_snapshot.entered_at,
+            entry_snapshot.to_record(),
+        )
+        get_runtime_scheduler().submit_normal(RuntimeJob(
+            name="persist_entry_snapshot_db",
+            priority=3,
+            func=persist_entry_snapshot,
+            args=(entry_snapshot.to_record(), timeline_event),
+            cancelable=True,
+            scan_id=trade.get("scan_id"),
+        ))
+
+    except Exception as exc:
+
+        print(f"[ENTRY SNAPSHOT WARNING] {exc}")
 
     return trade
 
@@ -749,17 +787,6 @@ def close_paper_trade(
 
     state[trade_key] = trade
     save_paper_trades(state)
-
-    try:
-
-        from app.background import run_background
-        from app.db.persistence import upsert_paper_trade
-
-        run_background(upsert_paper_trade, trade.copy())
-
-    except Exception as exc:
-
-        print(f"[DB PAPER TRADE WARNING] {exc}")
 
     event_type = (
         "MANUAL_CLOSE"

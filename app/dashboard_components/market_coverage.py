@@ -225,7 +225,9 @@ def render_market_coverage(report_date: str):
 
     else:
 
-        st.dataframe(scorecard.loss_attribution, width="stretch", hide_index=True)
+        display = scorecard.loss_attribution.copy()
+        display = display[[column for column in ["symbol", "setup", "move_pct", "reason", "root_cause", "blocked_by", "rule", "threshold", "would_have_passed_if", "confidence", "recommendation"] if column in display.columns]]
+        st.dataframe(display, width="stretch", hide_index=True)
 
     with st.expander("Market coverage detail", expanded=False):
 

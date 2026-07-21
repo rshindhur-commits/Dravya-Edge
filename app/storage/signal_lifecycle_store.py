@@ -48,6 +48,14 @@ LIFECYCLE_EVENT_FIELDS = [
     "take_profit",
     "market_regime",
     "reference_regime",
+    "score",
+    "candidate_rank",
+    "entry_readiness",
+    "trend_health",
+    "previous_rank",
+    "rank_change",
+    "promotion_reason",
+    "demotion_reason",
     "state_label",
 ]
 
@@ -71,6 +79,11 @@ STATE_TRANSITION_FIELDS = [
     "to_quote_freshness",
     "from_realtime_ready",
     "to_realtime_ready",
+    "previous_rank",
+    "new_rank",
+    "rank_change",
+    "promotion_reason",
+    "demotion_reason",
     "reason",
 ]
 
@@ -283,6 +296,10 @@ def _event_from_row(
         "take_profit": _row_get(row, "take_profit", "Candidate Target Price", "Take Profit"),
         "market_regime": _row_get(row, "market_regime", "Market Regime"),
         "reference_regime": _row_get(row, "reference_regime", "Reference Regime"),
+        "score": _row_get(row, "score", "15m Score"),
+        "candidate_rank": _row_get(row, "candidate_rank", "Candidate Rank"),
+        "entry_readiness": _row_get(row, "entry_readiness", "ENTRY_READINESS"),
+        "trend_health": _row_get(row, "trend_health", "Trend Health State"),
         "state_label": state_label,
     }
 
@@ -294,6 +311,19 @@ def _build_transition(
 ) -> dict[str, Any]:
 
     previous_event = previous.get("last_event") or {}
+    previous_rank = _row_get(previous_event, "candidate_rank", default=None)
+    new_rank = _row_get(event, "candidate_rank", default=None)
+
+    try:
+
+        rank_change = int(previous_rank) - int(new_rank)
+
+    except Exception:
+
+        rank_change = None
+
+    promotion_reason = event.get("action_reason") if rank_change is not None and rank_change > 0 else None
+    demotion_reason = event.get("action_reason") if rank_change is not None and rank_change < 0 else None
     return {
         "trading_day": event["trading_day"],
         "session_id": event["session_id"],
@@ -314,6 +344,11 @@ def _build_transition(
         "to_quote_freshness": event["option_quote_freshness"],
         "from_realtime_ready": previous_event.get("realtime_ready"),
         "to_realtime_ready": event["realtime_ready"],
+        "previous_rank": previous_rank,
+        "new_rank": new_rank,
+        "rank_change": rank_change,
+        "promotion_reason": promotion_reason,
+        "demotion_reason": demotion_reason,
         "reason": reason or event.get("blocked_by") or event.get("realtime_block_reason"),
     }
 
