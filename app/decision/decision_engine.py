@@ -198,3 +198,24 @@ def evaluate_candidate(candidate: dict[str, Any] | None) -> TradeDecision:
         reasons=reasons,
         block_reasons=block_reasons,
     )
+
+
+def build_review_rule_evaluations(candidate, decision, scan_id):
+    from app.gates.rule_evaluation import RuleEvaluation
+
+    decision = decision or TradeDecision("UNKNOWN", 0.0, 0.0, 0.0, 0.0)
+    review_ready = decision.action == ACTION_ENTER_PAPER and not decision.block_reasons
+    return [
+        RuleEvaluation(
+            scan_id,
+            str(_row_get(candidate, "Symbol", "symbol", default="")),
+            _row_get(candidate, "Entry", "setup", "setup_type"),
+            "Review Eligibility",
+            "Review",
+            decision.action,
+            ACTION_ENTER_PAPER,
+            review_ready,
+            not review_ready,
+            40,
+        )
+    ]

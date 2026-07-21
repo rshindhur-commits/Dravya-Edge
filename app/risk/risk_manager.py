@@ -567,3 +567,16 @@ def calculate_risk(df, analysis, entry_setup):
 
         "reasons": reasons
     }
+
+
+def build_risk_rule_evaluations(risk_result, scan_id, symbol, setup=None, min_rr=1.5):
+    """Native structured audit for risk-manager output."""
+    from app.gates.rule_evaluation import RuleEvaluation
+
+    risk_result = risk_result or {}
+    rr = risk_result.get("risk_reward", 0)
+    allowed = bool(risk_result.get("trade_allowed"))
+    return [
+        RuleEvaluation(scan_id, symbol, setup, "RR", "Risk", rr, min_rr, rr >= min_rr, rr < min_rr, 90),
+        RuleEvaluation(scan_id, symbol, setup, "Risk Geometry", "Risk", allowed, True, allowed, not allowed, 85),
+    ]

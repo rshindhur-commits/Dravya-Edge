@@ -523,6 +523,10 @@ def record_signal_lifecycle_events_for_scan(
                 },
             )
 
+    except Exception as exc:
+
+        print(f"[LIFECYCLE EVENT STREAM WARNING] {exc}")
+
     return len(events)
 
 

@@ -392,6 +392,25 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     return True, gate_reason
 
 
+def build_paper_rule_evaluations(row, allowed, reason, scan_id):
+    from app.gates.rule_evaluation import RuleEvaluation
+
+    return [
+        RuleEvaluation(
+            scan_id,
+            str(row.get("Symbol") or ""),
+            row.get("Entry"),
+            "Paper Eligibility",
+            "Paper",
+            reason,
+            "ELIGIBLE",
+            bool(allowed),
+            not bool(allowed),
+            50,
+        )
+    ]
+
+
 def _scanner_block_reason(row):
     for column in ["Option Rejection Reason", "Realtime Block Reason", "Action Reason", "Regime Block Reason", "Event Block Reason", "Blocked By", "Action Status"]:
         value = row.get(column)

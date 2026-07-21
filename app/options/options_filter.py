@@ -388,3 +388,22 @@ def evaluate_option_liquidity(option_data):
 
             "reason": str(e)
         }
+
+
+def build_option_rule_evaluations(option_data, liquidity_result, scan_id, symbol, setup=None):
+    from app.gates.rule_evaluation import RuleEvaluation
+
+    option_data = option_data or {}
+    result = liquidity_result or {}
+    quality = option_data.get("option_quality_score", 0)
+    spread = result.get("spread_pct", option_data.get("spread_pct"))
+    fresh = option_data.get("quote_freshness") == "LIVE_QUOTE"
+    liquid = bool(result.get("liquid"))
+    rules = [
+        RuleEvaluation(scan_id, symbol, setup, "Option Quality", "Option", quality, settings.option_min_quality_score, quality >= settings.option_min_quality_score, quality < settings.option_min_quality_score, 80),
+        RuleEvaluation(scan_id, symbol, setup, "Quote Freshness", "Realtime", option_data.get("quote_freshness"), "LIVE_QUOTE", fresh, not fresh, 80),
+        RuleEvaluation(scan_id, symbol, setup, "Option Liquidity", "Option", result.get("code"), "LIQUID", liquid, not liquid, 75),
+    ]
+    if spread is not None:
+        rules.append(RuleEvaluation(scan_id, symbol, setup, "Option Spread", "Option", spread, settings.option_max_spread_pct, float(spread) <= settings.option_max_spread_pct, float(spread) > settings.option_max_spread_pct, 70))
+    return rules

@@ -143,3 +143,14 @@ def add_affordability_metrics(contract, current_capital=None, config=None):
     contract["affordability_status"] = status
 
     return contract
+
+
+def build_affordability_rule_evaluations(contract, scan_id, symbol, setup=None):
+    from app.gates.rule_evaluation import RuleEvaluation
+
+    contract = contract or {}
+    affordable = bool(contract.get("affordable"))
+    return [
+        RuleEvaluation(scan_id, symbol, setup, "Affordability", "Affordability", contract.get("contract_cost"), contract.get("max_allowed_contract_cost"), affordable, not affordable, 70),
+        RuleEvaluation(scan_id, symbol, setup, "Option Delta", "Affordability", contract.get("delta"), get_affordability_config().get("min_affordable_delta"), contract.get("affordability_status") != "DELTA_TOO_LOW_FOR_AFFORDABLE_TRADE", contract.get("affordability_status") == "DELTA_TOO_LOW_FOR_AFFORDABLE_TRADE", 60),
+    ]
