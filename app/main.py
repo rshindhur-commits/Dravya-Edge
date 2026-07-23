@@ -2698,47 +2698,7 @@ def _dispatch_telegram_entry_alerts(df_results):
             df_results["Action Status"].astype(str).str.upper().eq("ENTER_PAPER").sum()
         )
 
-    rows = []
-
     for index, row in df_results.iterrows():
-
-        option_quality_score = _row_float(
-            row,
-            "Option Quality Score"
-        )
-        option_spread_pct = _row_float(
-            row,
-            "Option Spread %",
-            None
-        )
-        risk_reward = _row_float(
-            row,
-            "Risk Reward"
-        )
-        setup_score = _telegram_setup_score(row)
-        alert_score = calculate_entry_alert_score(
-            setup_score=setup_score,
-            alignment_score=_row_float(row, "Alignment Score"),
-            rs_rank_score=_row_float(row, "RS Rank Score"),
-            option_quality_score=option_quality_score,
-            risk_reward=risk_reward,
-            relative_volume=_row_float(row, "Relative Volume"),
-            option_spread_pct=option_spread_pct
-        )
-        rows.append(
-            (
-                alert_score,
-                setup_score,
-                index,
-                row
-            )
-        )
-
-    for alert_score, setup_score, index, row in sorted(
-        rows,
-        key=lambda item: item[0],
-        reverse=True
-    ):
 
         option_contract = {
             "ticker": row.get("Option Ticker"),
@@ -2779,14 +2739,12 @@ def _dispatch_telegram_entry_alerts(df_results):
                 option_spread_pct=row.get("Option Spread %"),
                 event_blocked=_row_bool(row.get("Event Blocked")),
                 regime_blocked=_row_bool(row.get("Regime Blocked")),
-                setup_score=setup_score,
                 alignment_score=row.get("Alignment Score"),
                 rs_rank_score=row.get("RS Rank Score"),
                 relative_volume=row.get("Relative Volume")
             )
             debug_print(
                 f"[TELEGRAM ENTRY ALERT] {row.get('Symbol')} "
-                f"score={alert_score} "
                 f"sent={telegram_result.get('sent')} "
                 f"reason={telegram_result.get('reason')}"
             )
@@ -2799,7 +2757,7 @@ def _dispatch_telegram_entry_alerts(df_results):
                 else reason
             )
             df_results.at[index, "Telegram Sent"] = sent
-            df_results.at[index, "Telegram Alert Score"] = alert_score
+            df_results.at[index, "Telegram Alert Score"] = None
             df_results.at[index, "Telegram Error Type"] = None
             df_results.at[index, "Telegram Error Reason"] = None
             df_results.at[index, "Telegram Stage"] = "ENTRY_EVALUATION"
@@ -2812,7 +2770,6 @@ def _dispatch_telegram_entry_alerts(df_results):
                 "action_status": row.get("Action Status"),
                 "sent": sent,
                 "reason": reason,
-                "alert_score": alert_score,
                 "option_ticker": row.get("Option Ticker")
             })
 
@@ -2832,7 +2789,7 @@ def _dispatch_telegram_entry_alerts(df_results):
             df_results.at[index, "Telegram Eligibility"] = "ERROR"
             df_results.at[index, "Telegram Block Reason"] = error_reason
             df_results.at[index, "Telegram Sent"] = False
-            df_results.at[index, "Telegram Alert Score"] = alert_score
+            df_results.at[index, "Telegram Alert Score"] = None
             df_results.at[index, "Telegram Error Type"] = error_type
             df_results.at[index, "Telegram Error Reason"] = error_reason
             df_results.at[index, "Telegram Stage"] = "ENTRY_DISPATCH"
@@ -2841,7 +2798,6 @@ def _dispatch_telegram_entry_alerts(df_results):
                 "action_status": row.get("Action Status"),
                 "sent": False,
                 "reason": error_reason,
-                "alert_score": alert_score,
                 "option_ticker": row.get("Option Ticker"),
                 "error_type": error_type
             })
@@ -2968,7 +2924,7 @@ def _persist_scan_outputs(
                 records,
                 trading_day=trading_day,
                 scan_id=scan_id,
-                observed_at=observed_at
+                observed_at=observed_at,
             )
 
         if shadow_result:
@@ -2982,6 +2938,31 @@ def _persist_scan_outputs(
     except Exception as exc:
 
         print(f"[ENTRY/EXIT V2 SHADOW WARNING] {exc}")
+
+    try:
+
+        with profile_timer.stage("Quote attribution"):
+
+            from app.analytics.quote_attribution import write_quote_attribution
+
+            quote_attribution_result = write_quote_attribution(
+                records,
+                trading_day=trading_day,
+                scan_id=scan_id,
+                observed_at=observed_at,
+            )
+
+        if quote_attribution_result:
+
+            print(
+                "[QUOTE ATTRIBUTION] "
+                f"saved {quote_attribution_result['rows']} rows to "
+                f"{quote_attribution_result['path']}"
+            )
+
+    except Exception as exc:
+
+        print(f"[QUOTE ATTRIBUTION WARNING] {exc}")
 
     with profile_timer.stage("Market opportunity audit"):
 
@@ -3103,6 +3084,46 @@ def _persist_scan_outputs(
             f"saved {snapshot_result['rows']} rows to "
             f"{snapshot_result['path']}"
         )
+
+    try:
+
+        with profile_timer.stage("Candidate evidence"):
+
+            from app.analytics.candidate_evidence import write_candidate_evidence
+
+            evidence_result = write_candidate_evidence(trading_day)
+
+        if evidence_result:
+
+            print(
+                "[CANDIDATE EVIDENCE] "
+                f"saved {evidence_result['rows']} rows to "
+                f"{evidence_result['path']}"
+            )
+
+    except Exception as exc:
+
+        print(f"[CANDIDATE EVIDENCE WARNING] {exc}")
+
+    try:
+
+        with profile_timer.stage("Candidate intelligence"):
+
+            from app.analytics.candidate_intelligence import write_candidate_intelligence
+
+            intelligence_result = write_candidate_intelligence(trading_day)
+
+        if intelligence_result:
+
+            print(
+                "[CANDIDATE INTELLIGENCE] "
+                f"saved {intelligence_result['rows']} rows to "
+                f"{intelligence_result['path']}"
+            )
+
+    except Exception as exc:
+
+        print(f"[CANDIDATE INTELLIGENCE WARNING] {exc}")
 
     with profile_timer.stage("Excel scanner_output"):
 
@@ -5490,6 +5511,18 @@ def _run_scanner_impl():
                     else None
                 ),
 
+                "Option Quote Timestamp Field": (
+                    option_recommendation.get("quote_timestamp_field")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Option Quote Checked At": (
+                    option_recommendation.get("quote_checked_at_utc")
+                    if option_recommendation
+                    else None
+                ),
+
                 "Option Spread %": option_spread_pct,
 
                 "Option Volume": (
@@ -5566,6 +5599,24 @@ def _run_scanner_impl():
 
                 "Option Quote Age Minutes": (
                     option_recommendation.get("quote_age_minutes")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Option Quote Age Seconds": (
+                    option_recommendation.get("quote_age_seconds")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Option Quote Allowed Age Seconds": (
+                    option_recommendation.get("quote_allowed_age_seconds")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Option Quote Freshness Reason": (
+                    option_recommendation.get("quote_freshness_reason")
                     if option_recommendation
                     else None
                 ),
@@ -5984,6 +6035,15 @@ def _run_scanner_impl():
                                 option_recommendation[
                                     "quote_source"
                                 ]
+                                if option_recommendation
+                                else None
+                            ),
+
+                        "option_quote_timestamp_field":
+                            (
+                                option_recommendation.get(
+                                    "quote_timestamp_field"
+                                )
                                 if option_recommendation
                                 else None
                             ),

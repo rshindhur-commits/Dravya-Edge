@@ -388,7 +388,7 @@ def promote_suggestion_to_paper_trade(
 
             continue
 
-        if current_status in PROMOTABLE_STATUSES:
+        if current_status != "CLOSED":
 
             suggestion["status"] = "PROMOTED_TO_PAPER"
             suggestion["validity_reason"] = "promoted to paper trade"

@@ -77,6 +77,7 @@ class ValidationStateBuilderTests(unittest.TestCase):
         self.assertEqual(payload["v2_learning"]["summary"]["Completed learning records"], 0)
         self.assertEqual(payload["decision_analysis"]["summary"]["Scanned"], 2)
         self.assertEqual(payload["decision_analysis"]["summary"]["Review"], 1)
+        self.assertIn("candidate_intelligence", payload)
 
     def test_strategy_confidence_requires_sample_and_time_evidence(self):
 

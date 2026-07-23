@@ -26,6 +26,43 @@ The app now has a first-pass research layer for validating edge quality before a
 
 The backtesting framework is intentionally stock-first. It validates whether the underlying setup hit target before stop using historical candles; historical option quote replay and option P/L approximation are later steps.
 
+## Candidate Evidence Model
+
+`app/analytics/candidate_evidence.py` materializes one daily row per stable candidate identity: `trading_day + symbol + direction + setup`. It consolidates repeated scan observations with suggestion status, paper-trade status, replay outcome, target/stop-first flags, winner/missed-winner labels, option quality, trend health, trend capture, Trade Efficiency Score (TES), quote freshness, and engineering root cause.
+
+Each scan refreshes `data/daily/YYYY-MM-DD/candidate_evidence.parquet` when Parquet support is available and always writes `candidate_evidence.csv`. The same records upsert into Postgres table `candidate_evidence` through migrations `004_candidate_evidence.sql` and `006_candidate_intelligence_dimensions.sql`, with core analysis fields as columns and the full record in `payload` JSONB.
+
+## Candidate Intelligence
+
+`app/analytics/candidate_intelligence.py` is a read-only research layer built from the master evidence dataset. A **Good Candidate** requires setup score $\ge 70$, RR $\ge 1.8$, option quality $\ge 80$, and `HEALTHY` or `STRONG` trend health. It writes the enriched daily rows to `candidate_intelligence.csv` and a summary to `candidate_intelligence_summary.json`.
+
+The Validation page and Daily Validation Report show:
+
+- Good Candidate totals: opened, skipped, blocked, correct skips/blocks, missed winners, and investigation count.
+- High Quality Blocked Candidates with reason, replay outcome, and verdict.
+- Candidate Outcome Matrix: `OPENED_WON`, `OPENED_LOST`, `CORRECT_SKIP`, `MISSED_WINNER`, or `NEUTRAL`.
+- Blocked Missed-Winner Attribution grouped by reason and type.
+- Investigation Queue: high-RR, strong-setup non-entries and high-quality opened losses.
+
+Missed winners are classified as `OPERATIONAL_MISS`, `DATA_QUALITY_MISS`, `RISK_MISS`, or `INTENTIONAL_SKIP`. These classifications direct investigation; they never alter scanner thresholds, paper entries, or real trading automatically.
+
+Existing dashboards remain derived views during the transition. They should migrate to this dataset rather than become new data sources. Example SQL:
+
+```sql
+SELECT setup, COUNT(*) AS candidates, COUNT(*) FILTER (WHERE winner) AS winners
+FROM candidate_evidence
+WHERE rr > 2
+	AND quote_freshness = 'STALE_QUOTE'
+GROUP BY setup;
+```
+
+```sql
+SELECT top_candidate, AVG(setup_score) AS avg_setup_score,
+			 AVG(CASE WHEN winner THEN 1.0 ELSE 0.0 END) AS winner_rate
+FROM candidate_evidence
+GROUP BY top_candidate;
+```
+
 ## Calibration Phase Changes
 
 The project is now in a calibration phase: avoid adding new indicators or broad threshold loosening until more paper sessions are reviewed. Recent code changes are intentionally targeted to behavior observed during the first six-day validation sample:
@@ -93,7 +130,7 @@ With `--archive`, it also copies the available daily inputs into `daily_reviews/
 - `app/state/auto_paper_decision_log.json`
 - `app/state/suggested_trade_state.json`
 
-The report summarizes daily paper-trade R, opened trades, auto-paper open/block/skip counts, top block reasons, best skipped opportunities, replay outcome by setup, rolling expectancy tables, and rule-change suggestions.
+The report summarizes daily paper-trade R, opened trades, auto-paper open/block/skip counts, top block reasons, best skipped opportunities, replay outcome by setup, rolling expectancy tables, and rule-change suggestions. Its Data Quality section identifies the authoritative opened-trade count source (`paper_trade_events`, `auto_paper_decision_log`, or `paper_trade_state`) and displays the count from every source so mismatches remain visible. The State And Lifecycle Reconciliation section separately counts `paper_trade_state`, legacy `trade_state`, suggestion statuses, lifecycle observations, and lifecycle transitions, and emits explicit mismatch warnings.
 
 Auto-paper decisions are stored in two places with different purposes:
 
@@ -204,7 +241,7 @@ Current scanner performance implementation:
 - Dashboard paper automation orchestration now lives in `app/runtime/paper_automation.py`, with helper logic in `app/runtime/paper_automation_support.py`. The runtime paper automation path no longer imports `app.dashboard`; dashboard only calls the runtime entry points.
 - Telegram alert DB audit writes and paper-trade DB upserts are also queued through the background worker. Telegram sends, paper JSON state, and paper event CSV writes remain on the foreground path where needed for operator correctness.
 - Gate-decision DB writes remain batched per scan. The same scheduler-only promotion job also batches structured `rule_evaluation` rows, retaining actual versus required values instead of relying on rejected-reason strings later.
-- **RuleEvaluation framework:** native emitters now exist at the Entry, Risk, Option Liquidity, Affordability, Telegram, Paper Automation, and Review decision boundaries. Every emitted record has `scan_id`, `symbol`, `setup`, `rule_name`, `rule_group`, `actual_value`, `required_value`, `passed`, `blocked_trade`, and `priority`. `aggregate_rule_evaluations()` merges native lists and deduplicates by scan, symbol, setup, rule group, and rule name before persistence. Current coverage includes Setup, RR, Risk Geometry, Option Quality/Spread/Liquidity, Quote Freshness, Affordability, Option Delta, Telegram Eligibility, Paper Eligibility, and Review Eligibility. Native-emitter and aggregation coverage lives in `tests/test_native_rule_emitters.py`.
+- **RuleEvaluation framework:** native emitters now exist at the Entry, Risk, Option Liquidity, Affordability, Telegram, Paper Automation, and Review decision boundaries. Every emitted record has `scan_id`, `symbol`, `setup`, `rule_name`, `rule_group`, `actual_value`, `required_value`, `passed`, `blocked_trade`, `priority`, and `evaluation_phase`. `ENTRY` is the default; scanner artifacts also emit `ACTIVE` for ongoing trade management, `EXIT` for live exit signals, and `REPLAY` for projection replay outcomes. `aggregate_rule_evaluations()` deduplicates by scan, symbol, setup, phase, rule group, and rule name before persistence. Migration `003_rule_evaluation_phase.sql` adds the persisted column.
 - Signal lifecycle events and transitions use batched CSV appends per scan through `record_signal_lifecycle_events_for_scan()` instead of one file append per candidate.
 - Lifecycle CSV/state writes are authoritative. The optional event-stream submission is wrapped in a best-effort handler: if scheduling or DB event persistence fails, it logs `[LIFECYCLE EVENT STREAM WARNING]` and does not interrupt suggested-trade synchronization, lifecycle CSV output, or scanner completion.
 - Polygon observability records total API requests, cache hits, cache misses, cache hit %, average API time, and average cache read time from `app/utils/polygon_client.py`.
@@ -215,16 +252,31 @@ Current scanner performance implementation:
 
 ## Shared Trade Decision And Telegram Policy
 
-Entry alerting now separates the trade decision from the notification policy:
+Entry alerting is scanner-owned: Telegram is a notification transport, not a second decision engine.
 
 - `app/decision/decision_engine.py` exposes `evaluate_candidate()` and returns a `TradeDecision` with action, setup score, RR, option quality, confidence score, reasons, and block reasons.
-- Scanner/dashboard/paper rows remain the source of the decision. Telegram no longer needs to duplicate the ultra-strict real-review gate before sending an operational entry alert.
-- `TELEGRAM_ALERT_POLICY` controls entry alert strictness without code changes.
-- `PAPER` (default): alert eligible scanner/paper decisions when the action is alertable, the entry gate passes, the alert score is at least `TELEGRAM_MIN_ENTRY_ALERT_SCORE`, and notification limits/cooldowns allow it. PAPER policy does not require the `HIGH CONVICTION` signal label.
-- `REAL_REVIEW`: keep A+ real-review style gating with real setup/RR/option-quality thresholds, top-1 candidate, persistence, and a required `HIGH CONVICTION BULLISH` / `HIGH CONVICTION BEARISH` signal label.
-- `CUSTOM`: use the explicit Telegram threshold settings such as `TELEGRAM_MIN_RR`, `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, and spread limits.
+- Scanner/dashboard/paper rows are the decision source. Telegram sends when `Action Status` is `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART` and entry alerts are enabled.
+- Telegram does not recompute setup, RR, option quality, quote freshness, affordability, event, regime, top-candidate, session, conviction, or alert-score eligibility. Legacy `TELEGRAM_ALERT_POLICY` and score/threshold settings do not block an alertable action.
+- Duplicate-alert protection remains a transport safeguard. A Telegram delivery failure is not a trade-decision failure.
 
-Telegram still keeps notification controls separate from the decision itself: entry alert enablement, duplicate alert protection, cooldowns, daily caps, active-alert caps, time-of-day limits, and symbol cooldowns remain notification policy. This makes Telegram operationally useful again without loosening real-money review criteria.
+Paper-trade promotion reconciles the matching suggestion immediately. A matching suggestion that was previously `EXPIRED_NOT_ENTERED` transitions to `PROMOTED_TO_PAPER` when its paper trade opens; closed suggestions remain terminal.
+
+## Quote Freshness Audit
+
+Option quote freshness remains intentionally strict and unchanged. `LIVE_QUOTE` is less than `OPTION_DELAYED_QUOTE_MINUTES` old (currently 10 minutes), `DELAYED_QUOTE` is 10-30 minutes old, and `STALE_QUOTE` is older than `OPTION_MAX_QUOTE_AGE_MINUTES` (currently 30 minutes). Polygon's latest quote endpoint is queried in descending timestamp order; the classifier uses `last_updated`, with SIP/timestamp fallbacks.
+
+The active environment requires real-time stock and options data, bid/ask, and fresh option quotes. Stock data uses `MAX_STOCK_DATA_DELAY_MINUTES=2`. No stale-quote threshold was loosened. Candidate snapshots and lifecycle events now persist the normalized quote timestamp, classification time, provider timeframe, source, age in seconds, allowed age in seconds, and freshness reason for each future occurrence. The Validation Report's **Quote Diagnostics** section lists every delayed, stale, or unparseable quote with Symbol, Quote Timestamp, Timestamp Field, Current Time, Age (sec), Threshold (sec), Decision, and Reason. The July 6 archive predates this capture, so it still cannot prove whether its historical stale blocks came from Polygon, timestamp provenance, or missing response data.
+
+Every non-live quote also writes a dedicated `data/daily/YYYY-MM-DD/quote_attribution.csv` fact and upserts the `quote_attribution` SQL table through migration `005_quote_attribution.sql`. Each fact records the scanner timestamp, symbol, option ticker, quote timestamp, quote age in seconds, allowed age in seconds, the source timestamp field selected from `last_updated`, `sip_timestamp`, or `timestamp`, the provider source, final classification, and reason.
+
+```sql
+SELECT trading_day, symbol, option_ticker, scanner_timestamp,
+	   source_timestamp_field, quote_age_seconds, allowed_age_seconds,
+	   final_classification, reason
+FROM quote_attribution
+WHERE final_classification = 'STALE_QUOTE'
+ORDER BY scanner_timestamp DESC;
+```
 
 ## Production Entry Diagnostics
 

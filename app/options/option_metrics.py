@@ -196,45 +196,56 @@ def parse_quote_timestamp(value):
 def classify_quote_freshness(
     quote_time,
     delayed_minutes=10,
-    max_quote_age_minutes=30
+    max_quote_age_minutes=30,
+    now_utc=None,
 ):
 
     parsed = parse_quote_timestamp(quote_time)
+    checked_at = now_utc or datetime.now(timezone.utc)
+    allowed_age_seconds = round(float(max_quote_age_minutes) * 60, 2)
 
     if parsed is None:
 
         return {
             "quote_time_utc": None,
+            "quote_checked_at_utc": checked_at.isoformat(),
             "quote_age_minutes": None,
+            "quote_age_seconds": None,
+            "quote_allowed_age_seconds": allowed_age_seconds,
+            "quote_freshness_reason": "QUOTE_TIMESTAMP_UNPARSEABLE",
             "quote_freshness": "UNKNOWN_QUOTE_TIME"
         }
 
-    age_minutes = round(
-        (
-            datetime.now(timezone.utc) - parsed
-        ).total_seconds() / 60,
-        2
-    )
+    age_seconds = round((checked_at - parsed).total_seconds(), 2)
+    age_minutes = round(age_seconds / 60, 2)
 
     if age_minutes < 0:
 
         freshness = "LIVE_QUOTE"
+        reason = "QUOTE_TIMESTAMP_IN_FUTURE"
 
     elif age_minutes > max_quote_age_minutes:
 
         freshness = "STALE_QUOTE"
+        reason = "AGE_EXCEEDS_ALLOWED_AGE"
 
     elif age_minutes >= delayed_minutes:
 
         freshness = "DELAYED_QUOTE"
+        reason = "AGE_AT_OR_ABOVE_DELAY_THRESHOLD"
 
     else:
 
         freshness = "LIVE_QUOTE"
+        reason = "AGE_WITHIN_ALLOWED_AGE"
 
     return {
         "quote_time_utc": parsed.isoformat(),
+        "quote_checked_at_utc": checked_at.isoformat(),
         "quote_age_minutes": age_minutes,
+        "quote_age_seconds": age_seconds,
+        "quote_allowed_age_seconds": allowed_age_seconds,
+        "quote_freshness_reason": reason,
         "quote_freshness": freshness
     }
 

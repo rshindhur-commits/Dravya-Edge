@@ -44,19 +44,23 @@ def _extract_quote_fields(last_quote, source):
 
         midpoint = (bid + ask) / 2
 
-    quote_time = last_quote.get(
-        "last_updated",
-        last_quote.get(
-            "sip_timestamp",
-            last_quote.get("timestamp")
-        )
-    )
+    quote_time = None
+    quote_timestamp_field = None
+
+    for field in ["last_updated", "sip_timestamp", "timestamp"]:
+
+        if last_quote.get(field) not in [None, ""]:
+
+            quote_time = last_quote[field]
+            quote_timestamp_field = field
+            break
 
     return {
         "bid": bid,
         "ask": ask,
         "midpoint": midpoint,
         "quote_time": quote_time,
+        "quote_timestamp_field": quote_timestamp_field,
         "quote_timeframe": last_quote.get("timeframe"),
         "quote_source": source,
         "bid_size": last_quote.get("bid_size"),
@@ -123,6 +127,7 @@ def refresh_contract_quote(contract):
         "quote_midpoint": quote.get("midpoint"),
         "quote_timeframe": quote.get("quote_timeframe"),
         "quote_source": quote.get("quote_source"),
+        "quote_timestamp_field": quote.get("quote_timestamp_field"),
         "bid_size": quote.get("bid_size"),
         "ask_size": quote.get("ask_size"),
         "quote_time": quote.get("quote_time")
@@ -629,6 +634,9 @@ def fetch_options_chain(
                 "quote_source":
                     quote_fields.get("quote_source"),
 
+                "quote_timestamp_field":
+                    quote_fields.get("quote_timestamp_field"),
+
                 "bid_size":
                     quote_fields.get("bid_size"),
 
@@ -785,6 +793,7 @@ def fetch_option_snapshot(symbol, option_ticker):
             "quote_midpoint": quote_fields.get("midpoint"),
             "quote_timeframe": quote_fields.get("quote_timeframe"),
             "quote_source": quote_fields.get("quote_source"),
+            "quote_timestamp_field": quote_fields.get("quote_timestamp_field"),
             "bid_size": quote_fields.get("bid_size"),
             "ask_size": quote_fields.get("ask_size"),
             "quote_status": quote_status,

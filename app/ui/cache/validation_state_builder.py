@@ -547,6 +547,11 @@ def build_validation_state_payload(
     from app.analytics.delay_attribution import build_delay_attribution
     from app.analytics.engine_version_comparison import summarize_completed_comparisons
     from app.analytics.v2_learning_writer import summarize_learning_dataset
+    from app.analytics.candidate_evidence import load_candidate_evidence
+    from app.analytics.candidate_intelligence import build_candidate_intelligence
+    candidate_intelligence = build_candidate_intelligence(
+        load_candidate_evidence(report_date)
+    )
     delay_attribution = build_delay_attribution(report_date)
     trend_summary = summarize_trend_capture(trend_capture)
     paper = _paper_summary(paper_events)
@@ -613,6 +618,14 @@ def build_validation_state_payload(
         },
         "v2_learning": {
             "summary": summarize_learning_dataset(v2_learning_dataset),
+        },
+        "candidate_intelligence": {
+            "summary": candidate_intelligence["summary"],
+            "good_candidates": _json_records(candidate_intelligence["good_candidates"]),
+            "high_quality_blocked": _json_records(candidate_intelligence["high_quality_blocked"]),
+            "investigation_queue": _json_records(candidate_intelligence["investigation_queue"]),
+            "outcome_matrix": _json_records(candidate_intelligence["outcome_matrix"]),
+            "missed_winner_breakdown": _json_records(candidate_intelligence["missed_winner_breakdown"]),
         },
         "telegram_quality": {
             "misses": int(candidate_outcomes.get("telegram_miss", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,

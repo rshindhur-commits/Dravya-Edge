@@ -981,7 +981,6 @@ def build_scanner_entry_alert_message(
         f"Spread %: {_fmt(option_contract.get('spread_pct'))}",
         f"Quality: {_fmt(option_contract.get('option_quality_score'))}",
         f"Quote: {_fmt(option_contract.get('quote_freshness'))}",
-        f"Alert Score: {_fmt(alert_score)}",
         f"Next: {_fmt(next_condition)}",
         "Skip if broker bid/ask, spread, or chart confirmation disagrees."
     ])
@@ -1389,18 +1388,6 @@ def maybe_send_scanner_entry_alert(
         }
 
     action_status = action_decision.get("action_status")
-    policy_mode = _entry_alert_policy_mode()
-
-    if policy_mode == "REAL_REVIEW" and final_signal not in [
-        "HIGH CONVICTION BULLISH",
-        "HIGH CONVICTION BEARISH"
-    ]:
-
-        return {
-            "sent": False,
-            "reason": "NOT_HIGH_CONVICTION"
-        }
-
     if action_status not in [
         "ENTER",
         "ENTER_PAPER",
@@ -1412,164 +1399,7 @@ def maybe_send_scanner_entry_alert(
             "reason": "ACTION_NOT_ALERTABLE"
         }
 
-    if str(market_session or "").upper() in [
-        "PREMARKET",
-        "OPENING_RANGE",
-        "CLOSED",
-        "AFTERHOURS"
-    ]:
-
-        return {
-            "sent": False,
-            "reason": "MARKET_SESSION_NOT_ALERTABLE"
-        }
-
-    if not option_contract:
-
-        return {
-            "sent": False,
-            "reason": "NO_OPTION_CONTRACT"
-        }
-
-    policy = _entry_alert_policy()
-
-    quote_freshness = (
-        option_quote_freshness
-        or option_contract.get("quote_freshness")
-    )
-
-    quality_score = _float_value(
-        option_quality_score,
-        _float_value(option_contract.get("option_quality_score"))
-    )
-
-    risk_reward = _float_value(risk_setup.get("risk_reward"))
-
-    spread_pct = _float_value(
-        option_spread_pct,
-        _float_value(option_contract.get("spread_pct"), None)
-    )
-
-    gate_allowed, gate_reason = evaluate_entry_gate(
-        {
-            "Action Status": action_status,
-            "Setup %": setup_score,
-            "Candidate RR": risk_reward,
-            "Option Quality Score": quality_score,
-            "Option Spread %": spread_pct,
-            "Option Quote Freshness": quote_freshness,
-            "Affordable": option_contract.get("affordable")
-        },
-        EntryGateConfig(
-            min_rr=policy["min_rr"],
-            min_setup_percent=0.0,
-            min_option_quality=policy["min_option_quality"],
-            max_spread_pct=policy["max_spread_pct"]
-        ),
-        mode="telegram"
-    )
-
-    if not gate_allowed:
-
-        return {
-            "sent": False,
-            "reason": gate_reason
-        }
-
-    if event_blocked:
-
-        return {
-            "sent": False,
-            "reason": "EVENT_BLOCKED"
-        }
-
-    if regime_blocked:
-
-        return {
-            "sent": False,
-            "reason": "REGIME_BLOCKED"
-        }
-
-    if not _top_candidate_allowed(
-        top_candidate,
-        policy["top_candidate_limit"]
-    ):
-
-        return {
-            "sent": False,
-            "reason": "NOT_TOP_ALERT_CANDIDATE"
-        }
-
-    time_bucket = _entry_alert_time_bucket()
-
-    if time_bucket in [
-        "TOO_EARLY",
-        "TOO_LATE"
-    ]:
-
-        return {
-            "sent": False,
-            "reason": f"ENTRY_ALERT_{time_bucket}"
-        }
-
-    alert_score = calculate_entry_alert_score(
-        setup_score=setup_score,
-        alignment_score=alignment_score,
-        rs_rank_score=rs_rank_score,
-        option_quality_score=quality_score,
-        risk_reward=risk_reward,
-        relative_volume=relative_volume,
-        option_spread_pct=spread_pct
-    )
-
-    min_score = policy["min_alert_score"]
-
-    if time_bucket == "AFTERNOON":
-
-        min_score = policy["afternoon_min_alert_score"]
-
-    if alert_score < min_score:
-
-        return {
-            "sent": False,
-            "reason": "ALERT_SCORE_BELOW_MIN",
-            "alert_score": alert_score
-        }
-
-    instant_alert = alert_score >= policy["instant_alert_score"]
-
-    state = _load_alert_state()
-
-    if _entry_alerts_today(state) >= policy["max_daily_entries"]:
-
-        return {
-            "sent": False,
-            "reason": "MAX_DAILY_ENTRY_ALERTS_REACHED"
-        }
-
-    if len(_active_entry_alerts(state)) >= policy["max_active_alerted_trades"]:
-
-        return {
-            "sent": False,
-            "reason": "MAX_ACTIVE_ALERTED_TRADES_REACHED"
-        }
-
-    bucket_limit = {
-        "MORNING": policy["max_morning_entries"],
-        "MIDDAY": policy["max_midday_entries"],
-        "AFTERNOON": policy["max_afternoon_entries"]
-    }.get(time_bucket)
-
-    if (
-        bucket_limit is not None
-        and not instant_alert
-        and _entry_alerts_in_bucket(state, time_bucket) >= bucket_limit
-    ):
-
-        return {
-            "sent": False,
-            "reason": f"{time_bucket}_ENTRY_ALERT_LIMIT_REACHED"
-        }
+    option_contract = option_contract or {}
 
     option_ticker = option_contract.get("ticker") or "NO_CONTRACT"
     setup_key = "_".join([
@@ -1577,29 +1407,6 @@ def maybe_send_scanner_entry_alert(
         str(entry_setup.get("entry_type")),
         str(action_status)
     ])
-
-    if _recent_matching_entry_alert(
-        state,
-        symbol,
-        setup_key,
-        policy["cooldown_minutes"]
-    ):
-
-        return {
-            "sent": False,
-            "reason": "ENTRY_ALERT_COOLDOWN_ACTIVE"
-        }
-
-    if _recent_closed_symbol_alert(
-        state,
-        symbol,
-        policy["symbol_cooldown_minutes"]
-    ):
-
-        return {
-            "sent": False,
-            "reason": "SYMBOL_COOLDOWN_ACTIVE"
-        }
 
     alert_key = _scanner_entry_alert_key(
         symbol,
@@ -1624,8 +1431,7 @@ def maybe_send_scanner_entry_alert(
         risk_setup=risk_setup,
         option_contract=option_contract,
         latest_price=latest_price,
-        next_condition=next_condition,
-        alert_score=alert_score
+        next_condition=next_condition
     )
 
     metadata = {
@@ -1635,10 +1441,6 @@ def maybe_send_scanner_entry_alert(
         "action_status": action_status,
         "final_signal": final_signal,
         "setup_key": setup_key,
-        "top_candidate": top_candidate,
-        "time_bucket": time_bucket,
-        "alert_score": alert_score,
-        "instant_alert": instant_alert,
         "closed": False
     }
     send_result = send_telegram_alert(
