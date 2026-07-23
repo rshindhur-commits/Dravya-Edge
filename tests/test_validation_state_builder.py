@@ -72,6 +72,7 @@ class ValidationStateBuilderTests(unittest.TestCase):
         self.assertEqual(payload["diagnosis"]["exit"]["status"], "NO_EXIT_LOSS_EVIDENCE")
         self.assertEqual(payload["strategy_confidence"]["evidence_days"], 1)
         self.assertEqual(payload["strategy_confidence"]["confidence_pct"], 18)
+        self.assertIn("candidate_intelligence", payload)
 
     def test_strategy_confidence_requires_sample_and_time_evidence(self):
 

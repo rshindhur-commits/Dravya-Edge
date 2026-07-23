@@ -23,6 +23,44 @@
     <table class="metric-table"><tr><th>scanner_output rows</th><td>16</td></tr><tr><th>candidate_snapshot rows</th><td>0</td></tr><tr><th>trade_telemetry rows</th><td>0</td></tr><tr><th>paper_trade_state records</th><td>0</td></tr><tr><th>trade_state records</th><td>0</td></tr><tr><th>paper_trade_events rows</th><td>0</td></tr><tr><th>auto-paper decision source</th><td>recent state JSON only</td></tr><tr><th>auto-paper decision source path</th><td>D:\Dravya_Trade_Works\app\state\auto_paper_decision_log.json</td></tr><tr><th>auto_paper_decision_log rows</th><td>1</td></tr><tr><th>decision OPENED count</th><td>0</td></tr><tr><th>suggested_trade_state records</th><td>0</td></tr></table>
     <ul><li>No paper trades found. Report is based on blocked/skipped candidates only.</li><li>Auto-paper decisions exist, but none are OPENED. Suggested trades may not be actual paper trades.</li><li>Auto-paper decision history is using the capped dashboard JSON. This may not include regular market hours.</li></ul>
 
+    <h2>State And Lifecycle Reconciliation</h2>
+    <table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Source</th>
+      <th>State</th>
+      <th>Count</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>signal_lifecycle_events</td>
+      <td>OBSERVATIONS</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>signal_state_transitions</td>
+      <td>TRANSITIONS</td>
+      <td>0</td>
+    </tr>
+  </tbody>
+</table>
+    <ul><li>No reconciliation warnings.</li></ul>
+
+    <h2>Quote Diagnostics</h2>
+    <p>No candidates were rejected for quote freshness.</p>
+
+    <h2>Candidate Intelligence</h2>
+    <table class="metric-table"><tr><th>Status</th><td>No qualifying candidates.</td></tr></table>
+    <h3>High Quality Blocked Candidates</h3>
+    <p>No high-quality blocked candidates.</p>
+    <h3>Candidate Outcome Matrix</h3>
+    <p>No good-candidate outcomes yet.</p>
+    <h3>Blocked Missed-Winner Attribution</h3>
+    <p>No missed winners yet.</p>
+    <h3>Investigation Queue</h3>
+    <p>No candidates meet investigation criteria.</p>
+
   <h2>A. Trade Result Scorecard</h2>
   <table class="metric-table"><tr><th>Date</th><td>2026-07-06</td></tr><tr><th>Total paper trades</th><td>0</td></tr><tr><th>Wins</th><td>0</td></tr><tr><th>Losses</th><td>0</td></tr><tr><th>Win rate</th><td>0%</td></tr><tr><th>Total R</th><td>0</td></tr><tr><th>Average R</th><td>0</td></tr><tr><th>Best trade</th><td>N/A</td></tr><tr><th>Worst trade</th><td>N/A</td></tr><tr><th>Average hold time minutes</th><td>N/A</td></tr><tr><th>Calls vs puts</th><td>N/A</td></tr></table>
   <h3>Opened Trades</h3>
@@ -101,6 +139,22 @@
       <td>0</td>
     </tr>
     <tr>
+      <td>Actual opened trades source</td>
+      <td>auto_paper_decision_log</td>
+    </tr>
+    <tr>
+      <td>Opened count from paper_trade_events</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Opened count from auto_paper_decision_log</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>Opened count from paper_trade_state</td>
+      <td>0</td>
+    </tr>
+    <tr>
       <td>Suggested but not entered count</td>
       <td>0</td>
     </tr>
@@ -114,6 +168,29 @@
     <table class="metric-table"><tr><th>avg REVIEW_TV_CHART minutes</th><td>N/A</td></tr><tr><th>median REVIEW_TV_CHART minutes</th><td>N/A</td></tr><tr><th>max REVIEW_TV_CHART minutes</th><td>N/A</td></tr><tr><th>count stuck &gt; 15 min</th><td>0</td></tr><tr><th>count stuck &gt; 30 min</th><td>0</td></tr></table>
     <h3>Suggestion Expiry</h3>
     <table class="metric-table"><tr><th>expired in &lt; 5 min</th><td>0</td></tr><tr><th>expired in 5-15 min</th><td>0</td></tr><tr><th>expired in 15-30 min</th><td>0</td></tr><tr><th>expired after 30+ min</th><td>0</td></tr><tr><th>expired while LIVE_QUOTE</th><td>0</td></tr><tr><th>expired while RR &gt;= 1.8</th><td>0</td></tr><tr><th>expired while setup &gt;= 70</th><td>0</td></tr></table>
+
+        <h2>Missed Opportunity Replay</h2>
+        <p>No expired/promoted suggestions found for candle replay.</p>
+
+  <h2>Trade Efficiency Analytics</h2>
+  <p>Observational only. These metrics do not influence entries or exits.</p>
+  <table class="metric-table"><tr><th>Average Trend Capture %</th><td>None</td></tr><tr><th>Median Trend Capture %</th><td>None</td></tr><tr><th>Average MFE</th><td>None</td></tr><tr><th>Average MAE</th><td>None</td></tr><tr><th>Average Left On Table</th><td>None</td></tr><tr><th>Best Capture</th><td>None</td></tr><tr><th>Worst Capture</th><td>None</td></tr><tr><th>Average Trend Health at Exit</th><td>None</td></tr><tr><th>Average Bars Remaining After Exit</th><td>None</td></tr><tr><th>Average Delay Gain</th><td>None</td></tr><tr><th>Trade Efficiency Score</th><td>None</td></tr></table>
+    <h3>Exit Verdict Distribution</h3>
+    <p>No exit verdict distribution yet.</p>
+    <h3>Exit Trigger Frequency</h3>
+    <p>No exit trigger frequency yet.</p>
+    <h3>Engineering Recommendation</h3>
+    <table class="metric-table"><tr><th>Priority</th><td>None</td></tr><tr><th>Reason</th><td>None</td></tr><tr><th>Recommendation</th><td>None</td></tr></table>
+    <h3>Top 10 EXIT_TOO_EARLY Trades</h3>
+    <p>No EXIT_TOO_EARLY trades found.</p>
+    <h3>Top 10 EXCELLENT_EXIT Trades</h3>
+    <p>No EXCELLENT_EXIT trades found.</p>
+  <h3>By Setup</h3>
+  <p>No trend capture rows by setup yet.</p>
+  <h3>By Regime</h3>
+  <p>No trend capture rows by regime yet.</p>
+  <h3>By Exit Reason</h3>
+  <p>No trend capture rows by exit reason yet.</p>
 
   <h2>Best Skipped Opportunities</h2>
   <table class="dataframe">

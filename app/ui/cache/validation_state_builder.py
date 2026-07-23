@@ -489,7 +489,12 @@ def build_validation_state_payload(
     paper_events = paper_events if paper_events is not None else pd.DataFrame()
     trend_capture = trend_capture if trend_capture is not None else pd.DataFrame()
     candidate_outcomes = _read_csv(daily_path(report_date, "candidate_outcomes.csv"))
+    from app.analytics.candidate_evidence import load_candidate_evidence
+    from app.analytics.candidate_intelligence import build_candidate_intelligence
     from app.analytics.delay_attribution import build_delay_attribution
+    candidate_intelligence = build_candidate_intelligence(
+        load_candidate_evidence(report_date)
+    )
     delay_attribution = build_delay_attribution(report_date)
     trend_summary = summarize_trend_capture(trend_capture)
     paper = _paper_summary(paper_events)
@@ -537,6 +542,14 @@ def build_validation_state_payload(
         },
         "trade_efficiency": trade_efficiency,
         "candidate_outcomes": _json_records(candidate_outcomes),
+        "candidate_intelligence": {
+            "summary": candidate_intelligence["summary"],
+            "good_candidates": _json_records(candidate_intelligence["good_candidates"]),
+            "high_quality_blocked": _json_records(candidate_intelligence["high_quality_blocked"]),
+            "investigation_queue": _json_records(candidate_intelligence["investigation_queue"]),
+            "outcome_matrix": _json_records(candidate_intelligence["outcome_matrix"]),
+            "missed_winner_breakdown": _json_records(candidate_intelligence["missed_winner_breakdown"]),
+        },
         "telegram_quality": {
             "misses": int(candidate_outcomes.get("telegram_miss", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,
             "false_alerts": int(candidate_outcomes.get("false_alert", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,

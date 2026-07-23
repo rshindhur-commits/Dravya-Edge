@@ -25,3 +25,21 @@ def test_build_rule_evaluations_records_actual_thresholds():
     assert by_name["RR"].blocked_trade
     assert by_name["Quote Freshness"].actual_value == "STALE_QUOTE"
     assert not by_name["Quote Freshness"].passed
+    assert by_name["Quote Freshness"].evaluation_phase == "ENTRY"
+    assert by_name["Quote Freshness"].to_record()["evaluation_phase"] == "ENTRY"
+
+
+def test_build_rule_evaluations_emits_lifecycle_phases():
+    evaluations = build_rule_evaluations({
+        "Symbol": "NVDA",
+        "Entry": "EMA_PULLBACK",
+        "Trade Action": "HOLD",
+        "Bars In Trade": 3,
+        "Live Exit Signal": True,
+        "Live Exit Reason": "Hard stop hit",
+        "Replay Ran": True,
+        "Replay Outcome": "TARGET_HIT",
+    }, "scan-2")
+
+    phases = {item.evaluation_phase for item in evaluations}
+    assert {"ENTRY", "ACTIVE", "EXIT", "REPLAY"}.issubset(phases)

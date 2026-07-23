@@ -1503,6 +1503,47 @@ def _render_trade_doctor(trades):
     )
 
 
+def _render_candidate_intelligence(intelligence):
+
+    intelligence = intelligence or {}
+    summary = intelligence.get("summary") or {}
+
+    if not summary:
+
+        return
+
+    st.markdown("## Candidate Intelligence")
+    st.caption("Research evidence only. These classifications do not alter scanner, risk, or execution decisions.")
+    _render_compact_card_grid([
+        ("Good Candidates", summary.get("good_candidates", 0)),
+        ("Opened", summary.get("opened", 0)),
+        ("Correct Skips", summary.get("correct_skips", 0)),
+        ("Correct Blocks", summary.get("correct_blocks", 0)),
+        ("Missed Winners", summary.get("missed_winners", 0)),
+        ("Investigate", summary.get("investigate", 0)),
+    ])
+
+    sections = [
+        ("High Quality Blocked Candidates", "high_quality_blocked"),
+        ("Candidate Outcome Matrix", "outcome_matrix"),
+        ("Missed Winner Attribution", "missed_winner_breakdown"),
+        ("Investigation Queue", "investigation_queue"),
+    ]
+
+    for title, key in sections:
+
+        rows = intelligence.get(key) or []
+
+        if rows:
+
+            st.markdown(f"### {title}")
+            st.dataframe(
+                _display_safe_dataframe(pd.DataFrame(rows)),
+                width="stretch",
+                hide_index=True,
+            )
+
+
 def _render_cached_validation_state(state):
 
     st.subheader("Validation")
@@ -1555,6 +1596,8 @@ def _render_cached_validation_state(state):
             width="stretch",
             hide_index=True,
         )
+
+    _render_candidate_intelligence(state.get("candidate_intelligence"))
 
     for title, key in [
         ("Exit Verdict Distribution", "exit_verdict_distribution"),
