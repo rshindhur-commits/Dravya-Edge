@@ -1,0 +1,4 @@
+{"event": "ATTEMPT", "observed_at_utc": "2026-07-22T22:42:46.424075+00:00", "name": "send_telegram_alert", "scan_id": null, "job_id": null, "attempt": 1, "error": null}
+{"event": "ATTEMPT", "observed_at_utc": "2026-07-22T22:42:46.699593+00:00", "name": "send_telegram_alert", "scan_id": null, "job_id": null, "attempt": 2, "error": null}
+{"event": "ATTEMPT", "observed_at_utc": "2026-07-22T22:42:47.203039+00:00", "name": "send_telegram_alert", "scan_id": null, "job_id": null, "attempt": 3, "error": null}
+{"event": "FAILED", "observed_at_utc": "2026-07-22T22:42:47.206315+00:00", "name": "send_telegram_alert", "scan_id": null, "job_id": null, "attempt": 3, "error": "Telegram bot token/chat_id not configured"}

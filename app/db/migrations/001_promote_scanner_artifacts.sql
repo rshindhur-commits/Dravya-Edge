@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS rule_evaluation (
  id BIGSERIAL PRIMARY KEY, scan_id TEXT NOT NULL, symbol TEXT NOT NULL, setup TEXT,
  rule_name TEXT NOT NULL, rule_group TEXT NOT NULL, actual_value TEXT, required_value TEXT,
  passed BOOLEAN NOT NULL, blocked_trade BOOLEAN NOT NULL, priority INTEGER NOT NULL DEFAULT 100,
+ evaluation_phase TEXT NOT NULL DEFAULT 'ENTRY',
  timestamp TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS idx_rule_evaluation_blocked ON rule_evaluation(rule_name,blocked_trade);
 

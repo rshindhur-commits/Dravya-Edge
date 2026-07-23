@@ -36,6 +36,15 @@ SNAPSHOT_COLUMNS = [
     "option_quality_score",
     "option_spread_pct",
     "option_quote_freshness",
+    "option_quote_timestamp",
+    "option_quote_checked_at",
+    "option_quote_timeframe",
+    "option_quote_source",
+    "option_quote_timestamp_field",
+    "option_quote_age_minutes",
+    "option_quote_age_seconds",
+    "option_quote_allowed_age_seconds",
+    "option_quote_freshness_reason",
     "affordable",
     "entry_price",
     "stop_price",
@@ -47,6 +56,8 @@ SNAPSHOT_COLUMNS = [
     "option_gamma",
     "option_theta",
     "option_mid_price",
+    "trend_health",
+    "replay_outcome",
 ]
 
 
@@ -140,6 +151,15 @@ def normalize_candidate_row(
             "Option Quote Freshness",
             "option_quote_freshness"
         ),
+        "option_quote_timestamp": _row_get(row, "Option Quote Timestamp", "option_quote_timestamp"),
+        "option_quote_checked_at": _row_get(row, "Option Quote Checked At", "option_quote_checked_at"),
+        "option_quote_timeframe": _row_get(row, "Option Quote Timeframe", "option_quote_timeframe"),
+        "option_quote_source": _row_get(row, "Option Quote Source", "option_quote_source"),
+        "option_quote_timestamp_field": _row_get(row, "Option Quote Timestamp Field", "option_quote_timestamp_field"),
+        "option_quote_age_minutes": _row_get(row, "Option Quote Age Minutes", "option_quote_age_minutes"),
+        "option_quote_age_seconds": _row_get(row, "Option Quote Age Seconds", "option_quote_age_seconds"),
+        "option_quote_allowed_age_seconds": _row_get(row, "Option Quote Allowed Age Seconds", "option_quote_allowed_age_seconds"),
+        "option_quote_freshness_reason": _row_get(row, "Option Quote Freshness Reason", "option_quote_freshness_reason"),
         "affordable": _row_get(row, "Affordable", "affordable"),
         "entry_price": _row_get(row, "Candidate Entry Price", "entry_price", "Price"),
         "stop_price": _row_get(row, "Candidate Stop Price", "stop_price", "Stop Loss"),
@@ -151,6 +171,8 @@ def normalize_candidate_row(
         "option_gamma": _row_get(row, "Option Gamma", "option_gamma"),
         "option_theta": _row_get(row, "Option Theta", "option_theta"),
         "option_mid_price": _row_get(row, "Option Mid Price", "option_mid_price"),
+        "trend_health": _row_get(row, "Trend Health State", "trend_health"),
+        "replay_outcome": _row_get(row, "Replay Outcome", "replay_outcome"),
     }
 
     normalized_row["candidate_key"] = _row_get(

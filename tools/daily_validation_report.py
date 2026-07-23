@@ -15,6 +15,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.analytics.expectancy_report import build_grouped_expectancy_reports
+from app.analytics.candidate_evidence import load_candidate_evidence
+from app.analytics.candidate_intelligence import build_candidate_intelligence
 from app.analytics.trend_capture import summarize_trend_capture
 from app.gates.entry_gate import price_geometry_error
 from app.storage.daily_paths import (
@@ -318,6 +320,129 @@ def _json_record_count(data):
         return len(data)
 
     return 0
+
+
+def _state_status_counts(state):
+    if not isinstance(state, dict):
+
+        return pd.Series(dtype=object)
+
+    return pd.Series([
+        str(record.get("status") or "UNKNOWN").strip().upper()
+        for record in state.values()
+        if isinstance(record, dict)
+    ]).value_counts()
+
+
+def build_state_reconciliation(
+    paper_trade_state,
+    trade_state,
+    suggested_trade_state,
+    paper_events_df,
+    lifecycle_events_df,
+    lifecycle_transitions_df,
+):
+    rows = []
+    warnings = []
+    source_states = [
+        ("paper_trade_state", _state_status_counts(paper_trade_state)),
+        ("trade_state", _state_status_counts(trade_state)),
+        ("suggested_trade_state", _state_status_counts(suggested_trade_state)),
+    ]
+
+    for source, counts in source_states:
+
+        for status, count in counts.items():
+
+            rows.append({"Source": source, "State": status, "Count": int(count)})
+
+    rows.extend([
+        {"Source": "signal_lifecycle_events", "State": "OBSERVATIONS", "Count": int(len(lifecycle_events_df))},
+        {"Source": "signal_state_transitions", "State": "TRANSITIONS", "Count": int(len(lifecycle_transitions_df))},
+    ])
+    open_event_count = 0
+
+    if not paper_events_df.empty and "event_type" in paper_events_df.columns:
+
+        events = paper_events_df[
+            paper_events_df["event_type"].astype(str).str.upper().eq("OPEN")
+        ]
+        open_event_count = int(events.get("trade_key", pd.Series(dtype=object)).dropna().nunique())
+
+    paper_open_count = int(_state_status_counts(paper_trade_state).get("OPEN", 0))
+
+    if open_event_count and paper_open_count and open_event_count != paper_open_count:
+
+        warnings.append(
+            f"Paper OPEN state count ({paper_open_count}) differs from unique OPEN event count ({open_event_count})."
+        )
+
+    if not lifecycle_events_df.empty and lifecycle_transitions_df.empty:
+
+        warnings.append("Lifecycle observations exist but no state transitions were recorded.")
+
+    return pd.DataFrame(rows), warnings
+
+
+def build_quote_diagnostics(scanner_df, candidate_df, lifecycle_events_df):
+    frames = []
+
+    for source, frame in [
+        ("scanner_output", scanner_df),
+        ("candidate_snapshot", candidate_df),
+        ("signal_lifecycle", lifecycle_events_df),
+    ]:
+
+        if frame is None or frame.empty:
+
+            continue
+
+        copy = frame.copy()
+        copy["diagnostic_source"] = source
+        frames.append(copy)
+
+    if not frames:
+
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    freshness_column = _first_existing(
+        combined,
+        ["Option Quote Freshness", "option_quote_freshness"],
+    )
+
+    if not freshness_column:
+
+        return pd.DataFrame()
+
+    rejected = combined[
+        combined[freshness_column].astype(str).str.upper().isin({
+            "STALE_QUOTE",
+            "DELAYED_QUOTE",
+            "UNKNOWN_QUOTE_TIME",
+        })
+    ].copy()
+
+    if rejected.empty:
+
+        return pd.DataFrame()
+
+    def value(*columns):
+        column = _first_existing(rejected, list(columns))
+        return rejected[column] if column else pd.Series([None] * len(rejected), index=rejected.index)
+
+    diagnostics = pd.DataFrame({
+        "Source": rejected["diagnostic_source"],
+        "Symbol": value("Symbol", "symbol"),
+        "Quote Timestamp": value("Option Quote Timestamp", "option_quote_timestamp"),
+        "Timestamp Field": value("Option Quote Timestamp Field", "option_quote_timestamp_field"),
+        "Current Time": value("Option Quote Checked At", "option_quote_checked_at", "observed_at"),
+        "Age (sec)": value("Option Quote Age Seconds", "option_quote_age_seconds"),
+        "Threshold (sec)": value("Option Quote Allowed Age Seconds", "option_quote_allowed_age_seconds"),
+        "Decision": rejected[freshness_column],
+        "Reason": value("Option Quote Freshness Reason", "option_quote_freshness_reason"),
+    })
+    return diagnostics.sort_values(["Symbol", "Current Time"], na_position="last")
 
 
 def build_data_health(
@@ -796,17 +921,33 @@ def build_data_quality_checks(
 
             opened_event_count = len(events)
 
-    actual_opened = max(
-        opened_decisions,
-        opened_event_count,
-        _json_record_count(paper_trade_state)
-    )
+    paper_state_count = _json_record_count(paper_trade_state)
+
+    if not paper_events_df.empty:
+
+        actual_opened = opened_event_count
+        opened_count_source = "paper_trade_events"
+
+    elif not decision_df.empty:
+
+        actual_opened = opened_decisions
+        opened_count_source = "auto_paper_decision_log"
+
+    else:
+
+        actual_opened = paper_state_count
+        opened_count_source = "paper_trade_state"
+
     checks = {
         "Invalid price geometry count": _count_invalid_geometry(combined_df),
         "Direction/option mismatch count": _count_direction_option_mismatch(combined_df),
         "High setup but blocked by setup threshold count": _count_high_setup_threshold_blocks(combined_df),
         "Review rows realtime_ready=false and missing reason": _count_review_missing_realtime_reason(combined_df),
         "Actual opened trades count": actual_opened,
+        "Actual opened trades source": opened_count_source,
+        "Opened count from paper_trade_events": opened_event_count,
+        "Opened count from auto_paper_decision_log": opened_decisions,
+        "Opened count from paper_trade_state": paper_state_count,
         "Suggested but not entered count": suggested_not_entered,
     }
 
@@ -1472,6 +1613,10 @@ def render_report(
     manifest,
     data_health,
     data_health_warnings,
+    reconciliation_df,
+    reconciliation_warnings,
+    quote_diagnostics_df,
+    candidate_intelligence,
     trade_metrics,
     trades_df,
     gate_metrics_full,
@@ -1516,6 +1661,15 @@ def render_report(
         f"<li>{html.escape(warning)}</li>"
         for warning in data_health_warnings
     ) or "<li>No data-health warnings.</li>"
+    reconciliation_warnings_html = "".join(
+        f"<li>{html.escape(warning)}</li>"
+        for warning in reconciliation_warnings
+    ) or "<li>No reconciliation warnings.</li>"
+    candidate_intelligence = candidate_intelligence or {}
+    intelligence_summary_rows = "".join(
+        _metric_row(label.replace("_", " ").title(), value)
+        for label, value in (candidate_intelligence.get("summary") or {}).items()
+    ) or _metric_row("Status", "No qualifying candidates.")
     lifecycle_review_rows = "".join(
         _metric_row(label, value)
         for label, value in lifecycle_review_metrics.items()
@@ -1651,6 +1805,24 @@ def render_report(
     <table class="metric-table">{health_rows}</table>
     <ul>{health_warnings_html}</ul>
 
+    <h2>State And Lifecycle Reconciliation</h2>
+    {_html_table(reconciliation_df, "No state or lifecycle records found.")}
+    <ul>{reconciliation_warnings_html}</ul>
+
+    <h2>Quote Diagnostics</h2>
+    {_html_table(quote_diagnostics_df, "No candidates were rejected for quote freshness.")}
+
+    <h2>Candidate Intelligence</h2>
+    <table class="metric-table">{intelligence_summary_rows}</table>
+    <h3>High Quality Blocked Candidates</h3>
+    {_html_table(candidate_intelligence.get("high_quality_blocked"), "No high-quality blocked candidates.")}
+    <h3>Candidate Outcome Matrix</h3>
+    {_html_table(candidate_intelligence.get("outcome_matrix"), "No good-candidate outcomes yet.")}
+    <h3>Blocked Missed-Winner Attribution</h3>
+    {_html_table(candidate_intelligence.get("missed_winner_breakdown"), "No missed winners yet.")}
+    <h3>Investigation Queue</h3>
+    {_html_table(candidate_intelligence.get("investigation_queue"), "No candidates meet investigation criteria.")}
+
   <h2>A. Trade Result Scorecard</h2>
   <table class="metric-table">{metric_rows}</table>
   <h3>Opened Trades</h3>
@@ -1777,6 +1949,22 @@ def build_report(args):
         candidate_df,
         paper_events_df
     )
+    reconciliation_df, reconciliation_warnings = build_state_reconciliation(
+        paper_trade_state,
+        trade_state,
+        suggested_trade_state,
+        paper_events_df,
+        lifecycle_events_df,
+        lifecycle_transitions_df,
+    )
+    quote_diagnostics_df = build_quote_diagnostics(
+        scanner_df,
+        candidate_df,
+        lifecycle_events_df,
+    )
+    candidate_intelligence = build_candidate_intelligence(
+        load_candidate_evidence(report_date)
+    )
 
     if decision_source_warning:
 
@@ -1866,6 +2054,10 @@ def build_report(args):
             manifest,
             data_health,
             data_health_warnings,
+            reconciliation_df,
+            reconciliation_warnings,
+            quote_diagnostics_df,
+            candidate_intelligence,
             trade_metrics or {
                 "Total paper trades": 0,
                 "Wins": 0,

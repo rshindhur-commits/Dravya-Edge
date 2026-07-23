@@ -93,7 +93,33 @@ class TelegramAlertPolicyTests(unittest.TestCase):
         self.assertTrue(result["sent"])
         self.assertEqual(result["reason"], "SENT")
 
-    def test_scanner_alert_real_review_policy_requires_high_conviction(self):
+    def test_scanner_alert_sends_despite_legacy_alert_score_threshold(self):
+
+        with patch.dict(
+            "os.environ",
+            {
+                "TELEGRAM_ALERTS_ENABLED": "1",
+                "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+                "TELEGRAM_MIN_ENTRY_ALERT_SCORE": "100",
+            },
+            clear=False,
+        ), patch(
+            "app.alerts.telegram_alerts.alert_was_sent",
+            return_value=False
+        ), patch(
+            "app.alerts.telegram_alerts.send_telegram_alert"
+        ), patch(
+            "app.alerts.telegram_alerts.mark_alert_sent"
+        ):
+
+            result = maybe_send_scanner_entry_alert(
+                **self._scanner_alert_kwargs()
+            )
+
+        self.assertTrue(result["sent"])
+        self.assertEqual(result["reason"], "SENT")
+
+    def test_scanner_alert_real_review_policy_does_not_reject_alertable_action(self):
 
         with patch.dict(
             "os.environ",
@@ -103,14 +129,21 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
             },
             clear=False,
+        ), patch(
+            "app.alerts.telegram_alerts.alert_was_sent",
+            return_value=False
+        ), patch(
+            "app.alerts.telegram_alerts.send_telegram_alert"
+        ), patch(
+            "app.alerts.telegram_alerts.mark_alert_sent"
         ):
 
             result = maybe_send_scanner_entry_alert(
                 **self._scanner_alert_kwargs()
             )
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "NOT_HIGH_CONVICTION")
+        self.assertTrue(result["sent"])
+        self.assertEqual(result["reason"], "SENT")
 
     def test_scanner_alert_queued_mode_returns_queued_without_marking_sent(self):
 

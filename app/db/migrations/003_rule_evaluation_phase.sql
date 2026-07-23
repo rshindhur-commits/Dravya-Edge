@@ -1,0 +1,2 @@
+ALTER TABLE rule_evaluation
+    ADD COLUMN IF NOT EXISTS evaluation_phase TEXT NOT NULL DEFAULT 'ENTRY';

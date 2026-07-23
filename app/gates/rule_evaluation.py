@@ -17,12 +17,13 @@ class RuleEvaluation:
     passed: bool
     blocked_trade: bool
     priority: int = 100
+    evaluation_phase: str = "ENTRY"
 
     def to_record(self):
         return asdict(self)
 
 
-def _evaluation(scan_id, row, name, group, actual, required, passed, priority=100):
+def _evaluation(scan_id, row, name, group, actual, required, passed, priority=100, evaluation_phase="ENTRY", blocked_trade=None):
     return RuleEvaluation(
         scan_id=scan_id,
         symbol=str(row.get("Symbol") or row.get("symbol") or ""),
@@ -32,8 +33,9 @@ def _evaluation(scan_id, row, name, group, actual, required, passed, priority=10
         actual_value=actual,
         required_value=required,
         passed=bool(passed),
-        blocked_trade=not bool(passed),
+        blocked_trade=not bool(passed) if blocked_trade is None else bool(blocked_trade),
         priority=priority,
+        evaluation_phase=evaluation_phase,
     )
 
 
@@ -50,7 +52,27 @@ def build_rule_evaluations(row, scan_id, config=None):
     review = row.get("Real Trade Readiness")
     if review is not None:
         evaluations.append(_evaluation(scan_id, row, "Review", "Review", review, "READY", str(review).upper() in {"READY", "PASS", "TRUE"}, 40))
+    trade_action = str(row.get("Trade Action") or "").strip().upper()
+    bars_in_trade = _as_int(row.get("Bars In Trade"))
+    if trade_action in {"HOLD", "PARTIAL_PROFIT"} and bars_in_trade > 0:
+        evaluations.append(_evaluation(scan_id, row, "Active Trade Management", "Trade Lifecycle", trade_action, "HOLD_OR_PARTIAL_PROFIT", True, 50, "ACTIVE", False))
+    if _as_bool(row.get("Live Exit Signal")):
+        evaluations.append(_evaluation(scan_id, row, "Exit Decision", "Trade Lifecycle", row.get("Live Exit Reason"), "EXIT", True, 70, "EXIT", False))
+    if _as_bool(row.get("Replay Ran")):
+        replay_outcome = row.get("Replay Outcome")
+        evaluations.append(_evaluation(scan_id, row, "Replay Outcome", "Replay", replay_outcome, "OUTCOME_AVAILABLE", replay_outcome not in {None, ""}, 30, "REPLAY", False))
     return evaluations
+
+
+def _as_bool(value):
+    return str(value).strip().lower() in {"true", "1", "yes"}
+
+
+def _as_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def aggregate_rule_evaluations(*evaluation_groups):
@@ -65,6 +87,7 @@ def aggregate_rule_evaluations(*evaluation_groups):
                 evaluation.scan_id,
                 evaluation.symbol,
                 evaluation.setup,
+                evaluation.evaluation_phase,
                 evaluation.rule_group,
                 evaluation.rule_name,
             )
