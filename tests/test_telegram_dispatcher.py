@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.alerts.telegram_alerts import TelegramDeliveryError
 from app.runtime.telegram_dispatcher import (
     dispatch_telegram_message,
     recover_pending_telegram_dispatches,
@@ -96,6 +97,60 @@ class TelegramDispatcherTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertEqual(append_jsonl.call_count, 2)
         self.assertEqual(append_jsonl.call_args_list[-1].args[1]["event"], "FAILED")
+
+    def test_failed_audit_includes_telegram_response_and_context(self):
+
+        def send(_message):
+
+            raise TelegramDeliveryError(
+                400,
+                {
+                    "ok": False,
+                    "error_code": 400,
+                    "description": "Bad Request: chat not found",
+                }
+            )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "TELEGRAM_DISPATCH_MODE": "DIRECT",
+                "TELEGRAM_DISPATCH_RETRIES": "0",
+            },
+            clear=False,
+        ), patch(
+            "app.runtime.telegram_dispatcher._append_jsonl"
+        ) as append_jsonl, patch(
+            "app.runtime.telegram_dispatcher._record_dispatch_db"
+        ):
+
+            with self.assertRaises(TelegramDeliveryError):
+
+                dispatch_telegram_message(
+                    send,
+                    "hello",
+                    scan_id="2026-07-23_094500",
+                    dispatch_metadata={
+                        "metadata": {
+                            "symbol": "NVDA",
+                            "direction": "CALL",
+                            "candidate_key": "NVDA_LONG_17",
+                            "message_type": "SCANNER_ENTRY",
+                            "decision": "ENTER_PAPER",
+                        }
+                    },
+                )
+
+        failed_audit = append_jsonl.call_args_list[-1].args[1]
+        self.assertEqual(failed_audit["event"], "FAILED")
+        self.assertEqual(failed_audit["scan_id"], "2026-07-23_094500")
+        self.assertEqual(failed_audit["symbol"], "NVDA")
+        self.assertEqual(failed_audit["candidate_key"], "NVDA_LONG_17")
+        self.assertEqual(
+            failed_audit["telegram_response"]["description"],
+            "Bad Request: chat not found",
+        )
+        self.assertEqual(failed_audit["message_length"], 5)
 
     def test_default_mode_is_direct(self):
 

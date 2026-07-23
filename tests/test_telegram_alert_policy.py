@@ -1,7 +1,11 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import requests
 
 from app.alerts.telegram_alerts import (
+    TelegramDeliveryError,
+    _send_telegram_alert_direct,
     calculate_entry_alert_score,
     _entry_alert_policy,
     maybe_send_scanner_entry_alert,
@@ -10,6 +14,37 @@ from app.gates import EntryGateConfig, evaluate_entry_gate
 
 
 class TelegramAlertPolicyTests(unittest.TestCase):
+
+    def test_direct_send_preserves_telegram_bad_request_description(self):
+
+        response = Mock()
+        response.status_code = 400
+        response.json.return_value = {
+            "ok": False,
+            "error_code": 400,
+            "description": "Bad Request: can't parse entities",
+        }
+        response.raise_for_status.side_effect = requests.HTTPError(
+            "400 Bad Request"
+        )
+
+        with patch(
+            "app.alerts.telegram_alerts.get_telegram_credentials",
+            return_value=("token", "chat-id"),
+        ), patch(
+            "app.alerts.telegram_alerts.requests.post",
+            return_value=response,
+        ):
+
+            with self.assertRaises(TelegramDeliveryError) as error:
+
+                _send_telegram_alert_direct("<b>broken")
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertEqual(
+            error.exception.telegram_response["description"],
+            "Bad Request: can't parse entities",
+        )
 
     def _scanner_alert_kwargs(self):
 

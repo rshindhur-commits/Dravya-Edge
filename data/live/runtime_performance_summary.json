@@ -1,27 +1,336 @@
 {
-  "generated_at_utc": "2026-07-19T06:47:04.345901+00:00",
-  "performance_rows": 1,
-  "metrics_rows": 0,
+  "generated_at_utc": "2026-07-23T16:10:19.876901+00:00",
+  "performance_rows": 3,
+  "metrics_rows": 35,
   "recent_timings": [
     {
-      "observed_at_utc": "2026-07-19T06:47:04.341483+00:00",
+      "observed_at_utc": "2026-07-23T16:10:19.870617+00:00",
       "trading_day": NaN,
       "scan_id": NaN,
-      "category": "scanner",
-      "stage": "decision_engine",
+      "category": "telegram",
+      "stage": "send_telegram_alert",
       "page": NaN,
-      "seconds": 0.1234,
-      "metadata": "{\"symbol\": \"NVDA\"}"
+      "seconds": 0.0,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:08:18.234915+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.0,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:05:33.941721+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.0,
+      "metadata": "{}"
     }
   ],
-  "recent_jobs": [],
+  "recent_jobs": [
+    {
+      "observed_at_utc": "2026-07-23T16:08:19.731797+00:00",
+      "scan_id": NaN,
+      "job_id": "857944ca-f24a-48c4-9088-603e9c695321",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.3278,
+      "queue_runtime": 0.2025,
+      "total_runtime": 1.5303,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:08:19.527679+00:00",
+      "scan_id": NaN,
+      "job_id": "03ade4c7-b226-4e07-96f2-bf8f4fdccc9f",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.1578,
+      "queue_runtime": 0.1695,
+      "total_runtime": 1.3272,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:08:19.356497+00:00",
+      "scan_id": NaN,
+      "job_id": "43974685-ab6d-40e8-9164-c02595d70978",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.8963,
+      "queue_runtime": 0.2639,
+      "total_runtime": 1.1601,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:08:19.090398+00:00",
+      "scan_id": NaN,
+      "job_id": "5cc2db7c-cf26-46fc-a76b-0090cff89e6f",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0026,
+      "queue_runtime": 0.8911,
+      "total_runtime": 0.8937,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:05:35.132498+00:00",
+      "scan_id": NaN,
+      "job_id": "657598ef-dccd-4518-982b-508691f59938",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.0731,
+      "queue_runtime": 0.1474,
+      "total_runtime": 1.2204,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:05:34.982726+00:00",
+      "scan_id": NaN,
+      "job_id": "85a144f9-bdbb-497c-aab8-93518bce9c13",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.9157,
+      "queue_runtime": 0.1556,
+      "total_runtime": 1.0714,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:05:34.824426+00:00",
+      "scan_id": NaN,
+      "job_id": "7de336d3-33a9-4bbf-9c11-941a4eec9637",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.7684,
+      "queue_runtime": 0.1482,
+      "total_runtime": 0.9166,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:05:34.673863+00:00",
+      "scan_id": NaN,
+      "job_id": "864753c1-c52f-4d51-8043-4b3d5935988f",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0015,
+      "queue_runtime": 0.767,
+      "total_runtime": 0.7686,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:04:36.654451+00:00",
+      "scan_id": NaN,
+      "job_id": "2681bcba-6669-435e-9e49-50c386e4d42b",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.2129,
+      "queue_runtime": 0.1574,
+      "total_runtime": 1.3702,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:04:36.494980+00:00",
+      "scan_id": NaN,
+      "job_id": "4db0d652-fc04-41f2-93c5-39745fa9ab78",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.0572,
+      "queue_runtime": 0.1546,
+      "total_runtime": 1.2118,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:04:36.338343+00:00",
+      "scan_id": NaN,
+      "job_id": "6db1a6f8-15bd-48a6-a74e-5476bff6119a",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.9092,
+      "queue_runtime": 0.1513,
+      "total_runtime": 1.0605,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:04:36.185209+00:00",
+      "scan_id": NaN,
+      "job_id": "c7ae0d67-b912-4041-8c53-43430c954067",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0015,
+      "queue_runtime": 0.9105,
+      "total_runtime": 0.912,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-22T22:42:48.715011+00:00",
+      "scan_id": NaN,
+      "job_id": "45041e3b-aaf0-49e1-99f0-415bd1121c1f",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.3375,
+      "queue_runtime": 0.1641,
+      "total_runtime": 1.5017,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-22T22:42:48.548763+00:00",
+      "scan_id": NaN,
+      "job_id": "b9764e00-1a05-4383-b61e-8c1ee2b97914",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.1773,
+      "queue_runtime": 0.1653,
+      "total_runtime": 1.3426,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-22T22:42:48.381616+00:00",
+      "scan_id": NaN,
+      "job_id": "4f959917-c628-478f-abab-236e7e8d69c2",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.5086,
+      "queue_runtime": 0.1708,
+      "total_runtime": 1.6794,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-22T22:42:48.207368+00:00",
+      "scan_id": NaN,
+      "job_id": "5051a799-57dc-4970-9e53-1bc8cd167e9d",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0062,
+      "queue_runtime": 1.7587,
+      "total_runtime": 1.7649,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-21T06:54:02.116148+00:00",
+      "scan_id": NaN,
+      "job_id": "93021bea-83e1-469a-81b6-97262c836032",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.5633,
+      "queue_runtime": 0.0688,
+      "total_runtime": 0.6321,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-21T06:54:02.045576+00:00",
+      "scan_id": NaN,
+      "job_id": "134f5c9f-d38f-4eb2-b75d-2cd5403f389d",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.4968,
+      "queue_runtime": 0.0655,
+      "total_runtime": 0.5623,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-21T06:54:01.978230+00:00",
+      "scan_id": NaN,
+      "job_id": "da7bf525-7cd8-4689-8dfd-b172de750b8b",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.4323,
+      "queue_runtime": 0.0719,
+      "total_runtime": 0.5042,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-21T06:54:01.904098+00:00",
+      "scan_id": NaN,
+      "job_id": "ef972c0d-2c36-4515-a168-9bada5d9fc25",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0047,
+      "queue_runtime": 0.4264,
+      "total_runtime": 0.4311,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-21T06:30:46.755710+00:00",
+      "scan_id": NaN,
+      "job_id": "c288986e-fc8e-414d-bfee-70204f09250c",
+      "job_name": "persist_completed_trade_db",
+      "priority": "NORMAL",
+      "queue_wait": 0.0011,
+      "queue_runtime": 0.6415,
+      "total_runtime": 0.6425,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-21T06:29:18.607525+00:00",
+      "scan_id": NaN,
+      "job_id": "a387b405-a570-456d-bd54-ad633d0c00c7",
+      "job_name": "persist_completed_trade_db",
+      "priority": "NORMAL",
+      "queue_wait": 0.0013,
+      "queue_runtime": 0.5493,
+      "total_runtime": 0.5506,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-21T06:27:58.606488+00:00",
+      "scan_id": NaN,
+      "job_id": "9accd551-2a1b-44a2-9f1b-6d90debe60c3",
+      "job_name": "persist_completed_trade_db",
+      "priority": "NORMAL",
+      "queue_wait": 0.0012,
+      "queue_runtime": 0.5806,
+      "total_runtime": 0.5819,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-21T06:27:29.755789+00:00",
+      "scan_id": NaN,
+      "job_id": "4433b7c3-98c2-4a56-a745-3c8f2ccac1fd",
+      "job_name": "persist_completed_trade_db",
+      "priority": "NORMAL",
+      "queue_wait": 0.0015,
+      "queue_runtime": 0.4787,
+      "total_runtime": 0.4802,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-21T06:24:49.997154+00:00",
+      "scan_id": NaN,
+      "job_id": "8f04f11c-5e67-4d78-bba0-c4941bf31af1",
+      "job_name": "persist_completed_trade_db",
+      "priority": "NORMAL",
+      "queue_wait": 0.0009,
+      "queue_runtime": 1.2506,
+      "total_runtime": 1.2515,
+      "status": "COMPLETED"
+    }
+  ],
   "average_seconds_by_stage": [
     {
-      "category": "scanner",
-      "stage": "decision_engine",
+      "category": "telegram",
+      "stage": "send_telegram_alert",
       "page": NaN,
-      "average_seconds": 0.1234
+      "average_seconds": 0.0
     }
   ],
-  "average_runtime_by_job": []
+  "average_runtime_by_job": [
+    {
+      "job_name": "persist_completed_trade_db",
+      "average_runtime": 0.7931
+    },
+    {
+      "job_name": "persist_exit_snapshot_db",
+      "average_runtime": 0.6655
+    },
+    {
+      "job_name": "insert",
+      "average_runtime": 0.3505
+    }
+  ]
 }

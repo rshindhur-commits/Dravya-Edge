@@ -1,0 +1,4 @@
+observed_at_utc,trading_day,scan_id,category,stage,page,seconds,metadata
+2026-07-23T16:05:33.941721+00:00,,,telegram,send_telegram_alert,,0.0,{}
+2026-07-23T16:08:18.234915+00:00,,,telegram,send_telegram_alert,,0.0,{}
+2026-07-23T16:10:19.870617+00:00,,,telegram,send_telegram_alert,,0.0,{}

@@ -2662,7 +2662,7 @@ def _telegram_setup_score(row):
     return 0
 
 
-def _dispatch_telegram_entry_alerts(df_results):
+def _dispatch_telegram_entry_alerts(df_results, scan_id=None):
 
     summary = {
         "enter_paper_count": 0,
@@ -2739,9 +2739,11 @@ def _dispatch_telegram_entry_alerts(df_results):
                 option_spread_pct=row.get("Option Spread %"),
                 event_blocked=_row_bool(row.get("Event Blocked")),
                 regime_blocked=_row_bool(row.get("Regime Blocked")),
+                setup_score=_telegram_setup_score(row),
                 alignment_score=row.get("Alignment Score"),
                 rs_rank_score=row.get("RS Rank Score"),
-                relative_volume=row.get("Relative Volume")
+                relative_volume=row.get("Relative Volume"),
+                scan_id=scan_id
             )
             debug_print(
                 f"[TELEGRAM ENTRY ALERT] {row.get('Symbol')} "
@@ -3233,7 +3235,8 @@ def _finalize_scan_outputs(
     with stage_timer.stage("Telegram"):
 
         telegram_summary = _dispatch_telegram_entry_alerts(
-            df_results
+            df_results,
+            scan_id=scan_id
         )
 
     candidate_funnel = _build_candidate_funnel(
@@ -4199,7 +4202,8 @@ def _run_scanner_impl():
                                     if df_15m is not None and not df_15m.empty
                                     else None
                                 )
-                            }
+                            },
+                            scan_id=scan_id
                         )
                         debug_print(
                             f"[TELEGRAM EXIT ALERT] {symbol} "
@@ -4293,7 +4297,8 @@ def _run_scanner_impl():
                                         if df_15m is not None and not df_15m.empty
                                         else None
                                     )
-                                }
+                                },
+                                scan_id=scan_id
                             )
                             debug_print(
                                 f"[TELEGRAM PARTIAL ALERT] {symbol} "
