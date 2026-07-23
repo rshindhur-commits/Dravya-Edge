@@ -45,6 +45,9 @@ SNAPSHOT_COLUMNS = [
     "option_quote_age_seconds",
     "option_quote_allowed_age_seconds",
     "option_quote_freshness_reason",
+    "option_quote_retry_count",
+    "option_quote_latency_ms",
+    "option_quote_refresh_time",
     "affordable",
     "entry_price",
     "stop_price",
@@ -57,6 +60,15 @@ SNAPSHOT_COLUMNS = [
     "option_theta",
     "option_mid_price",
     "trend_health",
+    "entry_timing_score",
+    "entry_timing_grade",
+    "entry_timing_reason",
+    "trade_quality_score",
+    "candidate_rank",
+    "rank_reason",
+    "exit_waterfall",
+    "exit_rule",
+    "exit_stage",
     "replay_outcome",
 ]
 
@@ -160,6 +172,9 @@ def normalize_candidate_row(
         "option_quote_age_seconds": _row_get(row, "Option Quote Age Seconds", "option_quote_age_seconds"),
         "option_quote_allowed_age_seconds": _row_get(row, "Option Quote Allowed Age Seconds", "option_quote_allowed_age_seconds"),
         "option_quote_freshness_reason": _row_get(row, "Option Quote Freshness Reason", "option_quote_freshness_reason"),
+        "option_quote_retry_count": _row_get(row, "Option Quote Retry Count", "option_quote_retry_count"),
+        "option_quote_latency_ms": _row_get(row, "Option Quote Latency Ms", "option_quote_latency_ms"),
+        "option_quote_refresh_time": _row_get(row, "Option Quote Refresh Time", "option_quote_refresh_time"),
         "affordable": _row_get(row, "Affordable", "affordable"),
         "entry_price": _row_get(row, "Candidate Entry Price", "entry_price", "Price"),
         "stop_price": _row_get(row, "Candidate Stop Price", "stop_price", "Stop Loss"),
@@ -172,6 +187,35 @@ def normalize_candidate_row(
         "option_theta": _row_get(row, "Option Theta", "option_theta"),
         "option_mid_price": _row_get(row, "Option Mid Price", "option_mid_price"),
         "trend_health": _row_get(row, "Trend Health State", "trend_health"),
+        "entry_timing_score": _row_get(
+            row,
+            "Entry Timing Score",
+            "entry_timing_score"
+        ),
+        "entry_timing_grade": _row_get(
+            row,
+            "Entry Timing Grade",
+            "entry_timing_grade"
+        ),
+        "entry_timing_reason": _row_get(
+            row,
+            "Entry Timing Reason",
+            "entry_timing_reason"
+        ),
+        "trade_quality_score": _row_get(
+            row,
+            "Trade Quality Score",
+            "trade_quality_score"
+        ),
+        "candidate_rank": _row_get(
+            row,
+            "Candidate Rank",
+            "candidate_rank"
+        ),
+        "rank_reason": _row_get(row, "Rank Reason", "rank_reason"),
+        "exit_waterfall": _row_get(row, "Exit Waterfall", "exit_waterfall"),
+        "exit_rule": _row_get(row, "Exit Rule", "exit_rule"),
+        "exit_stage": _row_get(row, "Exit Stage", "exit_stage"),
         "replay_outcome": _row_get(row, "Replay Outcome", "replay_outcome"),
     }
 

@@ -10,7 +10,7 @@ from app.storage.daily_paths import daily_path
 ENGINE_EVENT_COLUMNS = [
     "event_id", "trading_day", "engine_version", "symbol", "direction",
     "entry_time", "entry_price", "exit_time", "exit_price", "final_r",
-    "mfe_r", "stop_loss", "exit_phase", "entry_efficiency_score",
+    "mfe_r", "stop_loss", "exit_phase", "entry_efficiency_score", "tes",
     "trend_capture_pct", "stock_direction", "trade_direction", "stock_finish",
     "trade_finish", "trend_outcome", "engine_captured_trend",
 ]
@@ -52,6 +52,7 @@ def _event_from_trade(trading_day, engine_version, trade):
         "stop_loss": trade.get("stop_loss"),
         "exit_phase": trade.get("exit_phase") or trade.get("exit_reason"),
         "entry_efficiency_score": trade.get("entry_efficiency_score"),
+        "tes": trade.get("tes") or trade.get("trade_efficiency_score"),
         "trend_capture_pct": _trend_capture_pct(final_r, mfe_r),
         "stock_direction": outcome["stock_direction"],
         "trade_direction": direction,
@@ -158,7 +159,14 @@ def build_trade_comparisons(events):
     joined = v1.join(v2, lsuffix="_v1", rsuffix="_v2", how="inner").reset_index()
     if joined.empty:
         return joined
-    for metric in ["entry_price", "exit_price", "final_r", "mfe_r", "trend_capture_pct"]:
+    for metric in [
+        "entry_price",
+        "exit_price",
+        "final_r",
+        "mfe_r",
+        "trend_capture_pct",
+        "tes",
+    ]:
         v1_metric = f"{metric}_v1"
         v2_metric = f"{metric}_v2"
         joined[f"{metric}_delta"] = (
@@ -200,12 +208,14 @@ def summarize_completed_comparisons(comparisons):
             "Avg MFE improvement": None,
             "V2 higher Trend Capture": 0,
             "Avg Trend Capture improvement": None,
+            "Avg TES improvement": None,
         }
     r_delta = pd.to_numeric(comparisons.get("final_r_delta"), errors="coerce")
     entry_delta = pd.to_numeric(comparisons.get("entry_delta_minutes"), errors="coerce")
     exit_delta = pd.to_numeric(comparisons.get("exit_delta_minutes"), errors="coerce")
     mfe_delta = pd.to_numeric(comparisons.get("mfe_r_delta"), errors="coerce")
     trend_capture_delta = pd.to_numeric(comparisons.get("trend_capture_pct_delta"), errors="coerce")
+    tes_delta = pd.to_numeric(comparisons.get("tes_delta"), errors="coerce")
     return {
         "Trades compared": int(len(comparisons)),
         "V2 higher R": int((r_delta > 0).sum()),
@@ -215,4 +225,5 @@ def summarize_completed_comparisons(comparisons):
         "Avg MFE improvement": round(float(mfe_delta.mean()), 2) if mfe_delta.notna().any() else None,
         "V2 higher Trend Capture": int((trend_capture_delta > 0).sum()),
         "Avg Trend Capture improvement": round(float(trend_capture_delta.mean()), 2) if trend_capture_delta.notna().any() else None,
+        "Avg TES improvement": round(float(tes_delta.mean()), 2) if tes_delta.notna().any() else None,
     }

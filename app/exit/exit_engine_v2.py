@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import time
 
+from app.exit.exit_confidence import evaluate_exit_confidence
 from app.exit.trend_health_engine import evaluate_live_trend_health
 
 
@@ -43,6 +44,25 @@ def evaluate_shadow_exit_v2(df, risk_setup, entry_setup=None, trade_state=None):
     mfe_r = _rr(lowest if is_short else highest, entry, stop, is_short)
     mae_r = max(0.0, _rr(highest if is_short else lowest, entry, stop, is_short) * -1)
     health = evaluate_live_trend_health(latest, direction)
+    confidence = evaluate_exit_confidence(
+        latest,
+        health,
+        current_r,
+        mfe_r,
+        bars_in_trade,
+        is_short,
+    )
+    previous_confirmations = set(
+        (trade_state or {}).get("soft_exit_confirmations") or []
+    )
+    current_confirmations = set(confidence["soft_confirmations"])
+    confirmation_streak = (
+        int((trade_state or {}).get("soft_exit_confirmation_streak") or 0) + 1
+        if previous_confirmations & current_confirmations
+        else 1
+        if current_confirmations
+        else 0
+    )
     phase = "HOLD"
     exit_signal = False
     if (high >= stop if is_short else low <= stop):
@@ -51,12 +71,27 @@ def evaluate_shadow_exit_v2(df, risk_setup, entry_setup=None, trade_state=None):
     elif (low <= target if is_short else high >= target):
         phase = "HARD_TARGET"
         exit_signal = True
-    elif health["trend_failure_confirmed"]:
-        phase = "TREND_FAILURE"
+    elif confidence["exit_health_state"] == "FAILED" or health["trend_failure_confirmed"]:
+        phase = "TREND_FAILURE_CONFIRMED"
         exit_signal = True
-    elif mfe_r >= 1.5 and current_r <= mfe_r - 1 and health["status"] in {"WEAKENING", "BROKEN"}:
-        phase = "PROFIT_PROTECTION"
+    elif {"EMA_LOST", "VWAP_LOST"}.issubset(current_confirmations):
+        phase = "VWAP_AND_EMA_BREAK"
         exit_signal = True
+    elif (
+        confidence["exit_health_state"] in {"WEAKENING", "AT_RISK"}
+        and confidence["soft_confirmation_count"] >= 1
+        and confidence["exit_confidence_score"] >= 45
+    ):
+        phase = "TREND_FAILURE_CONFIRMED"
+        exit_signal = True
+    elif (
+        confidence["soft_confirmation_count"] >= 2
+        or confirmation_streak >= 2
+    ) and confidence["exit_confidence_score"] >= 40:
+        phase = "TREND_FAILURE_CONFIRMED"
+        exit_signal = True
+    elif confidence["grace_zone_eligible"] or current_confirmations:
+        phase = "MONITOR"
     elif int((trade_state or {}).get("bars_in_trade") or 0) >= 24 and current_r < 0.5:
         phase = "TIME_EXIT"
         exit_signal = True
@@ -75,6 +110,13 @@ def evaluate_shadow_exit_v2(df, risk_setup, entry_setup=None, trade_state=None):
         "trend_health_score": health["score"],
         "trend_health_status": health["status"],
         "trend_failure_confirmed": health["trend_failure_confirmed"],
+        "exit_confidence_score": confidence["exit_confidence_score"],
+        "exit_health_state": confidence["exit_health_state"],
+        "soft_exit_confirmations": confidence["soft_confirmations"],
+        "soft_confirmation_count": confidence["soft_confirmation_count"],
+        "soft_exit_confirmation_streak": confirmation_streak,
+        "grace_zone_eligible": confidence["grace_zone_eligible"],
+        "exit_confidence_components": confidence["components"],
         "mfe_r": round(mfe_r, 2),
         "mae_r": round(mae_r, 2),
         "rr_progress": round(current_r, 2),

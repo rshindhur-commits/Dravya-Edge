@@ -90,6 +90,8 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(state["top_candidates"][0]["blocked"], "Risk")
         self.assertEqual(state["decision_center"]["best_put"]["symbol"], "ARM")
         self.assertEqual(len(state["decision_center"]["ranked_opportunities"]), 2)
+        self.assertEqual(len(state["decision_waterfalls"]), 2)
+        self.assertEqual(len(state["v1_v2_decision_waterfalls"]), 2)
 
     def test_writes_dashboard_state_with_runtime_metadata(self):
 

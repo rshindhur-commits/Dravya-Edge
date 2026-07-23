@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from app.db.candidate_snapshot_repository import CandidateSnapshotRepository
+from app.db.decision_waterfall_repository import DecisionWaterfallRepository
 from app.db.persistence import record_gate_decisions, record_scanner_run_finish
 from app.db.rule_evaluation_repository import RuleEvaluationRepository
+from app.analytics.decision_waterfall import (
+    build_decision_waterfall,
+    waterfall_rule_records,
+)
 from app.db.trade_fact_repository import TradeFactRepository
 from app.gates.rule_evaluation import build_rule_evaluations
 
@@ -20,6 +25,15 @@ def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output
         for evaluation in build_rule_evaluations(row, scan_id)
     ]
     RuleEvaluationRepository().batch_insert(rule_evaluations)
+    waterfall_records = [
+        waterfall_record
+        for row in records
+        for waterfall_record in waterfall_rule_records(
+            build_decision_waterfall(row, scan_id=scan_id),
+            scan_id,
+        )
+    ]
+    DecisionWaterfallRepository().batch_insert(waterfall_records)
     TradeFactRepository().batch_insert_events([
         {"trade_id": None, "event_type": "RuleEvaluated", "occurred_at": (health_payload or {}).get("timestamp"), "payload": evaluation.to_record()}
         for evaluation in rule_evaluations
@@ -34,6 +48,7 @@ def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output
             "output_file": str(output_file) if output_file else None,
             "health": health_payload or {},
             "rule_evaluations": len(rule_evaluations),
+            "decision_waterfall_rules": len(waterfall_records),
         },
     )
 

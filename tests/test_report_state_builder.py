@@ -7,6 +7,8 @@ import pandas as pd
 
 from app.ui.cache.report_state_builder import (
     build_historical_v2_learning,
+    build_historical_observational_analytics,
+    build_historical_blocking_trends,
     build_historical_trade_efficiency,
     build_report_state_payload,
     write_report_state,
@@ -82,6 +84,52 @@ class ReportStateBuilderTests(unittest.TestCase):
         self.assertEqual(len(history["daily"]), 2)
         self.assertEqual(history["daily"][0]["Entry Efficiency"], 80.0)
         self.assertEqual(history["exit_phase"][0]["Exit Phase"], "TREND_FAILURE")
+
+    def test_builds_historical_entry_timing_and_ranking(self):
+
+        history = build_historical_observational_analytics([
+            {
+                "trading_day": "2026-07-18",
+                "observational_analytics": {
+                    "entry_timing": {
+                        "average_score": 76,
+                        "late_entries": [{"Symbol": "AAPL"}],
+                    },
+                    "trade_ranking": [
+                        {"Trade Quality Score": 90, "Candidate Rank": 1},
+                        {"Trade Quality Score": 70, "Candidate Rank": 2},
+                    ],
+                },
+            }
+        ])
+
+        row = history["daily"][0]
+        self.assertEqual(row["Average Entry Timing"], 76)
+        self.assertEqual(row["Late Entries"], 1)
+        self.assertEqual(row["Average TQS"], 80)
+        self.assertEqual(row["Average Rank"], 1.5)
+
+    def test_builds_historical_blocking_stage_trends(self):
+
+        history = build_historical_blocking_trends([
+            {
+                "trading_day": "2026-07-18",
+                "observational_analytics": {
+                    "blocking_stage_summary": {
+                        "stages": [
+                            {"stage": "Risk", "count": 4, "percentage": 50},
+                            {"stage": "Option", "count": 2, "percentage": 25},
+                        ]
+                    }
+                },
+            }
+        ])
+
+        self.assertEqual(
+            history["dominant_daily"][0]["Dominant Blocking Stage"],
+            "Risk",
+        )
+        self.assertEqual(len(history["daily"]), 2)
 
     def test_write_report_state_writes_live_and_daily_json(self):
 

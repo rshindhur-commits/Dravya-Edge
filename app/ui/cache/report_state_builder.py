@@ -193,6 +193,73 @@ def build_historical_v2_learning(limit=20):
         "exit_phase": _records(phase_counts),
     }
 
+
+def build_historical_observational_analytics(validation_states):
+
+    records = []
+
+    for state in validation_states or []:
+
+        analytics = state.get("observational_analytics") or {}
+        timing = analytics.get("entry_timing") or {}
+        ranking = pd.DataFrame(analytics.get("trade_ranking") or [])
+        quality = pd.to_numeric(
+            ranking.get("Trade Quality Score", pd.Series(dtype=float)),
+            errors="coerce",
+        )
+        rank = pd.to_numeric(
+            ranking.get("Candidate Rank", pd.Series(dtype=float)),
+            errors="coerce",
+        )
+        records.append({
+            "Trading Day": state.get("trading_day"),
+            "Average Entry Timing": timing.get("average_score"),
+            "Late Entries": len(timing.get("late_entries") or []),
+            "Average TQS": round(float(quality.mean()), 2)
+            if quality.notna().any()
+            else None,
+            "Average Rank": round(float(rank.mean()), 2)
+            if rank.notna().any()
+            else None,
+        })
+
+    return {"daily": _records(pd.DataFrame(records))}
+
+
+def build_historical_blocking_trends(validation_states):
+
+    rows = []
+    dominant = []
+
+    for state in validation_states or []:
+
+        analytics = state.get("observational_analytics") or {}
+        summary = analytics.get("blocking_stage_summary") or {}
+        stages = summary.get("stages") or []
+
+        for stage in stages:
+
+            rows.append({
+                "Trading Day": state.get("trading_day"),
+                "Stage": stage.get("stage"),
+                "Count": stage.get("count"),
+                "Percentage": stage.get("percentage"),
+            })
+
+        if stages:
+
+            dominant.append({
+                "Trading Day": state.get("trading_day"),
+                "Dominant Blocking Stage": stages[0].get("stage"),
+                "Count": stages[0].get("count"),
+                "Percentage": stages[0].get("percentage"),
+            })
+
+    return {
+        "daily": _records(pd.DataFrame(rows)),
+        "dominant_daily": _records(pd.DataFrame(dominant)),
+    }
+
 def build_report_state_payload(
     report_date: str,
     daily_report_path: Path | None = None,
@@ -222,6 +289,18 @@ def build_report_state_payload(
         validation_states if validation_states is not None else _daily_validation_states()
     )
     historical_v2_learning = build_historical_v2_learning()
+    historical_observational_analytics = (
+        build_historical_observational_analytics(
+            validation_states
+            if validation_states is not None
+            else _daily_validation_states()
+        )
+    )
+    historical_blocking_trends = build_historical_blocking_trends(
+        validation_states
+        if validation_states is not None
+        else _daily_validation_states()
+    )
 
     if daily_info["exists"] or root_info["exists"]:
 
@@ -252,6 +331,8 @@ def build_report_state_payload(
         "scanner_snapshot": scanner_info,
         "historical_trade_efficiency": historical_trade_efficiency,
         "historical_v2_learning": historical_v2_learning,
+        "historical_observational_analytics": historical_observational_analytics,
+        "historical_blocking_trends": historical_blocking_trends,
         "errors": [] if status != "MISSING" else ["Daily validation report has not been generated."],
     }
 

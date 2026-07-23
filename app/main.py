@@ -120,6 +120,12 @@ from app.analytics.scanner_profiler import (
 from app.analytics.candidate_snapshot_writer import (
     append_candidate_snapshots
 )
+from app.analytics.entry_timing_engine import (
+    evaluate_entry_timing
+)
+from app.analytics.trade_ranker import (
+    rank_candidates
+)
 from app.runtime import RuntimeJob, get_runtime_scheduler
 from app.runtime.scan_generation import ScanGeneration
 from app.storage.signal_lifecycle_store import (
@@ -2943,6 +2949,25 @@ def _persist_scan_outputs(
 
     try:
 
+        with profile_timer.stage("Learning Engine"):
+
+            from app.analytics.learning_engine import write_daily_learning_summary
+
+            learning_summary = write_daily_learning_summary(
+                trading_day
+            )
+
+        print(
+            "[LEARNING ENGINE] "
+            f"saved {learning_summary['path']}"
+        )
+
+    except Exception as exc:
+
+        print(f"[LEARNING ENGINE WARNING] {exc}")
+
+    try:
+
         with profile_timer.stage("Quote attribution"):
 
             from app.analytics.quote_attribution import write_quote_attribution
@@ -3204,6 +3229,7 @@ def _finalize_scan_outputs(
         df_results = _add_relative_strength_rankings(
             df_results
         )
+        df_results = rank_candidates(df_results)
 
     option_freshness = df_results.get("Option Quote Freshness", pd.Series(dtype=object)).astype(str).str.upper()
     successful_runtimes = [
@@ -3718,6 +3744,10 @@ def _run_scanner_impl():
                     "vwap_extension_atr": None,
                     "reason": "NO_MARKET_DATA",
                 }
+
+            entry_timing = evaluate_entry_timing(
+                shadow_entry_v2
+            )
 
             if not df_15m.empty:
 
@@ -5175,6 +5205,18 @@ def _run_scanner_impl():
                     shadow_entry_v2.get("reason")
                 ),
 
+                "Entry Timing Score": (
+                    entry_timing.get("entry_timing_score")
+                ),
+
+                "Entry Timing Grade": (
+                    entry_timing.get("entry_timing_grade")
+                ),
+
+                "Entry Timing Reason": (
+                    entry_timing.get("entry_timing_reason")
+                ),
+
                 "V2 Shadow Trade Status": (
                     v2_shadow_trade.get("status")
                     if v2_shadow_trade
@@ -5340,6 +5382,19 @@ def _run_scanner_impl():
                     exit_setup["exit_reason"]
                 ),
 
+                "Exit Rule": (
+                    exit_setup.get("exit_rule")
+                ),
+
+                "Exit Stage": (
+                    exit_setup.get("exit_stage")
+                ),
+
+                "Exit Waterfall": json.dumps(
+                    exit_setup.get("exit_waterfall", []),
+                    default=str
+                ),
+
                 "V2 Exit Signal": (
                     shadow_exit_v2.get("exit_signal")
                 ),
@@ -5358,6 +5413,26 @@ def _run_scanner_impl():
 
                 "V2 Trend Failure Confirmed": (
                     shadow_exit_v2.get("trend_failure_confirmed")
+                ),
+
+                "V2 Exit Confidence Score": (
+                    shadow_exit_v2.get("exit_confidence_score")
+                ),
+
+                "V2 Exit Health State": (
+                    shadow_exit_v2.get("exit_health_state")
+                ),
+
+                "V2 Soft Confirmation Count": (
+                    shadow_exit_v2.get("soft_confirmation_count")
+                ),
+
+                "V2 Soft Confirmation Streak": (
+                    shadow_exit_v2.get("soft_exit_confirmation_streak")
+                ),
+
+                "V2 Grace Zone Active": (
+                    shadow_exit_v2.get("grace_zone_eligible")
                 ),
 
                 "V2 MFE R": (
@@ -5622,6 +5697,24 @@ def _run_scanner_impl():
 
                 "Option Quote Freshness Reason": (
                     option_recommendation.get("quote_freshness_reason")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Option Quote Retry Count": (
+                    option_recommendation.get("quote_retry_count")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Option Quote Latency Ms": (
+                    option_recommendation.get("quote_latency_ms")
+                    if option_recommendation
+                    else None
+                ),
+
+                "Option Quote Refresh Time": (
+                    option_recommendation.get("quote_refresh_time")
                     if option_recommendation
                     else None
                 ),

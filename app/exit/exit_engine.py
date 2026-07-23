@@ -2,6 +2,7 @@ from datetime import time
 
 import pandas as pd
 
+from app.analytics.exit_waterfall import build_exit_waterfall
 from app.utils.runtime_logging import debug_print
 
 
@@ -435,6 +436,17 @@ def evaluate_exit(
         trade_action = "EXIT"
         adjustment_reason = exit_reason
 
+    selected_exit = (
+        _select_primary_exit(exit_reasons)
+        if exit_signal
+        else None
+    )
+    exit_rule = selected_exit.get("code") if selected_exit else "HOLD"
+    exit_waterfall = build_exit_waterfall(
+        exit_reasons,
+        selected_rule=exit_rule if exit_signal else None
+    )
+
     debug_print(
         f"[EXIT DEBUG] "
         f"is_short={is_short} "
@@ -451,6 +463,20 @@ def evaluate_exit(
         "exit_reasons": [item["reason"] for item in exit_reasons],
         "exit_diagnostics": exit_reasons,
         "primary_exit": exit_reason,
+        "exit_waterfall": exit_waterfall,
+        "exit_rule": exit_rule,
+        "exit_stage": (
+            next(
+                (
+                    item["stage"]
+                    for item in exit_waterfall
+                    if item["rule"] == exit_rule
+                ),
+                None
+            )
+            if exit_signal
+            else None
+        ),
         "secondary_exits": [
             item["reason"]
             for item in exit_reasons
