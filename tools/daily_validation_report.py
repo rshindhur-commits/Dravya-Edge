@@ -15,7 +15,13 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.analytics.expectancy_report import build_grouped_expectancy_reports
+from app.analytics.engine_version_comparison import (
+    build_daily_trend_outcomes,
+    summarize_completed_comparisons,
+)
+from app.analytics.entry_exit_v2_shadow import summarize_shadow_comparison
 from app.analytics.trend_capture import summarize_trend_capture
+from app.analytics.v2_learning_writer import summarize_learning_dataset
 from app.gates.entry_gate import price_geometry_error
 from app.storage.daily_paths import (
     daily_path,
@@ -1493,7 +1499,14 @@ def render_report(
     trend_capture_summary,
     trend_capture_df,
     suggestions,
-    archived_files
+    archived_files,
+    shadow_summary,
+    shadow_phase_df,
+    completed_comparison_summary,
+    completed_comparison_df,
+    engine_trend_outcomes_df,
+    execution_failures_df,
+    v2_learning_summary
 ):
 
     manifest_rows = "".join(
@@ -1516,6 +1529,18 @@ def render_report(
         f"<li>{html.escape(warning)}</li>"
         for warning in data_health_warnings
     ) or "<li>No data-health warnings.</li>"
+    shadow_summary_rows = "".join(
+        _metric_row(label, value)
+        for label, value in (shadow_summary or {}).items()
+    ) or _metric_row("Status", "No V2 shadow rows.")
+    completed_comparison_rows = "".join(
+        _metric_row(label, value)
+        for label, value in (completed_comparison_summary or {}).items()
+    ) or _metric_row("Status", "No completed V1/V2 comparisons.")
+    v2_learning_rows = "".join(
+        _metric_row(label, value)
+        for label, value in (v2_learning_summary or {}).items()
+    ) or _metric_row("Status", "No V2 learning records.")
     lifecycle_review_rows = "".join(
         _metric_row(label, value)
         for label, value in lifecycle_review_metrics.items()
@@ -1651,6 +1676,21 @@ def render_report(
     <table class="metric-table">{health_rows}</table>
     <ul>{health_warnings_html}</ul>
 
+    <h2>Entry/Exit V2 Shadow Comparison</h2>
+    <p>Observational comparison only. V2 never opens, closes, or modifies trades.</p>
+    <table class="metric-table">{shadow_summary_rows}</table>
+    <h3>V2 Exit Phase Distribution</h3>
+    {_html_table(shadow_phase_df, "No V2 shadow rows yet.")}
+    <h3>Completed V1/V2 Trade Comparison</h3>
+    <table class="metric-table">{completed_comparison_rows}</table>
+    {_html_table(completed_comparison_df, "No completed V1/V2 trade pairs yet.")}
+    <h3>Trend Outcome Attribution</h3>
+    {_html_table(engine_trend_outcomes_df, "No completed engine trades yet.")}
+    <h3>Strong Trend, Failed Execution</h3>
+    {_html_table(execution_failures_df, "No strong-trend execution failures identified.")}
+    <h3>V2 Learning Summary</h3>
+    <table class="metric-table">{v2_learning_rows}</table>
+
   <h2>A. Trade Result Scorecard</h2>
   <table class="metric-table">{metric_rows}</table>
   <h3>Opened Trades</h3>
@@ -1765,6 +1805,32 @@ def build_report(args):
     lifecycle_events_df = _read_csv(daily_path(report_date, "signal_lifecycle_events.csv"))
     lifecycle_transitions_df = _read_csv(daily_path(report_date, "signal_state_transitions.csv"))
     trend_capture_df = _read_csv(daily_path(report_date, "trend_capture_analysis.csv"))
+    shadow_df = _read_csv(daily_path(report_date, "entry_exit_v2_shadow.csv"))
+    shadow_summary, shadow_phase_df = summarize_shadow_comparison(shadow_df)
+    completed_comparison_df = _read_csv(
+        daily_path(report_date, "engine_trade_comparisons.csv")
+    )
+    completed_comparison_summary = summarize_completed_comparisons(
+        completed_comparison_df
+    )
+    engine_events_df = _read_csv(daily_path(report_date, "engine_trade_events.csv"))
+    engine_trend_outcomes_df = build_daily_trend_outcomes(
+        engine_events_df,
+        scanner_df,
+    )
+    engine_trend_outcomes_df.to_csv(
+        daily_path(report_date, "engine_trend_outcomes.csv"),
+        index=False,
+    )
+    execution_failures_df = engine_trend_outcomes_df[
+        engine_trend_outcomes_df.get(
+            "trend_outcome",
+            pd.Series(dtype=object),
+        ).astype(str).eq("STRONG_TREND_EXECUTION_FAILED")
+    ].copy()
+    v2_learning_summary = summarize_learning_dataset(
+        _read_csv(daily_path(report_date, "v2_learning_dataset.csv"))
+    )
     data_health, data_health_warnings = build_data_health(
         scanner_df,
         telemetry_df,
@@ -1898,7 +1964,14 @@ def build_report(args):
             trend_capture_summary,
             trend_capture_df,
             suggestions,
-            archived_files
+            archived_files,
+            shadow_summary,
+            shadow_phase_df,
+            completed_comparison_summary,
+            completed_comparison_df,
+            engine_trend_outcomes_df,
+            execution_failures_df,
+            v2_learning_summary
         ),
         encoding="utf-8"
     )

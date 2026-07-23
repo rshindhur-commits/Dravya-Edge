@@ -125,6 +125,32 @@ These widgets are fed primarily by `market_opportunity_audit.csv`, `paper_trade_
 
 Dashboard KPI rows use the shared `kpi_card()` helper in `app/ui/components.py` and the global `.metric-card` CSS injected by `app/dashboard.py`. Use these compact KPI cards for scorecard, coverage, engine-health, entry-delay, and validation-summary metrics. Reserve larger headline typography for future primary performance metrics such as total P/L, total R, win rate, or profit factor.
 
+## Dashboard Page Responsibilities
+
+| Page | Primary question | Current contents | V1/V2 rule |
+| --- | --- | --- | --- |
+| **Trading** | What should I trade right now? | Today’s Decision Center, top-five ranked V1 decisions, open V1 trades, compact performance, and market summary | V1 only. V2 does not place trades, alter state, or create competing live controls. |
+| **Validation** | Did execution behave well today? | Trade Doctor, Strategy Confidence, Trade Efficiency, Candidate Outcomes, Decision Analysis, V1/V2 completed-trade comparison, Trend Outcome Attribution, strong-trend execution failures, and V2 Learning Summary | Post-trade V2 evidence only. |
+| **Replay** | What would the saved scanner state have done? | Offline replay coverage, blockers, saved replay outputs, and replay summary | Current replay is V1-oriented. V1/V2 replay comparison is pending the Candidate Evidence merge. |
+| **Reports** | Is performance improving across days? | Daily report status, historical Trade Efficiency, and multi-day Execution Learning Trends for trend age, entry efficiency, Trend Capture %, TES, and exit phase | Aggregated research only; no routing or execution controls. |
+| **Developer** | Is the system healthy? | Runtime state, scheduler and performance diagnostics, cache/report status, and lazy-loaded engineering diagnostics | Operational diagnostics only. |
+
+The Daily Validation Report is the portable post-market counterpart to Validation. It includes V2 shadow counts, completed V1/V2 comparisons, Trend Outcome Attribution, strong-trend execution failures, and the V2 Learning Summary.
+
+### Deprecated Trading UI Paths
+
+The following renderers are retained temporarily for fallback/inspection and are marked `DEPRECATED` in [`app/dashboard.py`](app/dashboard.py). They are no longer used by the active Trading route.
+
+| Deprecated renderer | Replacement | Removal condition |
+| --- | --- | --- |
+| `_render_command_center` | Decision Center in `app/ui/pages/trading.py` | One live paper session confirms the state-driven Decision Center covers live decisions. |
+| `_render_current_opportunities` | Top-five Ranked Opportunities | One live session confirms top-five ranking and action ordering. |
+| `_render_why_no_trade` | Validation > Decision Analysis | Validation cache contains a complete scan-day analysis. |
+| `_render_missed_opportunities` | Validation > Candidate Outcomes / Decision Analysis | Candidate Evidence merge restores richer missed-winner attribution on this branch. |
+| `_render_trading_page` / `_render_trading_page_from_state` | `app/ui/pages/trading.py` | New Trading route remains stable across cached and full-data paths. |
+
+Sidebar grouping is now intentional: **Auto Refresh**, **Paper Automation**, **Operations** (validation/replay generation), and navigation remain visible. Downloads are under **Tools: Downloads**, with raw artifacts under **Advanced files**. Runtime keys and detailed diagnostics belong on Developer.
+
 ## Production Engineering Status
 
 Current implementation status for the production-engineering roadmap:
@@ -238,6 +264,64 @@ Trade Efficiency Analytics is observational only. It does not influence entries,
 The Trading Scorecard's **Missed Winners / Loss Attribution** table identifies significant market moves that were not entered or ultimately resolved as winners. For each candidate it shows the setup, move percentage, classified reason, `root_cause`, `blocked_by`, relevant `rule`, observed `threshold`, optional `would_have_passed_if` value, a medium-confidence label, and a recommendation.
 
 Reason categories are `MOMENTUM`, `ENTRY`, `RISK`, `OPTION`, `AFFORDABILITY`, `EXIT`, and `UNKNOWN`. The attribution is generated from persisted daily audit data and is intentionally retrospective: it helps prioritize investigation of gates, quote/liquidity handling, affordability, or exit timing; it does not relax thresholds, create entries, send Telegram alerts, or alter paper/real trade behavior.
+
+## Entry/Exit V2 Shadow Mode
+
+Entry/Exit V2 is an observational redesign, not a live strategy replacement. V1 remains the only engine permitted to open or close trades, mutate trade state, change suggestions, or send Telegram alerts.
+
+- `app/strategies/entry_engine_v2.py` calculates trend age, pullback number, bars since breakout, EMA9/VWAP extension in ATR, volume confirmation, and a 0-100 Entry Efficiency Score. It proposes efficient first-pullback locations without changing V1 setup or RR rules.
+- `app/exit/trend_health_engine.py` provides a lightweight live Trend Health score from EMA alignment, VWAP, structure, MACD, RSI, and volume.
+- `app/exit/exit_engine_v2.py` keeps hard stop and hard target exits absolute, then classifies soft decisions as `TREND_FAILURE`, `PROFIT_PROTECTION`, `TIME_EXIT`, `END_OF_DAY`, or `HOLD`. Soft trend exits require multi-factor confirmation.
+- `app/analytics/entry_exit_v2_shadow.py` records each scan to `data/daily/YYYY-MM-DD/entry_exit_v2_shadow.csv`, including V1/V2 entry and exit decisions, V2 exit phase, live MFE in $R$, trend-health state, and V1/V2 exit disagreement.
+- `app/state/entry_exit_v2_shadow_state.py` owns V2-only shadow trade state. V2 can independently open, manage, and close a simulated trade using its own entry decision and the shared risk geometry; it never reads or mutates V1 trade state.
+- `app/analytics/engine_version_comparison.py` appends completed engine facts to `engine_trade_events.csv`, writes sequence-matched V1/V2 pairs to `engine_trade_comparisons.csv`, and records entry/exit disagreements to `engine_differences.csv`. Completed pairs include entry/exit time and price, final $R$, MFE in $R$, and timing/$R$/MFE deltas.
+
+The Daily Validation Report and Validation page include an **Entry/Exit V2 Shadow Comparison** section with scanner-level disagreements and completed-trade metrics. Evaluate V2 only after at least 2-3 weeks of paper evidence using Trend Capture %, TES, left on table, `EXIT_TOO_EARLY` rate, win rate, and average $R$. More entries alone are not a success criterion. A future controlled switch may route through `ENTRY_ENGINE=v1|v2` and `EXIT_ENGINE=v1|v2`, but those flags must remain inactive until V2 satisfies the promotion criteria.
+
+### V2 Operating Contract
+
+| Area | V1 | V2 shadow |
+| --- | --- | --- |
+| Entry decision | Production paper decision | Independent proposal from indicators, trend, price, and shared risk geometry |
+| Trade state | `trade_state.json` | `entry_exit_v2_shadow_state.json` |
+| Entry/exit execution | May open and close paper trades | Never places, closes, or modifies a V1 trade |
+| Telegram and suggestions | V1-owned operational flow | No Telegram dispatch or suggestion mutation |
+| Risk controls | Existing production controls | Uses the same risk geometry; hard stop and target remain absolute in V2 simulation |
+
+Daily V2 artifacts have distinct purposes:
+
+| Artifact | Purpose |
+| --- | --- |
+| `entry_exit_v2_shadow.csv` | Per-scan V1/V2 entry and exit proposals, trend health, MFE, and disagreements |
+| `engine_differences.csv` | Only the entry/exit decisions where V1 and V2 differ |
+| `engine_trade_events.csv` | Completed V1 and V2 engine events |
+| `engine_trade_comparisons.csv` | Sequence-matched completed V1/V2 pairs with timing, price, $R$, and MFE deltas |
+
+The completed-pair matching is currently by symbol, direction, and per-engine sequence. It is appropriate for paper comparison, but a later merge of the master `candidate_evidence` model is required before candidate-key matching, Candidate Intelligence version fields, Replay version fields, and multi-week Reports-page aggregation can be considered complete on this branch.
+
+Do not enable the future `ENTRY_ENGINE` or `EXIT_ENGINE` routing flags until a documented evidence review confirms that V2 improves the stated metrics over a meaningful sample without degrading risk behavior.
+
+### Trend Outcome And Primary Metric
+
+Every completed V1 or V2 engine event records `stock_direction`, `trade_direction`, `stock_finish`, `trade_finish`, `trend_outcome`, `engine_captured_trend`, and `trend_capture_pct`. The Daily Validation Report writes the daily enrichment to `engine_trend_outcomes.csv` and highlights `STRONG_TREND_EXECUTION_FAILED` rows: cases where the stock moved at least $1R$ in the trade direction but the engine finished non-profitable.
+
+`stock_finish` uses the latest scanner price available when the report runs. After market close, that is the end-of-day scanner outcome; before close, it is a provisional latest-price label. The `trend_capture_pct` event metric is $\max(0, \min(100, \frac{\text{final R}}{\text{MFE R}} \times 100))$ when MFE is positive.
+
+Trend Capture % is the primary V2 engineering target. Win rate, average $R$, TES, MFE, and left-on-table remain guardrail metrics: V2 should not improve capture by materially degrading risk, win rate, or execution quality.
+
+### V2 Learning Dataset
+
+`app/analytics/v2_learning_dataset.py` creates one compact execution-learning record for every completed V1 and V2 shadow trade. It stores execution-specific features rather than duplicating raw scanner indicators:
+
+- Entry timing: trend age, pullback number, bars since breakout, Entry Efficiency Score, EMA/VWAP/EMA20 distance, ATR extension, alignment score, and volume-confirmation score.
+- Trade evolution: maximum/minimum/average trend health, trend-health standard deviation, MFE/MAE in $R$, bars held, and time held.
+- Exit and outcome: exit phase/reason, final $R$, Trend Capture %, TES, left on table, grades/verdicts when available, and derived execution labels.
+
+`app/analytics/v2_learning_writer.py` writes the daily dataset to `data/daily/YYYY-MM-DD/v2_learning_dataset.csv` and writes Parquet when available. V2 shadow state aggregates health/MFE/MAE continuously; V1 records use the same-entry observational metrics captured during its active lifecycle.
+
+The **Validation** page shows a V2 Learning Summary for the day. The existing **Reports** page renders multi-day Execution Learning Trends for Trend Age, Entry Efficiency, Trend Capture %, TES, and V2 exit phase. The Daily Validation Report includes the same daily summary.
+
+An optional future adapter can upsert these records into the master Candidate Evidence payload. It is intentionally not active on this branch because the `candidate_evidence` foundation is absent; merge that foundation before enabling candidate-key joins or payload writes.
 
 ## Offline Decision Replay
 

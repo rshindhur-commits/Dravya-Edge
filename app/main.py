@@ -8,6 +8,12 @@ from app.state.state_trade_manager import (
     close_trade,
     update_trade
 )
+from app.state.entry_exit_v2_shadow_state import (
+    close_shadow_trade,
+    load_shadow_trades,
+    open_shadow_trade,
+    update_shadow_trade,
+)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
@@ -39,10 +45,12 @@ from app.strategies.momentum_strategy import analyze_setup
 from app.ai.trade_analyzer import generate_trade_summary
 #from app.options.options_recommender import recommend_option
 from app.state.state_manager import should_call_ai
-from app.strategies.entry_engine import detect_entry
+from app.strategies.entry_engine_v1 import detect_entry
+from app.strategies.entry_engine_v2 import evaluate_shadow_entry_v2
 from app.risk.risk_manager import calculate_risk
 from app.risk.event_blocker import evaluate_event_blocker
-from app.exit.exit_engine import evaluate_exit
+from app.exit.exit_engine_v1 import evaluate_exit
+from app.exit.exit_engine_v2 import evaluate_shadow_exit_v2
 
 from app.utils.timeframe_resampler import (
     resample_timeframe
@@ -2950,6 +2958,31 @@ def _persist_scan_outputs(
     snapshot_result = None
     records = df_results.to_dict("records")
 
+    try:
+
+        with profile_timer.stage("Entry/Exit V2 Shadow"):
+
+            from app.analytics.entry_exit_v2_shadow import write_shadow_comparison
+
+            shadow_result = write_shadow_comparison(
+                records,
+                trading_day=trading_day,
+                scan_id=scan_id,
+                observed_at=observed_at
+            )
+
+        if shadow_result:
+
+            print(
+                "[ENTRY/EXIT V2 SHADOW] "
+                f"saved {shadow_result['rows']} rows to "
+                f"{shadow_result['path']}"
+            )
+
+    except Exception as exc:
+
+        print(f"[ENTRY/EXIT V2 SHADOW WARNING] {exc}")
+
     with profile_timer.stage("Market opportunity audit"):
 
         audit_result = _append_market_opportunity_audit(
@@ -3642,6 +3675,28 @@ def _run_scanner_impl():
 
             if not df_15m.empty:
 
+                with stage_timer.stage("Entry V2 Shadow"):
+
+                    shadow_entry_v2 = evaluate_shadow_entry_v2(
+                        df_15m,
+                        analysis_15m
+                    )
+
+            else:
+
+                shadow_entry_v2 = {
+                    "suggested_entry": False,
+                    "entry_efficiency_score": 0,
+                    "trend_age_bars": 0,
+                    "pullback_number": 0,
+                    "bars_since_breakout": 0,
+                    "ema9_extension_atr": None,
+                    "vwap_extension_atr": None,
+                    "reason": "NO_MARKET_DATA",
+                }
+
+            if not df_15m.empty:
+
                 with stage_timer.stage("Risk"):
 
                     risk_setup = calculate_risk(
@@ -3672,6 +3727,99 @@ def _run_scanner_impl():
                     "take_profit": None
 
                 }
+
+            v2_shadow_trade = load_shadow_trades().get(symbol)
+            v2_shadow_risk = None
+            v2_shadow_exit = {
+                "exit_signal": False,
+                "exit_phase": "NO_SHADOW_TRADE",
+                "trend_health_score": None,
+                "trend_health_status": None,
+                "trend_failure_confirmed": False,
+                "mfe_r": None,
+                "rr_progress": None,
+            }
+            v2_shadow_completed = None
+
+            if not df_15m.empty:
+
+                if v2_shadow_trade and v2_shadow_trade.get("status") == "OPEN":
+
+                    with stage_timer.stage("Exit V2 Independent Shadow"):
+
+                        v2_shadow_exit = evaluate_shadow_exit_v2(
+                            df_15m,
+                            {
+                                "stop_loss": v2_shadow_trade.get("stop_loss"),
+                                "take_profit": v2_shadow_trade.get("take_profit"),
+                                "entry_price": v2_shadow_trade.get("entry_price"),
+                            },
+                            {"entry_type": v2_shadow_trade.get("entry_type")},
+                            trade_state=v2_shadow_trade,
+                        )
+
+                    update_shadow_trade(symbol, v2_shadow_exit)
+
+                    if v2_shadow_exit.get("exit_signal"):
+
+                        v2_shadow_completed = close_shadow_trade(
+                            symbol,
+                            v2_shadow_exit,
+                            now_et().isoformat(),
+                            float(df_15m["Close"].iloc[-1]),
+                        )
+                        v2_shadow_trade = v2_shadow_completed
+
+                        try:
+
+                            from app.analytics.engine_version_comparison import append_engine_trade_event
+                            from app.analytics.v2_learning_dataset import build_learning_record
+                            from app.analytics.v2_learning_writer import append_learning_record
+
+                            append_engine_trade_event(
+                                trading_day,
+                                "v2",
+                                v2_shadow_completed,
+                            )
+                            append_learning_record(
+                                build_learning_record(
+                                    trading_day,
+                                    v2_shadow_completed,
+                                )
+                            )
+
+                        except Exception as exc:
+
+                            print(f"[V2 SHADOW EVENT WARNING] {exc}")
+
+                    else:
+
+                        v2_shadow_trade = load_shadow_trades().get(symbol)
+
+                elif shadow_entry_v2.get("suggested_entry"):
+
+                    v2_entry_setup = {
+                        "entry_type": shadow_entry_v2.get("entry_type"),
+                        "entry_quality": "HIGH",
+                        "avoid_chasing": False,
+                    }
+
+                    with stage_timer.stage("Risk V2 Independent Shadow"):
+
+                        v2_shadow_risk = calculate_risk(
+                            df_15m,
+                            analysis_15m,
+                            v2_entry_setup,
+                        )
+
+                    if v2_shadow_risk.get("trade_allowed"):
+
+                        v2_shadow_trade = open_shadow_trade(
+                            symbol,
+                            shadow_entry_v2,
+                            v2_shadow_risk,
+                            now_et().isoformat(),
+                        )
 
             if entry_setup["entry_type"] == "NO_ENTRY":
 
@@ -3869,6 +4017,15 @@ def _run_scanner_impl():
 
             # Active trade exit evaluation
 
+            shadow_exit_v2 = {
+                "exit_signal": False,
+                "exit_phase": "NO_ACTIVE_TRADE",
+                "trend_health_score": None,
+                "trend_health_status": None,
+                "trend_failure_confirmed": False,
+                "mfe_r": None,
+                "rr_progress": None,
+            }
 
             if (
                 active_trade 
@@ -3926,6 +4083,32 @@ def _run_scanner_impl():
 
                         trade_state=active_trade
 
+                    )
+
+                    shadow_exit_v2 = evaluate_shadow_exit_v2(
+                        df_15m,
+                        {
+                            "stop_loss": active_trade["stop_loss"],
+                            "take_profit": active_trade["take_profit"],
+                            "entry_price": active_trade.get(
+                                "entry_price",
+                                None
+                            )
+                        },
+                        {
+                            "entry_type": (
+                                active_trade.get("entry_type")
+                                or (
+                                    "BREAKDOWN_SHORT"
+                                    if (
+                                        active_trade.get("stop_loss", 0)
+                                        > active_trade.get("entry_price", 0)
+                                    )
+                                    else "BREAKOUT_LONG"
+                                )
+                            )
+                        },
+                        trade_state=active_trade
                     )
 
                 trade_management.update({
@@ -4008,6 +4191,41 @@ def _run_scanner_impl():
                         print(
                             f"[TELEGRAM EXIT ALERT ERROR] {symbol}: {e}"
                         )
+
+                    try:
+
+                        from app.analytics.engine_version_comparison import append_engine_trade_event
+                        from app.analytics.v2_learning_dataset import build_learning_record
+                        from app.analytics.v2_learning_writer import append_learning_record
+
+                        v1_completed_trade = {
+                            **active_trade,
+                            "closed_at": now_et().isoformat(),
+                            "close_price": current_symbol_close,
+                            "final_r": exit_setup.get("rr_progress"),
+                            "mfe_r": shadow_exit_v2.get("mfe_r"),
+                            "mae_r": shadow_exit_v2.get("mae_r"),
+                            "exit_phase": exit_setup.get("exit_reason"),
+                            "trend_health_at_exit": shadow_exit_v2.get(
+                                "trend_health_score"
+                            ),
+                        }
+
+                        append_engine_trade_event(
+                            trading_day,
+                            "v1",
+                            v1_completed_trade,
+                        )
+                        append_learning_record(
+                            build_learning_record(
+                                trading_day,
+                                v1_completed_trade,
+                            )
+                        )
+
+                    except Exception as exc:
+
+                        print(f"[V1 ENGINE EVENT WARNING] {exc}")
 
                     close_trade(symbol)
 
@@ -4098,7 +4316,9 @@ def _run_scanner_impl():
 
                         option_data=active_option_snapshot,
 
-                        option_pl=active_option_pl
+                        option_pl=active_option_pl,
+
+                        execution_metrics=shadow_exit_v2
 
                     )          
 
@@ -4602,7 +4822,8 @@ def _run_scanner_impl():
                             position_data.get("contracts")
                             if position_data
                             else None
-                        )
+                        ),
+                        execution_features=shadow_entry_v2,
                     )
 
                     active_trade = get_trade(symbol)
@@ -4674,8 +4895,7 @@ def _run_scanner_impl():
             ):
                 
                 if (
-                    final_signal != "NEUTRAL"
-                    and entry_setup["entry_type"] != "NO_ENTRY"
+                    entry_setup["entry_type"] != "NO_ENTRY"
                     and abs(alignment_score) >= 4
                 ):
                     summary = generate_trade_summary(
@@ -4820,19 +5040,9 @@ def _run_scanner_impl():
                     alignment_score,
                     2
                 ),                
-
                 "Symbol Move %": symbol_move_pct,
 
                 "RS vs QQQ": None,
-
-                "RS vs SPY": None,
-
-                "RS Rank Score": None,
-
-                "Bullish Rank": None,
-
-                "Bearish Rank": None,
-
                 "Top Candidate": None,
 
                 "Premarket Gap %": premarket_gap_pct,
@@ -4905,6 +5115,66 @@ def _run_scanner_impl():
                     entry_setup["entry_trigger"]
                     if entry_setup
                     else None
+                ),
+
+                "V2 Entry Suggested": (
+                    shadow_entry_v2.get("suggested_entry")
+                ),
+
+                "V2 Entry Efficiency Score": (
+                    shadow_entry_v2.get("entry_efficiency_score")
+                ),
+
+                "V2 Trend Age Bars": (
+                    shadow_entry_v2.get("trend_age_bars")
+                ),
+
+                "V2 Pullback Number": (
+                    shadow_entry_v2.get("pullback_number")
+                ),
+
+                "V2 Bars Since Breakout": (
+                    shadow_entry_v2.get("bars_since_breakout")
+                ),
+
+                "V2 EMA9 Extension ATR": (
+                    shadow_entry_v2.get("ema9_extension_atr")
+                ),
+
+                "V2 VWAP Extension ATR": (
+                    shadow_entry_v2.get("vwap_extension_atr")
+                ),
+
+                "V2 Entry Reason": (
+                    shadow_entry_v2.get("reason")
+                ),
+
+                "V2 Shadow Trade Status": (
+                    v2_shadow_trade.get("status")
+                    if v2_shadow_trade
+                    else "NO_SHADOW_TRADE"
+                ),
+
+                "V2 Shadow Entry Time": (
+                    v2_shadow_trade.get("opened_at")
+                    if v2_shadow_trade
+                    else None
+                ),
+
+                "V2 Shadow Entry Price": (
+                    v2_shadow_trade.get("entry_price")
+                    if v2_shadow_trade
+                    else None
+                ),
+
+                "V2 Shadow Risk Reward": (
+                    v2_shadow_trade.get("risk_reward")
+                    if v2_shadow_trade
+                    else (
+                        v2_shadow_risk.get("risk_reward")
+                        if v2_shadow_risk
+                        else None
+                    )
                 ),
 
                 "Risk Reward": (
@@ -5042,6 +5312,48 @@ def _run_scanner_impl():
 
                 "Live Exit Reason": (
                     exit_setup["exit_reason"]
+                ),
+
+                "V2 Exit Signal": (
+                    shadow_exit_v2.get("exit_signal")
+                ),
+
+                "V2 Exit Phase": (
+                    shadow_exit_v2.get("exit_phase")
+                ),
+
+                "V2 Trend Health Score": (
+                    shadow_exit_v2.get("trend_health_score")
+                ),
+
+                "V2 Trend Health Status": (
+                    shadow_exit_v2.get("trend_health_status")
+                ),
+
+                "V2 Trend Failure Confirmed": (
+                    shadow_exit_v2.get("trend_failure_confirmed")
+                ),
+
+                "V2 MFE R": (
+                    shadow_exit_v2.get("mfe_r")
+                ),
+
+                "V2 RR Progress": (
+                    shadow_exit_v2.get("rr_progress")
+                ),
+
+                "V2 Shadow Exit Signal": (
+                    v2_shadow_exit.get("exit_signal")
+                ),
+
+                "V2 Shadow Exit Phase": (
+                    v2_shadow_exit.get("exit_phase")
+                ),
+
+                "V2 Shadow Final R": (
+                    v2_shadow_completed.get("final_r")
+                    if v2_shadow_completed
+                    else None
                 ),
 
                 "Replay Ran": (

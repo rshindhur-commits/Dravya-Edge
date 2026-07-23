@@ -1503,6 +1503,128 @@ def _render_trade_doctor(trades):
     )
 
 
+def _render_entry_exit_v2_comparison(comparison):
+
+    comparison = comparison or {}
+    summary = comparison.get("summary") or {}
+
+    if not summary:
+
+        return
+
+    st.markdown("## Entry/Exit V2 Comparison")
+    st.caption("Completed-trade shadow comparison only. V1 remains the execution engine.")
+    _render_compact_card_grid([
+        ("Trades Compared", summary.get("Trades compared", 0)),
+        ("V2 Higher R", summary.get("V2 higher R", 0)),
+        ("Avg R Delta", _format_efficiency_number(summary.get("Avg R improvement"))),
+        ("Entry Delta (min)", _format_efficiency_number(summary.get("Avg entry delay minutes"))),
+        ("Exit Delta (min)", _format_efficiency_number(summary.get("Avg exit delay minutes"))),
+        ("MFE Delta", _format_efficiency_number(summary.get("Avg MFE improvement"))),
+    ])
+
+    trades = comparison.get("trades") or []
+
+    if trades:
+
+        columns = [
+            "symbol", "direction", "entry_time_v1", "entry_time_v2",
+            "entry_price_v1", "entry_price_v2", "exit_time_v1", "exit_time_v2",
+            "final_r_v1", "final_r_v2", "final_r_delta", "mfe_r_delta",
+            "entry_delta_minutes", "exit_delta_minutes",
+        ]
+        frame = pd.DataFrame(trades)
+        st.dataframe(
+            _display_safe_dataframe(frame[[column for column in columns if column in frame.columns]]),
+            width="stretch",
+            hide_index=True,
+        )
+
+    outcomes = comparison.get("trend_outcomes") or []
+
+    if outcomes:
+
+        st.markdown("### Trend Outcome Attribution")
+        columns = [
+            "engine_version", "symbol", "stock_direction", "trade_direction",
+            "stock_finish", "trade_finish", "trend_outcome",
+            "engine_captured_trend", "final_r", "trend_capture_pct",
+        ]
+        frame = pd.DataFrame(outcomes)
+        st.dataframe(
+            _display_safe_dataframe(frame[[column for column in columns if column in frame.columns]]),
+            width="stretch",
+            hide_index=True,
+        )
+
+    failures = comparison.get("execution_failures") or []
+
+    if failures:
+
+        st.markdown("### Strong Trend, Failed Execution")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(failures)),
+            width="stretch",
+            hide_index=True,
+        )
+
+
+def _render_v2_learning_summary(learning):
+
+    summary = (learning or {}).get("summary") or {}
+
+    if not summary:
+
+        return
+
+    st.markdown("### V2 Learning Summary")
+    _render_compact_card_grid([
+        ("Records", summary.get("Completed learning records", 0)),
+        ("Avg Trend Age", _format_efficiency_number(summary.get("Avg Trend Age"))),
+        ("Avg Entry Efficiency", _format_efficiency_number(summary.get("Avg Entry Efficiency"))),
+        ("Avg Exit Trend Health", _format_efficiency_number(summary.get("Avg Exit Trend Health"))),
+        ("Avg MFE R", _format_efficiency_number(summary.get("Avg MFE R"))),
+        ("Avg MAE R", _format_efficiency_number(summary.get("Avg MAE R"))),
+        ("Avg Trend Capture", _format_efficiency_pct(summary.get("Avg Trend Capture %"))),
+        ("Avg TES", _format_efficiency_number(summary.get("Avg TES"))),
+    ])
+
+
+def _render_validation_decision_analysis(analysis):
+
+    analysis = analysis or {}
+    summary = analysis.get("summary") or {}
+
+    if not summary:
+
+        return
+
+    st.markdown("## Decision Analysis")
+    _render_compact_card_grid(list(summary.items()))
+
+    blockers = analysis.get("top_blockers") or []
+
+    if blockers:
+
+        st.markdown("### Top Blockers")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(blockers)),
+            width="stretch",
+            hide_index=True,
+        )
+
+    missed = analysis.get("missed_candidates") or []
+
+    if missed:
+
+        st.markdown("### High-Quality Non-Entries")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(missed)),
+            width="stretch",
+            hide_index=True,
+        )
+
+
 def _render_cached_validation_state(state):
 
     st.subheader("Validation")
@@ -1555,6 +1677,10 @@ def _render_cached_validation_state(state):
             width="stretch",
             hide_index=True,
         )
+
+    _render_entry_exit_v2_comparison(state.get("entry_exit_v2"))
+    _render_v2_learning_summary(state.get("v2_learning"))
+    _render_validation_decision_analysis(state.get("decision_analysis"))
 
     for title, key in [
         ("Exit Verdict Distribution", "exit_verdict_distribution"),
@@ -1713,6 +1839,7 @@ def _render_cached_report_state(state):
 
     _render_daily_validation_report_panel()
     _render_trade_efficiency_history(state.get("historical_trade_efficiency"))
+    _render_v2_learning_history(state.get("historical_v2_learning"))
 
 
 def _render_trade_efficiency_history(history):
@@ -1758,6 +1885,37 @@ def _render_trade_efficiency_history(history):
 
             st.markdown(f"### {title}")
             st.dataframe(_display_safe_dataframe(pd.DataFrame(rows)), width="stretch", hide_index=True)
+
+
+def _render_v2_learning_history(history):
+    history = history or {}
+    daily = pd.DataFrame(history.get("daily") or [])
+    st.subheader("Execution Learning Trends")
+
+    if daily.empty:
+        st.info("V2 execution-learning trends will appear after completed shadow trades.")
+        return
+
+    cards = [
+        ("Avg Trend Age", _format_efficiency_number(daily["Trend Age"].mean())),
+        ("Avg Entry Efficiency", _format_efficiency_number(daily["Entry Efficiency"].mean())),
+        ("Avg Trend Capture", _format_efficiency_pct(daily["Trend Capture %"].mean())),
+        ("Avg TES", _format_efficiency_number(daily["TES"].mean())),
+    ]
+    _render_compact_card_grid(cards)
+    st.line_chart(
+        daily.set_index("Trading Day")[[
+            "Trend Age", "Entry Efficiency", "Trend Capture %", "TES",
+        ]]
+    )
+    phases = history.get("exit_phase") or []
+    if phases:
+        st.markdown("### V2 Exit Phase")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(phases)),
+            width="stretch",
+            hide_index=True,
+        )
 
 
 def _render_market_coverage_lazy(report_date):
@@ -2754,7 +2912,7 @@ Skip reason:
 
 def _render_download_exports():
 
-    st.sidebar.subheader("Downloads")
+    tools = st.sidebar.expander("Tools: Downloads", expanded=False)
 
     report_date = st.session_state.get(
         "daily_validation_report_date",
@@ -2769,12 +2927,13 @@ def _render_download_exports():
             SCANNER_FILE,
             file_name="scanner_output.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_primary_scanner_output"
+            key="download_primary_scanner_output",
+            container=tools
         )
 
     else:
 
-        st.sidebar.download_button(
+        tools.download_button(
             label="Scanner Output",
             data=scanner_data,
             file_name="scanner_output.xlsx",
@@ -2787,7 +2946,8 @@ def _render_download_exports():
         daily_path(report_date, "daily_validation_report.html"),
         file_name=f"daily_validation_{report_date}.html",
         mime="text/html",
-        key=f"download_primary_validation_report_{report_date}"
+        key=f"download_primary_validation_report_{report_date}",
+        container=tools
     )
 
     _render_file_download_button(
@@ -2795,10 +2955,13 @@ def _render_download_exports():
         daily_path(report_date, "offline_replay_summary.csv"),
         file_name="offline_replay_summary.csv",
         mime="text/csv",
-        key=f"download_primary_replay_summary_{report_date}"
+        key=f"download_primary_replay_summary_{report_date}",
+        container=tools
     )
 
-    with st.sidebar.expander("Advanced", expanded=False):
+    advanced_tools = tools.expander("Advanced files", expanded=False)
+
+    with advanced_tools:
 
         exports = [
             {
@@ -2858,11 +3021,11 @@ def _render_download_exports():
                     file_name=export["label"],
                     mime=export["mime"],
                     key=f"download_{export['label']}",
-                    container=st
+                    container=advanced_tools
                 )
                 continue
 
-            st.download_button(
+            advanced_tools.download_button(
                 label=f"Download {export['label']}",
                 data=data,
                 file_name=export["label"],
@@ -2870,9 +3033,7 @@ def _render_download_exports():
                 key=f"download_{export['label']}"
             )
 
-        _render_daily_artifact_downloads(report_date, container=st)
-
-    _render_daily_validation_report_controls()
+        _render_daily_artifact_downloads(report_date, container=advanced_tools)
 
 
 def _generate_daily_validation_report(report_date, finalize_report=True):
@@ -2933,7 +3094,7 @@ def _generate_offline_replay(report_date):
 
 def _render_daily_validation_report_controls():
 
-    st.sidebar.subheader("Daily Validation")
+    st.sidebar.subheader("Operations")
 
     default_report_date = datetime.now(
         ZoneInfo("America/New_York")
@@ -5933,6 +6094,7 @@ def _render_entry_diagnostics(df):
 
 
 def _render_command_center(state, df, refresh_state):
+    """DEPRECATED: Trading now uses the state-driven Decision Center."""
 
     st.subheader("Trading Command Center")
     market_session = _dashboard_market_session()
@@ -6075,6 +6237,7 @@ def _render_metadata_card(title, rows):
 
 
 def _render_current_opportunities(state):
+    """DEPRECATED: Trading now uses app.ui.pages.trading._render_ranked_opportunities."""
 
     st.subheader("Current Opportunities")
     candidates = state.get("top_candidates") or []
@@ -6131,6 +6294,7 @@ def _render_today_performance(state):
 
 
 def _render_why_no_trade(state):
+    """DEPRECATED: retain until decision analysis is fully migrated to Validation."""
 
     st.subheader("Why No Trade Today?")
     summary = state.get("summary") or {}
@@ -6160,6 +6324,7 @@ def _render_why_no_trade(state):
 
 
 def _render_missed_opportunities(state):
+    """DEPRECATED: retain until missed-opportunity analysis is fully migrated to Validation."""
 
     st.subheader("Missed Opportunities")
     missed = state.get("missed_opportunities") or []
@@ -6192,6 +6357,7 @@ def _render_missed_opportunities(state):
 
 
 def _render_trading_page(state, df, refresh_state):
+    """DEPRECATED: page routing now uses app.ui.pages.trading.render."""
 
     metadata = _scan_metadata(df, refresh_state=refresh_state)
     _render_metadata_card(
@@ -6215,6 +6381,7 @@ def _render_trading_page(state, df, refresh_state):
 
 
 def _render_trading_page_from_state(state, refresh_state):
+    """DEPRECATED: page routing now uses app.ui.pages.trading.render_from_state."""
 
     metadata = {
         "scan_id": state.get("scan_id") or state.get("data_version") or "N/A",
@@ -8726,6 +8893,7 @@ def main():
 
     refresh_state = _render_auto_refresh_controls()
     auto_paper_controls = _render_auto_paper_controls()
+    _render_daily_validation_report_controls()
     _render_download_exports()
     page = st.sidebar.radio(
         "Navigation",

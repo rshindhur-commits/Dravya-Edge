@@ -147,6 +147,52 @@ def build_historical_trade_efficiency(validation_states):
         "exit": aggregate(exit_rows, "Exit Verdict"),
     }
 
+
+def build_historical_v2_learning(limit=20):
+    frames = []
+
+    for directory in sorted(DAILY_DIR.glob("*"), reverse=True)[:limit]:
+        path = directory / "v2_learning_dataset.csv"
+        try:
+            if path.exists() and path.stat().st_size:
+                frames.append(pd.read_csv(path))
+        except Exception:
+            continue
+
+    if not frames:
+        return {"daily": [], "exit_phase": []}
+
+    learning = pd.concat(frames, ignore_index=True, sort=False)
+    if "trading_day" not in learning.columns:
+        return {"daily": [], "exit_phase": []}
+
+    numeric_columns = [
+        "trend_age", "entry_efficiency_score", "trend_capture_pct", "tes",
+    ]
+    for column in numeric_columns:
+        learning[column] = pd.to_numeric(
+            learning.get(column, pd.Series(index=learning.index, dtype=float)),
+            errors="coerce",
+        )
+
+    daily = learning.groupby("trading_day", dropna=True)[numeric_columns].mean().round(2).reset_index()
+    daily = daily.rename(columns={
+        "trading_day": "Trading Day",
+        "trend_age": "Trend Age",
+        "entry_efficiency_score": "Entry Efficiency",
+        "trend_capture_pct": "Trend Capture %",
+        "tes": "TES",
+    }).sort_values("Trading Day")
+    phase_counts = learning.get(
+        "exit_phase",
+        pd.Series("UNKNOWN", index=learning.index),
+    ).fillna("UNKNOWN").value_counts().reset_index()
+    phase_counts.columns = ["Exit Phase", "Count"]
+    return {
+        "daily": _records(daily),
+        "exit_phase": _records(phase_counts),
+    }
+
 def build_report_state_payload(
     report_date: str,
     daily_report_path: Path | None = None,
@@ -175,6 +221,7 @@ def build_report_state_payload(
     historical_trade_efficiency = build_historical_trade_efficiency(
         validation_states if validation_states is not None else _daily_validation_states()
     )
+    historical_v2_learning = build_historical_v2_learning()
 
     if daily_info["exists"] or root_info["exists"]:
 
@@ -204,6 +251,7 @@ def build_report_state_payload(
         "root_report": root_info,
         "scanner_snapshot": scanner_info,
         "historical_trade_efficiency": historical_trade_efficiency,
+        "historical_v2_learning": historical_v2_learning,
         "errors": [] if status != "MISSING" else ["Daily validation report has not been generated."],
     }
 

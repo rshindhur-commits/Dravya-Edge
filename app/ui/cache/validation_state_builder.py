@@ -475,6 +475,52 @@ def build_trade_efficiency_state(trend_capture, paper_events=None):
     }
 
 
+def _decision_analysis(scanner):
+
+    if scanner is None or scanner.empty:
+
+        return {"summary": {}, "top_blockers": [], "missed_candidates": []}
+
+    actions = scanner.get(
+        "Action Status",
+        scanner.get("action_status", pd.Series("UNKNOWN", index=scanner.index)),
+    ).astype(str).str.upper()
+    blockers = scanner.get(
+        "Blocked By",
+        scanner.get("blocked_by", pd.Series("UNKNOWN", index=scanner.index)),
+    ).fillna("UNKNOWN").astype(str)
+    top_blockers = blockers.value_counts().head(5).reset_index()
+    top_blockers.columns = ["Blocker", "Count"]
+    score = pd.to_numeric(
+        scanner.get("Setup %", scanner.get("15m Score", pd.Series(0, index=scanner.index))),
+        errors="coerce",
+    ).fillna(0)
+    rr = pd.to_numeric(
+        scanner.get("Candidate RR", scanner.get("Risk Reward", pd.Series(0, index=scanner.index))),
+        errors="coerce",
+    ).fillna(0)
+    missed = scanner[~actions.isin({"ENTER", "ENTER_PAPER", "OPENED"})].copy()
+    missed["_priority"] = score.loc[missed.index] + rr.loc[missed.index] * 10
+    columns = [
+        "Symbol", "Candidate Direction", "Entry", "Action Status", "Setup %",
+        "Candidate RR", "Blocked By", "Next Condition",
+    ]
+    return {
+        "summary": {
+            "Scanned": int(len(scanner)),
+            "Entered": int(actions.isin({"ENTER", "ENTER_PAPER", "OPENED"}).sum()),
+            "Review": int(actions.eq("REVIEW_TV_CHART").sum()),
+            "Non-entries": int((~actions.isin({"ENTER", "ENTER_PAPER", "OPENED"})).sum()),
+        },
+        "top_blockers": _json_records(top_blockers),
+        "missed_candidates": _json_records(
+            missed.sort_values("_priority", ascending=False)[
+                [column for column in columns if column in missed.columns]
+            ].head(10)
+        ),
+    }
+
+
 def build_validation_state_payload(
     report_date: str,
     scanner: pd.DataFrame | None = None,
@@ -489,7 +535,18 @@ def build_validation_state_payload(
     paper_events = paper_events if paper_events is not None else pd.DataFrame()
     trend_capture = trend_capture if trend_capture is not None else pd.DataFrame()
     candidate_outcomes = _read_csv(daily_path(report_date, "candidate_outcomes.csv"))
+    engine_comparisons = _read_csv(
+        daily_path(report_date, "engine_trade_comparisons.csv")
+    )
+    engine_trend_outcomes = _read_csv(
+        daily_path(report_date, "engine_trend_outcomes.csv")
+    )
+    v2_learning_dataset = _read_csv(
+        daily_path(report_date, "v2_learning_dataset.csv")
+    )
     from app.analytics.delay_attribution import build_delay_attribution
+    from app.analytics.engine_version_comparison import summarize_completed_comparisons
+    from app.analytics.v2_learning_writer import summarize_learning_dataset
     delay_attribution = build_delay_attribution(report_date)
     trend_summary = summarize_trend_capture(trend_capture)
     paper = _paper_summary(paper_events)
@@ -502,6 +559,7 @@ def build_validation_state_payload(
         report_date,
         strategy_confidence,
     )
+    decision_analysis = _decision_analysis(scanner)
 
     return {
         "metadata": metadata_from_generation(generation, scan_id=scan_id) or {
@@ -537,6 +595,25 @@ def build_validation_state_payload(
         },
         "trade_efficiency": trade_efficiency,
         "candidate_outcomes": _json_records(candidate_outcomes),
+        "decision_analysis": decision_analysis,
+        "entry_exit_v2": {
+            "summary": summarize_completed_comparisons(engine_comparisons),
+            "trades": _json_records(engine_comparisons),
+            "trend_outcomes": _json_records(engine_trend_outcomes),
+            "execution_failures": _json_records(
+                engine_trend_outcomes[
+                    engine_trend_outcomes.get(
+                        "trend_outcome",
+                        pd.Series("", index=engine_trend_outcomes.index),
+                    ).astype(str).eq("STRONG_TREND_EXECUTION_FAILED")
+                ]
+                if not engine_trend_outcomes.empty
+                else pd.DataFrame()
+            ),
+        },
+        "v2_learning": {
+            "summary": summarize_learning_dataset(v2_learning_dataset),
+        },
         "telegram_quality": {
             "misses": int(candidate_outcomes.get("telegram_miss", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,
             "false_alerts": int(candidate_outcomes.get("false_alert", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,

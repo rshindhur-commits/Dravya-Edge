@@ -23,6 +23,21 @@
     <table class="metric-table"><tr><th>scanner_output rows</th><td>16</td></tr><tr><th>candidate_snapshot rows</th><td>0</td></tr><tr><th>trade_telemetry rows</th><td>0</td></tr><tr><th>paper_trade_state records</th><td>0</td></tr><tr><th>trade_state records</th><td>0</td></tr><tr><th>paper_trade_events rows</th><td>0</td></tr><tr><th>auto-paper decision source</th><td>recent state JSON only</td></tr><tr><th>auto-paper decision source path</th><td>D:\Dravya_Trade_Works\app\state\auto_paper_decision_log.json</td></tr><tr><th>auto_paper_decision_log rows</th><td>1</td></tr><tr><th>decision OPENED count</th><td>0</td></tr><tr><th>suggested_trade_state records</th><td>0</td></tr></table>
     <ul><li>No paper trades found. Report is based on blocked/skipped candidates only.</li><li>Auto-paper decisions exist, but none are OPENED. Suggested trades may not be actual paper trades.</li><li>Auto-paper decision history is using the capped dashboard JSON. This may not include regular market hours.</li></ul>
 
+    <h2>Entry/Exit V2 Shadow Comparison</h2>
+    <p>Observational comparison only. V2 never opens, closes, or modifies trades.</p>
+    <table class="metric-table"><tr><th>Shadow rows</th><td>0</td></tr><tr><th>V2 entry suggestions</th><td>0</td></tr><tr><th>V1 exit signals</th><td>0</td></tr><tr><th>V2 exit signals</th><td>0</td></tr><tr><th>Exit disagreements</th><td>0</td></tr><tr><th>Avg V2 entry efficiency</th><td>None</td></tr><tr><th>Avg V2 MFE R</th><td>None</td></tr></table>
+    <h3>V2 Exit Phase Distribution</h3>
+    <p>No V2 shadow rows yet.</p>
+    <h3>Completed V1/V2 Trade Comparison</h3>
+    <table class="metric-table"><tr><th>Trades compared</th><td>0</td></tr><tr><th>V2 higher R</th><td>0</td></tr><tr><th>Avg R improvement</th><td>None</td></tr><tr><th>Avg entry delay minutes</th><td>None</td></tr><tr><th>Avg exit delay minutes</th><td>None</td></tr><tr><th>Avg MFE improvement</th><td>None</td></tr><tr><th>V2 higher Trend Capture</th><td>0</td></tr><tr><th>Avg Trend Capture improvement</th><td>None</td></tr></table>
+    <p>No completed V1/V2 trade pairs yet.</p>
+    <h3>Trend Outcome Attribution</h3>
+    <p>No completed engine trades yet.</p>
+    <h3>Strong Trend, Failed Execution</h3>
+    <p>No strong-trend execution failures identified.</p>
+    <h3>V2 Learning Summary</h3>
+    <table class="metric-table"><tr><th>Completed learning records</th><td>0</td></tr><tr><th>Avg Trend Age</th><td>None</td></tr><tr><th>Avg Entry Efficiency</th><td>None</td></tr><tr><th>Avg Exit Trend Health</th><td>None</td></tr><tr><th>Avg MFE R</th><td>None</td></tr><tr><th>Avg MAE R</th><td>None</td></tr><tr><th>Avg Trend Capture %</th><td>None</td></tr><tr><th>Avg TES</th><td>None</td></tr></table>
+
   <h2>A. Trade Result Scorecard</h2>
   <table class="metric-table"><tr><th>Date</th><td>2026-07-06</td></tr><tr><th>Total paper trades</th><td>0</td></tr><tr><th>Wins</th><td>0</td></tr><tr><th>Losses</th><td>0</td></tr><tr><th>Win rate</th><td>0%</td></tr><tr><th>Total R</th><td>0</td></tr><tr><th>Average R</th><td>0</td></tr><tr><th>Best trade</th><td>N/A</td></tr><tr><th>Worst trade</th><td>N/A</td></tr><tr><th>Average hold time minutes</th><td>N/A</td></tr><tr><th>Calls vs puts</th><td>N/A</td></tr></table>
   <h3>Opened Trades</h3>
@@ -114,6 +129,29 @@
     <table class="metric-table"><tr><th>avg REVIEW_TV_CHART minutes</th><td>N/A</td></tr><tr><th>median REVIEW_TV_CHART minutes</th><td>N/A</td></tr><tr><th>max REVIEW_TV_CHART minutes</th><td>N/A</td></tr><tr><th>count stuck &gt; 15 min</th><td>0</td></tr><tr><th>count stuck &gt; 30 min</th><td>0</td></tr></table>
     <h3>Suggestion Expiry</h3>
     <table class="metric-table"><tr><th>expired in &lt; 5 min</th><td>0</td></tr><tr><th>expired in 5-15 min</th><td>0</td></tr><tr><th>expired in 15-30 min</th><td>0</td></tr><tr><th>expired after 30+ min</th><td>0</td></tr><tr><th>expired while LIVE_QUOTE</th><td>0</td></tr><tr><th>expired while RR &gt;= 1.8</th><td>0</td></tr><tr><th>expired while setup &gt;= 70</th><td>0</td></tr></table>
+
+        <h2>Missed Opportunity Replay</h2>
+        <p>No expired/promoted suggestions found for candle replay.</p>
+
+  <h2>Trade Efficiency Analytics</h2>
+  <p>Observational only. These metrics do not influence entries or exits.</p>
+  <table class="metric-table"><tr><th>Average Trend Capture %</th><td>None</td></tr><tr><th>Median Trend Capture %</th><td>None</td></tr><tr><th>Average MFE</th><td>None</td></tr><tr><th>Average MAE</th><td>None</td></tr><tr><th>Average Left On Table</th><td>None</td></tr><tr><th>Best Capture</th><td>None</td></tr><tr><th>Worst Capture</th><td>None</td></tr><tr><th>Average Trend Health at Exit</th><td>None</td></tr><tr><th>Average Bars Remaining After Exit</th><td>None</td></tr><tr><th>Average Delay Gain</th><td>None</td></tr><tr><th>Trade Efficiency Score</th><td>None</td></tr></table>
+    <h3>Exit Verdict Distribution</h3>
+    <p>No exit verdict distribution yet.</p>
+    <h3>Exit Trigger Frequency</h3>
+    <p>No exit trigger frequency yet.</p>
+    <h3>Engineering Recommendation</h3>
+    <table class="metric-table"><tr><th>Priority</th><td>None</td></tr><tr><th>Reason</th><td>None</td></tr><tr><th>Recommendation</th><td>None</td></tr></table>
+    <h3>Top 10 EXIT_TOO_EARLY Trades</h3>
+    <p>No EXIT_TOO_EARLY trades found.</p>
+    <h3>Top 10 EXCELLENT_EXIT Trades</h3>
+    <p>No EXCELLENT_EXIT trades found.</p>
+  <h3>By Setup</h3>
+  <p>No trend capture rows by setup yet.</p>
+  <h3>By Regime</h3>
+  <p>No trend capture rows by regime yet.</p>
+  <h3>By Exit Reason</h3>
+  <p>No trend capture rows by exit reason yet.</p>
 
   <h2>Best Skipped Opportunities</h2>
   <table class="dataframe">
