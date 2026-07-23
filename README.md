@@ -261,6 +261,48 @@ Entry alerting is scanner-owned: Telegram is a notification transport, not a sec
 
 Paper-trade promotion reconciles the matching suggestion immediately. A matching suggestion that was previously `EXPIRED_NOT_ENTERED` transitions to `PROMOTED_TO_PAPER` when its paper trade opens; closed suggestions remain terminal.
 
+## Observational Entry, Ranking, And Exit Analytics
+
+The current calibration layer records additional execution-quality evidence without changing V1 scanner eligibility, paper execution, Telegram delivery, or live exit selection.
+
+- `app/analytics/entry_timing_engine.py` converts existing V2 entry-location features into an `Entry Timing Score` from 0-100. Its weights are Entry Efficiency 35%, Trend Age 20%, Pullback Number 20%, Bars Since Breakout 10%, EMA extension 10%, and VWAP extension 5%. Grades are `EXCELLENT` above 80, `GOOD` from 70-80, `AVERAGE` from 55-69, and `LATE_ENTRY` below 55.
+- `app/analytics/trade_ranker.py` computes the observational `Trade Quality Score` (TQS): Setup 25%, Entry Timing 20%, Trend Health 20%, Option Quality 15%, Relative Strength 10%, and Liquidity 10%. It writes `Candidate Rank` and `Rank Reason` without changing scanner row order, alert order, or execution decisions.
+- Candidate snapshots and Candidate Evidence retain Entry Timing score/grade/reason, TQS, and candidate rank so later outcome research can compare score bands against winners, Trend Capture %, and TES.
+- `app/analytics/exit_waterfall.py` formats existing V1 exit diagnostics as an ordered waterfall. Scanner rows retain `Exit Waterfall`, `Exit Rule`, and `Exit Stage`; the live exit engine still owns priority and final selection.
+- `app/analytics/decision_waterfall.py` merges persisted Entry Diagnostics with native RuleEvaluation records into a candidate-level Decision Waterfall. Its fixed stage order is Momentum, Entry, Risk, Option, Affordability, Realtime, Telegram, Paper, and Decision. Each stage carries pass/fail/not-evaluated status, summary, passed rules, failed rules, and actual/required values. The payload exposes `final_action`, `final_reason`, `blocking_stage`, and `blocking_rule`.
+- `dashboard_state.json` and `validation_state.json` retain V1 waterfalls, V1/V2 shadow path comparisons, and today’s blocking-stage percentage summary. Validation renders the selected candidate’s grouped stages, failed values, first blocker, V1/V2 comparison, and current blocker distribution.
+- Migration `008_decision_waterfall.sql` creates the optional `decision_waterfall` audit table. The scheduled artifact writer inserts one immutable row per evaluated rule with stage, pass/fail, selected-blocker flag, actual/required values, priority, and summary. Reports aggregates cached Validation blocker distributions into daily and dominant-stage historical trends.
+- Decision Waterfall remains a visualization and audit layer. V2’s path only represents V2 shadow facts currently available in scanner rows; it does not invent option/risk gates or alter V1 behavior.
+- V1/V2 completed comparison rows include entry/exit delay, $R$, MFE, Trend Capture, and TES deltas. They remain shadow evidence, not a promotion switch.
+- `refresh_contract_quote()` performs a bounded quote refresh before downstream quote gating. `OPTION_QUOTE_REFRESH_RETRIES` defaults to `1`; refresh results retain quote retry count, latency, refresh timestamp, and final freshness in scanner snapshots and lifecycle events.
+
+These metrics remain observational until the existing evidence threshold is met: at least 20 evidence days and 80 completed trades. They must not automatically tighten or loosen V1 trading rules.
+
+V2 shadow exits also record an `Exit Confidence Score` that measures deterioration rather than permission to hold. Hard stop and target remain immediate. Soft EMA/VWAP/MACD/volume deterioration can enter `MONITOR` when the Grace Zone applies, requiring confirmation persistence before a V2 shadow exit. `data/daily/YYYY-MM-DD/daily_engine_summary.json` is written during deferred scan persistence from V2 learning, completed comparisons, exit-quality facts, and shadow blocker observations; it is a research artifact and cannot change V1 exits.
+
+The `Learning` dashboard page reads the materialized live daily summary and displays V2 comparison, Exit Confidence, blocker, and existing one-/two-bar post-exit continuation metrics. Migration `009_learning_engine.sql` adds optional warehouse tables: `daily_engine_summary`, `v2_learning_metrics`, `trade_comparison`, `rule_performance`, and `exit_quality_metrics`. File-backed daily summaries remain available when DB writes are disabled.
+
+After writing the daily and live JSON summaries, the Learning Engine promotes those aggregates and completed V1/V2 comparison rows through best-effort database writes. Database failures cannot block scanner completion or the Learning page's file-backed state.
+
+The Learning summary also includes a rolling last-50 refresh success rate, TQS outcome buckets, evidence-based Rule ROI, and a feature promotion tracker. Rule ROI is observational: it uses resolved candidate outcomes and is never a direct trading input.
+
+```mermaid
+flowchart TD
+	Scanner --> V1[V1 Engine]
+	V1 --> TradeState[Trade State]
+	Scanner --> V2[V2 Shadow]
+	V2 --> Learning[Learning Engine]
+	TradeState --> Learning
+	Learning --> Files[Daily File Artifacts]
+	Learning --> Warehouse[Optional Warehouse Tables]
+	Files --> Validation
+	Warehouse --> Validation
+	Files --> Reports
+	Warehouse --> Reports
+	Files --> LearningPage[Learning Page]
+	Warehouse --> LearningPage
+```
+
 ## Quote Freshness Audit
 
 Option quote freshness remains intentionally strict and unchanged. `LIVE_QUOTE` is less than `OPTION_DELAYED_QUOTE_MINUTES` old (currently 10 minutes), `DELAYED_QUOTE` is 10-30 minutes old, and `STALE_QUOTE` is older than `OPTION_MAX_QUOTE_AGE_MINUTES` (currently 30 minutes). Polygon's latest quote endpoint is queried in descending timestamp order; the classifier uses `last_updated`, with SIP/timestamp fallbacks.

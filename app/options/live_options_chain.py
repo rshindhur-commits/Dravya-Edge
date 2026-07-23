@@ -1,13 +1,17 @@
 import requests
 import os
+import time as runtime_time
 
 import re
+import json
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from app.config.settings import settings
+from app.analytics.realtime_health import build_quote_refresh_observation
 from app.options.option_metrics import enrich_option_metrics
 from app.utils.runtime_logging import debug_print
+from app.storage.daily_paths import live_path
 
 
 POLYGON_API_KEY = settings.polygon_api_key
@@ -112,38 +116,75 @@ def refresh_contract_quote(contract):
 
         return contract
 
-    quote = fetch_latest_option_quote(
-        contract.get("ticker")
-    )
-
-    if not quote:
-
-        return contract
-
     updated = dict(contract)
-    updated.update({
-        "bid": quote.get("bid", 0),
-        "ask": quote.get("ask", 0),
-        "quote_midpoint": quote.get("midpoint"),
-        "quote_timeframe": quote.get("quote_timeframe"),
-        "quote_source": quote.get("quote_source"),
-        "quote_timestamp_field": quote.get("quote_timestamp_field"),
-        "bid_size": quote.get("bid_size"),
-        "ask_size": quote.get("ask_size"),
-        "quote_time": quote.get("quote_time")
-    })
+    started_at = runtime_time.perf_counter()
+    retry_count = 0
 
-    updated["quote_status"] = _classify_quote_status(
-        200,
-        quote,
-        updated.get("bid", 0),
-        updated.get("ask", 0)
-    )
-    updated["quote_status_reason"] = _quote_status_reason(
-        updated["quote_status"]
-    )
+    try:
 
-    return _enrich_contract(updated)
+        max_retries = max(
+            0,
+            int(os.getenv("OPTION_QUOTE_REFRESH_RETRIES", "1"))
+        )
+
+    except ValueError:
+
+        max_retries = 1
+
+    for attempt in range(max_retries + 1):
+
+        quote = fetch_latest_option_quote(updated.get("ticker"))
+
+        if quote:
+
+            updated.update({
+                "bid": quote.get("bid", 0),
+                "ask": quote.get("ask", 0),
+                "quote_midpoint": quote.get("midpoint"),
+                "quote_timeframe": quote.get("quote_timeframe"),
+                "quote_source": quote.get("quote_source"),
+                "quote_timestamp_field": quote.get("quote_timestamp_field"),
+                "bid_size": quote.get("bid_size"),
+                "ask_size": quote.get("ask_size"),
+                "quote_time": quote.get("quote_time")
+            })
+            updated["quote_status"] = _classify_quote_status(
+                200,
+                quote,
+                updated.get("bid", 0),
+                updated.get("ask", 0)
+            )
+            updated["quote_status_reason"] = _quote_status_reason(
+                updated["quote_status"]
+            )
+            updated = _enrich_contract(updated)
+
+            if updated.get("quote_freshness") == "LIVE_QUOTE":
+
+                break
+
+        if attempt < max_retries:
+
+            retry_count += 1
+
+    updated.update(build_quote_refresh_observation(
+        retry_count=retry_count,
+        latency_ms=(runtime_time.perf_counter() - started_at) * 1000,
+        freshness=updated.get("quote_freshness") or updated.get("quote_status"),
+    ))
+    try:
+        with live_path("quote_refresh_events.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({
+                "ticker": updated.get("ticker"),
+                "outcome": updated.get("quote_refresh_outcome"),
+                "retry_count": updated.get("quote_retry_count"),
+                "latency_ms": updated.get("quote_latency_ms"),
+                "refresh_time": updated.get("quote_refresh_time"),
+            }) + "\n")
+    except Exception:
+        pass
+
+    return updated
 
 
 def _enrich_contract(contract):

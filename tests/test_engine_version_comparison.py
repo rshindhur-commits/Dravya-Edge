@@ -9,8 +9,8 @@ from app.analytics.engine_version_comparison import (
 
 def test_engine_trade_comparison_pairs_versions_and_calculates_deltas():
     comparisons = build_trade_comparisons(pd.DataFrame([
-        {"engine_version": "v1", "symbol": "NVDA", "direction": "CALL", "entry_time": "2026-07-22T10:15:00", "entry_price": 211.2, "exit_time": "2026-07-22T15:10:00", "exit_price": 213.1, "final_r": 0.8, "mfe_r": 1.2},
-        {"engine_version": "v2", "symbol": "NVDA", "direction": "CALL", "entry_time": "2026-07-22T10:30:00", "entry_price": 210.65, "exit_time": "2026-07-22T15:42:00", "exit_price": 214.25, "final_r": 1.6, "mfe_r": 2.0},
+        {"engine_version": "v1", "symbol": "NVDA", "direction": "CALL", "entry_time": "2026-07-22T10:15:00", "entry_price": 211.2, "exit_time": "2026-07-22T15:10:00", "exit_price": 213.1, "final_r": 0.8, "mfe_r": 1.2, "tes": 68},
+        {"engine_version": "v2", "symbol": "NVDA", "direction": "CALL", "entry_time": "2026-07-22T10:30:00", "entry_price": 210.65, "exit_time": "2026-07-22T15:42:00", "exit_price": 214.25, "final_r": 1.6, "mfe_r": 2.0, "tes": 84},
     ]))
 
     assert len(comparisons) == 1
@@ -18,11 +18,13 @@ def test_engine_trade_comparison_pairs_versions_and_calculates_deltas():
     assert comparison["entry_delta_minutes"] == 15
     assert comparison["exit_delta_minutes"] == 32
     assert comparison["final_r_delta"] == 0.8
+    assert comparison["tes_delta"] == 16
 
     summary = summarize_completed_comparisons(comparisons)
     assert summary["Trades compared"] == 1
     assert summary["V2 higher R"] == 1
     assert summary["Avg R improvement"] == 0.8
+    assert summary["Avg TES improvement"] == 16
 
 
 def test_daily_trend_outcome_flags_failed_execution_in_strong_trend():

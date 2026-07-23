@@ -61,3 +61,19 @@ def test_exit_v2_preserves_hard_stop():
     assert result["exit_signal"]
     assert result["exit_phase"] == "HARD_STOP"
     assert result["bars_in_trade"] == 5
+
+
+def test_exit_v2_monitors_a_single_healthy_ema_loss():
+    frame = _trend_frame(close=99, low=98.5, high=100)
+    frame["VWAP"] = 98
+    result = evaluate_shadow_exit_v2(
+        frame,
+        {"entry_price": 100, "stop_loss": 96, "take_profit": 108},
+        {"entry_type": "EMA_PULLBACK"},
+        {"highest_price": 107, "lowest_price": 99, "bars_in_trade": 4},
+    )
+
+    assert not result["exit_signal"]
+    assert result["exit_phase"] == "MONITOR"
+    assert result["grace_zone_eligible"]
+    assert result["soft_exit_confirmation_streak"] == 1

@@ -34,6 +34,8 @@ def _render_decision(state):
                 ("Target", candidate.get("target_price")),
                 ("RR", candidate.get("rr")),
                 ("Trend", candidate.get("trend_health")),
+                ("Entry Timing", candidate.get("entry_timing_score")),
+                ("Trade Quality", candidate.get("trade_quality_score")),
                 ("Option", candidate.get("option_ticker")),
                 ("Quality", candidate.get("option_quality")),
                 ("Telegram", candidate.get("telegram")),
@@ -59,9 +61,12 @@ def _render_ranked_opportunities(state):
     for rank, candidate in enumerate(candidates, start=1):
         rows.append({
             "Rank": rank,
+            "TQS Rank": candidate.get("candidate_rank"),
             "Symbol": candidate.get("symbol"),
             "Decision": _action_label(candidate.get("action")),
-            "Score": candidate.get("setup_score"),
+            "TQS": candidate.get("trade_quality_score"),
+            "Entry Timing": candidate.get("entry_timing_score"),
+            "Timing Grade": candidate.get("entry_timing_grade"),
             "Setup": candidate.get("setup"),
             "RR": candidate.get("rr"),
         })

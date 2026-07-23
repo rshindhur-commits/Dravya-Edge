@@ -304,11 +304,13 @@ def get_telegram_credentials():
 
     token = (
         os.getenv("TELEGRAM_BOT_TOKEN")
+        or os.getenv("bot_token")
         or _streamlit_secret(["telegram", "bot_token"])
         or ""
     )
     chat_id = (
         os.getenv("TELEGRAM_CHAT_ID")
+        or os.getenv("chat_id")
         or _streamlit_secret(["telegram", "chat_id"])
         or ""
     )
@@ -514,7 +516,7 @@ def _send_telegram_alert_direct(message):
         raise TelegramDeliveryError(
             response.status_code,
             response_body
-        ) from exc
+        ) from None
 
     try:
 

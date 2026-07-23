@@ -14,6 +14,7 @@ from app.utils.json_store import load_json_file
 EVIDENCE_COLUMNS = [
     "candidate_id", "trading_day", "symbol", "direction", "setup",
     "first_seen_at", "last_seen_at", "scan_count", "rr", "setup_score",
+    "entry_timing_score", "entry_timing_grade", "trade_quality_score", "candidate_rank",
     "option_quality", "trend_health", "regime", "top_candidate", "quote_freshness", "rule_evaluation",
     "decision", "suggestion_status", "paper_trade_status", "entered",
     "replay_outcome", "target_first", "stop_first", "winner", "missed_winner",
@@ -193,6 +194,10 @@ def build_candidate_evidence_from_frames(
             "scan_count": int(len(group)),
             "rr": _value(latest, "candidate_rr", "Candidate RR", "Risk Reward"),
             "setup_score": _value(latest, "setup_percent", "Setup %", "15m Score"),
+            "entry_timing_score": _value(latest, "entry_timing_score", "Entry Timing Score"),
+            "entry_timing_grade": _value(latest, "entry_timing_grade", "Entry Timing Grade"),
+            "trade_quality_score": _value(latest, "trade_quality_score", "Trade Quality Score"),
+            "candidate_rank": _value(latest, "candidate_rank", "Candidate Rank"),
             "option_quality": _value(latest, "option_quality_score", "Option Quality Score"),
             "trend_health": _value(latest, "trend_health", "Trend Health State"),
             "regime": _value(latest, "market_regime", "Market Regime"),

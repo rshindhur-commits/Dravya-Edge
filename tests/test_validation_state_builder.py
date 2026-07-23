@@ -22,10 +22,18 @@ class ValidationStateBuilderTests(unittest.TestCase):
                 {
                     "Symbol": "NVDA",
                     "Action Status": "ENTER_PAPER",
+                    "Entry Timing Score": 86,
+                    "Entry Timing Grade": "EXCELLENT",
+                    "Trade Quality Score": 91,
+                    "Candidate Rank": 1,
                 },
                 {
                     "Symbol": "MSFT",
                     "Action Status": "REVIEW_TV_CHART",
+                    "Entry Timing Score": 42,
+                    "Entry Timing Grade": "LATE_ENTRY",
+                    "Trade Quality Score": 58,
+                    "Candidate Rank": 2,
                 },
             ]),
             paper_events=pd.DataFrame([
@@ -78,6 +86,18 @@ class ValidationStateBuilderTests(unittest.TestCase):
         self.assertEqual(payload["decision_analysis"]["summary"]["Scanned"], 2)
         self.assertEqual(payload["decision_analysis"]["summary"]["Review"], 1)
         self.assertIn("candidate_intelligence", payload)
+        self.assertEqual(
+            payload["observational_analytics"]["entry_timing"]["average_score"],
+            64,
+        )
+        self.assertEqual(
+            len(payload["observational_analytics"]["entry_timing"]["late_entries"]),
+            1,
+        )
+        self.assertEqual(
+            len(payload["observational_analytics"]["decision_waterfalls"]),
+            2,
+        )
 
     def test_strategy_confidence_requires_sample_and_time_evidence(self):
 

@@ -521,6 +521,101 @@ def _decision_analysis(scanner):
     }
 
 
+def _observational_analytics(scanner):
+
+    if scanner is None or scanner.empty:
+
+        return {
+            "entry_timing": {"average_score": None, "grades": [], "late_entries": []},
+            "trade_ranking": [],
+            "exit_waterfalls": [],
+            "decision_waterfalls": [],
+        }
+
+    timing_scores = pd.to_numeric(
+        scanner.get("Entry Timing Score", pd.Series(dtype=float)),
+        errors="coerce",
+    )
+    grades = scanner.get(
+        "Entry Timing Grade",
+        pd.Series("NO_DATA", index=scanner.index),
+    ).fillna("NO_DATA")
+    grade_counts = grades.value_counts().rename_axis(
+        "Entry Timing Grade"
+    ).reset_index(name="Count")
+    late_entries = scanner.loc[
+        grades.eq("LATE_ENTRY"),
+        [
+            column for column in [
+                "Symbol", "Entry", "Entry Timing Score",
+                "Entry Timing Reason", "Trade Quality Score",
+                "Candidate Rank", "Action Status",
+            ] if column in scanner.columns
+        ],
+    ]
+    ranking = scanner[
+        [
+            column for column in [
+                "Candidate Rank", "Symbol", "Trade Quality Score",
+                "Rank Reason", "Entry Timing Score", "Entry Timing Grade",
+                "Action Status",
+            ] if column in scanner.columns
+        ]
+    ].copy()
+
+    if "Candidate Rank" in ranking.columns:
+
+        ranking = ranking.sort_values("Candidate Rank")
+
+    waterfalls = scanner[
+        [
+            column for column in [
+                "Symbol", "Exit Rule", "Exit Stage", "Exit Waterfall",
+                "V2 Trend Health Status", "RR Progress", "Trade Action",
+            ] if column in scanner.columns
+        ]
+    ].copy()
+    from app.analytics.decision_waterfall import (
+        build_decision_waterfall,
+        build_v1_v2_waterfall_comparison,
+        summarize_blocking_stages,
+    )
+
+    decision_waterfalls = [
+        build_decision_waterfall(
+            row,
+            scan_id=str(row.get("Scan ID") or row.get("scan_id") or ""),
+        )
+        for row in scanner.to_dict("records")
+    ]
+    v1_v2_waterfalls = [
+        build_v1_v2_waterfall_comparison(
+            row,
+            scan_id=str(row.get("Scan ID") or row.get("scan_id") or ""),
+        )
+        for row in scanner.to_dict("records")
+    ]
+
+    return {
+        "entry_timing": {
+            "average_score": (
+                round(float(timing_scores.mean()), 2)
+                if timing_scores.notna().any()
+                else None
+            ),
+            "grades": _json_records(grade_counts),
+            "late_entries": _json_records(late_entries.head(20)),
+        },
+        "trade_ranking": _json_records(ranking.head(20)),
+        "exit_waterfalls": _json_records(waterfalls.head(50)),
+        "decision_waterfalls": decision_waterfalls,
+        "blocking_stage_summary": summarize_blocking_stages(
+            decision_waterfalls
+        ),
+        "v1_v2_waterfalls": v1_v2_waterfalls,
+    }
+
+
 def build_validation_state_payload(
     report_date: str,
     scanner: pd.DataFrame | None = None,
@@ -565,6 +660,7 @@ def build_validation_state_payload(
         strategy_confidence,
     )
     decision_analysis = _decision_analysis(scanner)
+    observational_analytics = _observational_analytics(scanner)
 
     return {
         "metadata": metadata_from_generation(generation, scan_id=scan_id) or {
@@ -601,6 +697,7 @@ def build_validation_state_payload(
         "trade_efficiency": trade_efficiency,
         "candidate_outcomes": _json_records(candidate_outcomes),
         "decision_analysis": decision_analysis,
+        "observational_analytics": observational_analytics,
         "entry_exit_v2": {
             "summary": summarize_completed_comparisons(engine_comparisons),
             "trades": _json_records(engine_comparisons),

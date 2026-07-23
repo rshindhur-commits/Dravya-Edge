@@ -1718,6 +1718,12 @@ def _render_cached_validation_state(state):
         )
 
     _render_entry_exit_v2_comparison(state.get("entry_exit_v2"))
+    _render_observational_analytics(
+        state.get("observational_analytics")
+    )
+    _render_decision_waterfalls(
+        (state.get("observational_analytics") or {})
+    )
     _render_v2_learning_summary(state.get("v2_learning"))
     _render_validation_decision_analysis(state.get("decision_analysis"))
     _render_candidate_intelligence(state.get("candidate_intelligence"))
@@ -1743,6 +1749,191 @@ def _render_cached_validation_state(state):
     _render_cached_recommendations(state.get("recommendations"))
     _render_trade_efficiency(state.get("trade_efficiency"))
     _render_daily_validation_report_panel()
+
+
+def _render_observational_analytics(analytics):
+
+    analytics = analytics or {}
+    timing = analytics.get("entry_timing") or {}
+    ranking = analytics.get("trade_ranking") or []
+    waterfalls = analytics.get("exit_waterfalls") or []
+
+    st.subheader("Entry Timing And Trade Ranking")
+    _render_compact_card_grid([
+        ("Average Entry Timing", _format_efficiency_number(
+            timing.get("average_score")
+        )),
+        ("Late Entries", len(timing.get("late_entries") or [])),
+        ("Ranked Candidates", len(ranking)),
+    ])
+
+    grades = timing.get("grades") or []
+
+    if grades:
+
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(grades)),
+            width="stretch",
+            hide_index=True,
+        )
+
+    if ranking:
+
+        st.markdown("### Trade Quality Ranking")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(ranking)),
+            width="stretch",
+            hide_index=True,
+        )
+
+    if timing.get("late_entries"):
+
+        st.markdown("### Late Entry Analysis")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(timing["late_entries"])),
+            width="stretch",
+            hide_index=True,
+        )
+
+    if waterfalls:
+
+        st.markdown("### Exit Waterfalls")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(waterfalls)),
+            width="stretch",
+            hide_index=True,
+        )
+
+
+def _render_decision_waterfalls(analytics):
+
+    analytics = analytics or {}
+    waterfalls = analytics.get("decision_waterfalls") or []
+    blocking_summary = analytics.get("blocking_stage_summary") or {}
+    st.subheader("Decision Waterfall")
+
+    if not waterfalls:
+
+        st.info("Decision paths will appear after scanner diagnostics are persisted.")
+        return
+
+    options = [
+        f"{item.get('symbol') or 'UNKNOWN'} | {item.get('setup') or 'NO_SETUP'}"
+        for item in waterfalls
+    ]
+    selected_option = st.selectbox(
+        "Inspect candidate path",
+        options=options,
+        key="decision_waterfall_candidate",
+    )
+    selected = waterfalls[options.index(selected_option)]
+    blocker = selected.get("first_blocker") or {}
+    _render_compact_card_grid([
+        ("Candidate", selected.get("symbol") or "UNKNOWN"),
+        ("Action", selected.get("final_action") or "UNKNOWN"),
+        ("Final Reason", selected.get("final_reason") or "None"),
+        ("First Blocker", selected.get("blocking_rule") or "None"),
+        ("Blocker Stage", selected.get("blocking_stage") or "None"),
+    ])
+    stages = []
+
+    for stage in selected.get("stages") or []:
+
+        status = (
+            "PASS"
+            if stage.get("passed") is True
+            else "FAIL"
+            if stage.get("passed") is False
+            else "-"
+        )
+        stages.append({
+            "Stage": stage.get("stage"),
+            "Status": status,
+            "Summary": stage.get("summary"),
+            "Passed Rules": ", ".join(stage.get("passed_rules") or []),
+            "Failed Rules": ", ".join(
+                rule.get("rule", "")
+                for rule in stage.get("failed_rules") or []
+            ),
+        })
+    st.dataframe(
+        _display_safe_dataframe(pd.DataFrame(stages)),
+        width="stretch",
+        hide_index=True,
+    )
+    failed_rules = [
+        {
+            "Stage": stage.get("stage"),
+            "Rule": rule.get("rule"),
+            "Actual": rule.get("actual"),
+            "Required": rule.get("required"),
+        }
+        for stage in selected.get("stages") or []
+        for rule in stage.get("failed_rules") or []
+    ]
+
+    if failed_rules:
+
+        st.markdown("#### Failed Rules")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(failed_rules)),
+            width="stretch",
+            hide_index=True,
+        )
+
+    blocking_stages = blocking_summary.get("stages") or []
+
+    if blocking_stages:
+
+        st.markdown("#### Today's Blocking Stages")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(blocking_stages)),
+            width="stretch",
+            hide_index=True,
+        )
+
+    comparisons = analytics.get("v1_v2_waterfalls") or []
+    comparison = next(
+        (
+            item for item in comparisons
+            if item.get("symbol") == selected.get("symbol")
+        ),
+        None,
+    )
+
+    if comparison:
+
+        st.markdown("#### V1 vs V2 Decision Path")
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame([{
+                "V1 Action": comparison.get("v1", {}).get("final_action"),
+                "V2 Action": comparison.get("v2", {}).get("final_action"),
+                "Actions Disagree": comparison.get("actions_disagree"),
+                "First Disagreement": comparison.get("first_disagreement"),
+            }])),
+            width="stretch",
+            hide_index=True,
+        )
+        comparison_stages = []
+
+        for v1_stage, v2_stage in zip(
+            comparison.get("v1", {}).get("stages") or [],
+            comparison.get("v2", {}).get("stages") or [],
+        ):
+
+            comparison_stages.append({
+                "Stage": v1_stage.get("stage"),
+                "V1": v1_stage.get("summary"),
+                "V2": v2_stage.get("summary"),
+                "V1 Pass": v1_stage.get("passed"),
+                "V2 Pass": v2_stage.get("passed"),
+            })
+
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(comparison_stages)),
+            width="stretch",
+            hide_index=True,
+        )
 
 
 def _render_trade_efficiency(efficiency):
@@ -1880,6 +2071,12 @@ def _render_cached_report_state(state):
     _render_daily_validation_report_panel()
     _render_trade_efficiency_history(state.get("historical_trade_efficiency"))
     _render_v2_learning_history(state.get("historical_v2_learning"))
+    _render_observational_analytics_history(
+        state.get("historical_observational_analytics")
+    )
+    _render_blocking_stage_history(
+        state.get("historical_blocking_trends")
+    )
 
 
 def _render_trade_efficiency_history(history):
@@ -1956,6 +2153,63 @@ def _render_v2_learning_history(history):
             width="stretch",
             hide_index=True,
         )
+
+
+def _render_observational_analytics_history(history):
+
+    daily = pd.DataFrame((history or {}).get("daily") or [])
+    st.subheader("Entry Timing And Ranking Trends")
+
+    if daily.empty:
+
+        st.info("Entry Timing and Trade Quality trends will appear after validation caches are available.")
+        return
+
+    _render_compact_card_grid([
+        ("Avg Entry Timing", _format_efficiency_number(
+            pd.to_numeric(daily["Average Entry Timing"], errors="coerce").mean()
+        )),
+        ("Avg TQS", _format_efficiency_number(
+            pd.to_numeric(daily["Average TQS"], errors="coerce").mean()
+        )),
+        ("Avg Rank", _format_efficiency_number(
+            pd.to_numeric(daily["Average Rank"], errors="coerce").mean()
+        )),
+    ])
+    st.dataframe(
+        _display_safe_dataframe(daily),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def _render_blocking_stage_history(history):
+
+    history = history or {}
+    daily = pd.DataFrame(history.get("daily") or [])
+    dominant = pd.DataFrame(history.get("dominant_daily") or [])
+    st.subheader("Blocking Stage Trends")
+
+    if daily.empty:
+
+        st.info("Blocking-stage trends will appear after validation caches are available.")
+        return
+
+    if not dominant.empty:
+
+        st.markdown("### Daily Dominant Blocking Stage")
+        st.dataframe(
+            _display_safe_dataframe(dominant),
+            width="stretch",
+            hide_index=True,
+        )
+
+    st.markdown("### Blocking Stages By Day")
+    st.dataframe(
+        _display_safe_dataframe(daily),
+        width="stretch",
+        hide_index=True,
+    )
 
 
 def _render_market_coverage_lazy(report_date):
@@ -8942,6 +9196,7 @@ def main():
             "Validation",
             "Replay",
             "Reports",
+            "Learning",
             "Developer",
         ],
         key="dashboard_page",
@@ -9012,6 +9267,13 @@ def main():
 
         render(pd.DataFrame())
         st.caption("Reports page rendered from report_state.json. Auto-refresh controls are in the sidebar.")
+        return
+
+    if page == "Learning":
+
+        from app.ui.pages.learning import render
+
+        render()
         return
 
     df = _load_scanner_output()
@@ -9102,6 +9364,12 @@ def main():
         elif page == "Reports":
 
             from app.ui.pages.reports import render
+
+            render(df)
+
+        elif page == "Learning":
+
+            from app.ui.pages.learning import render
 
             render(df)
 

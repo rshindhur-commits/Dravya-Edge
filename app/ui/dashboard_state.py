@@ -9,6 +9,11 @@ from typing import Any
 
 import pandas as pd
 
+from app.analytics.decision_waterfall import (
+    build_decision_waterfall,
+    build_v1_v2_waterfall_comparison,
+    summarize_blocking_stages,
+)
 from app.runtime.scan_generation import metadata_from_generation
 
 
@@ -208,6 +213,14 @@ def _top_candidates(rows, limit=10):
         readiness = _safe_float(_row_get(row, "ENTRY_READINESS"), 0) or 0
         rr = _safe_float(_row_get(row, "Candidate RR", "Risk Reward", "RR"), 0) or 0
         score = _safe_float(_row_get(row, "15m Score"), 0) or 0
+        trade_quality_score = _safe_float(
+            _row_get(row, "Trade Quality Score"),
+            None
+        )
+        candidate_rank = _safe_float(
+            _row_get(row, "Candidate Rank"),
+            None
+        )
         action = str(_row_get(row, "Action Status", default="") or "")
         candidates.append(
             {
@@ -228,12 +241,36 @@ def _top_candidates(rows, limit=10):
                 "trend_health": _clean(_row_get(row, "Trend Health State", "V2 Trend Health Status")),
                 "option_ticker": _clean(_row_get(row, "Option Ticker", "Recommended Option")),
                 "option_quality": _clean(_row_get(row, "Option Quality Score")),
+                "entry_timing_score": _clean(
+                    _row_get(row, "Entry Timing Score")
+                ),
+                "entry_timing_grade": _clean(
+                    _row_get(row, "Entry Timing Grade")
+                ),
+                "trade_quality_score": _clean(trade_quality_score),
+                "candidate_rank": _clean(candidate_rank),
+                "rank_reason": _clean(_row_get(row, "Rank Reason")),
                 "telegram": _telegram_status(row),
-                "sort_score": _action_priority(action) + readiness + min(rr, 3) * 8 + min(abs(score), 100) * 0.1,
+                "sort_score": (
+                    trade_quality_score
+                    if trade_quality_score is not None
+                    else _action_priority(action)
+                    + readiness
+                    + min(rr, 3) * 8
+                    + min(abs(score), 100) * 0.1
+                ),
             }
         )
 
-    candidates = sorted(candidates, key=lambda item: item["sort_score"], reverse=True)
+    candidates = sorted(
+        candidates,
+        key=lambda item: (
+            item["candidate_rank"] is None,
+            item["candidate_rank"]
+            if item["candidate_rank"] is not None
+            else -item["sort_score"],
+        )
+    )
     for item in candidates:
 
         item.pop("sort_score", None)
@@ -441,6 +478,20 @@ def build_dashboard_state(
     best_put = _best_by_direction(candidates, "PUT")
     summary = _summary(rows)
     blockers = _top_blockers(rows)
+    decision_waterfalls = [
+        build_decision_waterfall(
+            row,
+            scan_id=str(_row_get(row, "scan_id", "Scan ID", default="")),
+        )
+        for row in rows
+    ]
+    v1_v2_decision_waterfalls = [
+        build_v1_v2_waterfall_comparison(
+            row,
+            scan_id=str(_row_get(row, "scan_id", "Scan ID", default="")),
+        )
+        for row in rows
+    ]
     best = best_put or best_call
     scan_generation = _scan_generation_metadata(rows, generated_at, scan_id)
     metadata = metadata_from_generation(generation, scan_id=scan_id) or {
@@ -475,6 +526,11 @@ def build_dashboard_state(
         },
         "open_trades": _open_trades(rows),
         "blockers": blockers,
+        "decision_waterfalls": decision_waterfalls,
+        "v1_v2_decision_waterfalls": v1_v2_decision_waterfalls,
+        "blocking_stage_summary": summarize_blocking_stages(
+            decision_waterfalls
+        ),
         "missed_opportunities": [candidate for candidate in candidates if candidate.get("action") not in {"ENTER", "ENTER_PAPER", "OPENED"}][:5],
     }
 

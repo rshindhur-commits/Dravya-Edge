@@ -52,6 +52,11 @@ def open_shadow_trade(symbol, entry_setup, risk_setup, opened_at):
         "trend_health_sum": 0.0,
         "trend_health_sum_sq": 0.0,
         "trend_health_samples": 0,
+        "soft_exit_confirmations": [],
+        "soft_exit_confirmation_streak": 0,
+        "last_exit_confidence_score": None,
+        "last_exit_health_state": None,
+        "grace_zone_active": False,
     }
     save_shadow_trades(state)
     return state[symbol]
@@ -82,6 +87,23 @@ def update_shadow_trade(symbol, exit_setup):
     trade["last_trend_health_score"] = exit_setup.get("trend_health_score")
     trade["last_trend_health_status"] = exit_setup.get("trend_health_status")
     trade["last_exit_phase"] = exit_setup.get("exit_phase")
+    trade["soft_exit_confirmations"] = exit_setup.get(
+        "soft_exit_confirmations",
+        trade.get("soft_exit_confirmations", []),
+    )
+    trade["soft_exit_confirmation_streak"] = exit_setup.get(
+        "soft_exit_confirmation_streak",
+        trade.get("soft_exit_confirmation_streak", 0),
+    )
+    trade["last_exit_confidence_score"] = exit_setup.get(
+        "exit_confidence_score"
+    )
+    trade["last_exit_health_state"] = exit_setup.get(
+        "exit_health_state"
+    )
+    trade["grace_zone_active"] = (
+        exit_setup.get("exit_phase") == "MONITOR"
+    )
     state[symbol] = trade
     save_shadow_trades(state)
     return trade
@@ -103,6 +125,13 @@ def close_shadow_trade(symbol, exit_setup, closed_at, close_price):
         "trend_health_score": exit_setup.get("trend_health_score"),
         "trend_health_status": exit_setup.get("trend_health_status"),
         "trend_health_at_exit": exit_setup.get("trend_health_score"),
+        "exit_confidence_score": exit_setup.get("exit_confidence_score"),
+        "exit_health_state": exit_setup.get("exit_health_state"),
+        "soft_exit_confirmations": exit_setup.get("soft_exit_confirmations"),
+        "soft_exit_confirmation_streak": exit_setup.get(
+            "soft_exit_confirmation_streak"
+        ),
+        "grace_zone_active": exit_setup.get("grace_zone_eligible"),
     })
     save_shadow_trades(state)
     return trade

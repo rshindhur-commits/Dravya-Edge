@@ -1,8 +1,28 @@
 {
-  "generated_at_utc": "2026-07-23T16:10:19.876901+00:00",
-  "performance_rows": 3,
-  "metrics_rows": 35,
+  "generated_at_utc": "2026-07-23T22:28:44.383526+00:00",
+  "performance_rows": 5,
+  "metrics_rows": 39,
   "recent_timings": [
+    {
+      "observed_at_utc": "2026-07-23T22:28:44.374642+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.0001,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-23T22:28:21.786555+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.9956,
+      "metadata": "{}"
+    },
     {
       "observed_at_utc": "2026-07-23T16:10:19.870617+00:00",
       "trading_day": NaN,
@@ -35,6 +55,50 @@
     }
   ],
   "recent_jobs": [
+    {
+      "observed_at_utc": "2026-07-23T16:10:21.201951+00:00",
+      "scan_id": NaN,
+      "job_id": "64699573-0a73-40bd-abf0-83b660ff25dd",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.2093,
+      "queue_runtime": 0.1519,
+      "total_runtime": 1.3612,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:10:21.044604+00:00",
+      "scan_id": NaN,
+      "job_id": "a774ddfb-8284-4442-93c4-cbb99ef651fa",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 1.0527,
+      "queue_runtime": 0.1561,
+      "total_runtime": 1.2087,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:10:20.886371+00:00",
+      "scan_id": NaN,
+      "job_id": "b19f2e6a-0eeb-46a0-93a3-360499361b17",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.906,
+      "queue_runtime": 0.1537,
+      "total_runtime": 1.0596,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-23T16:10:20.730657+00:00",
+      "scan_id": NaN,
+      "job_id": "bc3a5acb-3849-4258-990a-3526eda4a14a",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0067,
+      "queue_runtime": 0.8982,
+      "total_runtime": 0.905,
+      "status": "COMPLETED"
+    },
     {
       "observed_at_utc": "2026-07-23T16:08:19.731797+00:00",
       "scan_id": NaN,
@@ -265,50 +329,6 @@
       "queue_runtime": 0.6415,
       "total_runtime": 0.6425,
       "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-21T06:29:18.607525+00:00",
-      "scan_id": NaN,
-      "job_id": "a387b405-a570-456d-bd54-ad633d0c00c7",
-      "job_name": "persist_completed_trade_db",
-      "priority": "NORMAL",
-      "queue_wait": 0.0013,
-      "queue_runtime": 0.5493,
-      "total_runtime": 0.5506,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-21T06:27:58.606488+00:00",
-      "scan_id": NaN,
-      "job_id": "9accd551-2a1b-44a2-9f1b-6d90debe60c3",
-      "job_name": "persist_completed_trade_db",
-      "priority": "NORMAL",
-      "queue_wait": 0.0012,
-      "queue_runtime": 0.5806,
-      "total_runtime": 0.5819,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-21T06:27:29.755789+00:00",
-      "scan_id": NaN,
-      "job_id": "4433b7c3-98c2-4a56-a745-3c8f2ccac1fd",
-      "job_name": "persist_completed_trade_db",
-      "priority": "NORMAL",
-      "queue_wait": 0.0015,
-      "queue_runtime": 0.4787,
-      "total_runtime": 0.4802,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-21T06:24:49.997154+00:00",
-      "scan_id": NaN,
-      "job_id": "8f04f11c-5e67-4d78-bba0-c4941bf31af1",
-      "job_name": "persist_completed_trade_db",
-      "priority": "NORMAL",
-      "queue_wait": 0.0009,
-      "queue_runtime": 1.2506,
-      "total_runtime": 1.2515,
-      "status": "COMPLETED"
     }
   ],
   "average_seconds_by_stage": [
@@ -316,7 +336,7 @@
       "category": "telegram",
       "stage": "send_telegram_alert",
       "page": NaN,
-      "average_seconds": 0.0
+      "average_seconds": 0.1991
     }
   ],
   "average_runtime_by_job": [
@@ -330,7 +350,7 @@
     },
     {
       "job_name": "insert",
-      "average_runtime": 0.3505
+      "average_runtime": 0.3488
     }
   ]
 }
