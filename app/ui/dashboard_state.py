@@ -173,6 +173,32 @@ def _option_label(row):
     return "Weak"
 
 
+def _telegram_status(row):
+    sent = str(_row_get(row, "Telegram Sent", default="")).strip().lower()
+
+    if sent in {"true", "1", "yes"}:
+
+        return "SENT"
+
+    reason = _row_get(
+        row,
+        "Telegram Block Reason",
+        "Telegram Eligibility",
+        "Telegram Error Reason",
+    )
+
+    return f"NOT SENT: {reason}" if reason else "NOT SENT"
+
+
+def _action_priority(action):
+    return {
+        "ENTER": 40,
+        "ENTER_PAPER": 35,
+        "REVIEW_TV_CHART": 20,
+        "WAIT": 10,
+    }.get(str(action or "").upper(), 0)
+
+
 def _top_candidates(rows, limit=10):
 
     candidates = []
@@ -196,7 +222,14 @@ def _top_candidates(rows, limit=10):
                 "needs": _needs(row),
                 "next_trigger": _clean(_row_get(row, "Next Condition", "Candidate Trigger", "Entry Trigger")),
                 "action": action,
-                "sort_score": readiness + min(rr, 3) * 8 + min(abs(score), 100) * 0.1,
+                "entry_price": _clean(_row_get(row, "Candidate Entry Price", "Entry Price", "Price")),
+                "stop_price": _clean(_row_get(row, "Candidate Stop Price", "Stop Loss")),
+                "target_price": _clean(_row_get(row, "Candidate Target Price", "Take Profit")),
+                "trend_health": _clean(_row_get(row, "Trend Health State", "V2 Trend Health Status")),
+                "option_ticker": _clean(_row_get(row, "Option Ticker", "Recommended Option")),
+                "option_quality": _clean(_row_get(row, "Option Quality Score")),
+                "telegram": _telegram_status(row),
+                "sort_score": _action_priority(action) + readiness + min(rr, 3) * 8 + min(abs(score), 100) * 0.1,
             }
         )
 
@@ -205,6 +238,28 @@ def _top_candidates(rows, limit=10):
 
         item.pop("sort_score", None)
     return candidates[:limit]
+
+
+def _open_trades(rows):
+    open_trades = []
+
+    for row in rows:
+        action = str(_row_get(row, "Trade Action", default="") or "").upper()
+        entry = str(_row_get(row, "Entry", default="") or "").upper()
+
+        if action not in {"HOLD", "PARTIAL_PROFIT"} and entry != "ACTIVE_TRADE":
+
+            continue
+
+        open_trades.append({
+            "symbol": _clean(_row_get(row, "Symbol")),
+            "r_progress": _clean(_row_get(row, "RR Progress")),
+            "trend_health": _clean(_row_get(row, "V2 Trend Health Status", "Trend Health State")),
+            "action": action or "HOLD",
+            "setup": _clean(_row_get(row, "Entry")),
+        })
+
+    return open_trades
 
 
 def _market_bias(rows):
@@ -413,6 +468,12 @@ def build_dashboard_state(
         "summary": summary,
         "today_performance": today_performance or build_today_performance_summary(),
         "top_candidates": candidates,
+        "decision_center": {
+            "best_call": best_call,
+            "best_put": best_put,
+            "ranked_opportunities": candidates[:5],
+        },
+        "open_trades": _open_trades(rows),
         "blockers": blockers,
         "missed_opportunities": [candidate for candidate in candidates if candidate.get("action") not in {"ENTER", "ENTER_PAPER", "OPENED"}][:5],
     }

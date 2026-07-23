@@ -72,6 +72,11 @@ class ValidationStateBuilderTests(unittest.TestCase):
         self.assertEqual(payload["diagnosis"]["exit"]["status"], "NO_EXIT_LOSS_EVIDENCE")
         self.assertEqual(payload["strategy_confidence"]["evidence_days"], 1)
         self.assertEqual(payload["strategy_confidence"]["confidence_pct"], 18)
+        self.assertEqual(payload["entry_exit_v2"]["summary"]["Trades compared"], 0)
+        self.assertEqual(payload["entry_exit_v2"]["trend_outcomes"], [])
+        self.assertEqual(payload["v2_learning"]["summary"]["Completed learning records"], 0)
+        self.assertEqual(payload["decision_analysis"]["summary"]["Scanned"], 2)
+        self.assertEqual(payload["decision_analysis"]["summary"]["Review"], 1)
         self.assertIn("candidate_intelligence", payload)
 
     def test_strategy_confidence_requires_sample_and_time_evidence(self):

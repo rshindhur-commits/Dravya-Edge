@@ -88,13 +88,29 @@ At a high level, each scan does this per symbol:
 ### Trading Workstation UI
 
 - The Streamlit dashboard uses sidebar navigation: `Trading`, `Validation`, `Replay`, `Reports`, and `Developer`.
-- The default `Trading` page renders a command center, current opportunities, cache-only Today's Performance KPIs, why-no-trade summary, and missed opportunities from `dashboard_state.json`. Today's Performance reads `today_performance`, including `last_completed_trade`, and never calculates trend capture, TES, or trade aggregates during a page refresh. Before the first completed trade it renders `No completed trades yet` rather than zero-valued post-trade KPIs.
-- The sidebar keeps only trader-facing controls visible by default: auto refresh, paper automation, compact downloads, daily validation/replay actions, and navigation. Raw exports are hidden under `Downloads > Advanced`; runtime key status is no longer rendered.
+- The default `Trading` page renders the state-driven Decision Center: best call/put, top-five ranked V1 decisions, open V1 trades, compact Today’s Performance, and market summary. It deliberately excludes scan metadata, blockers, missed opportunities, and V2 research details. Today's Performance reads `today_performance`, including `last_completed_trade`, and never calculates trend capture, TES, or trade aggregates during a page refresh. Before the first completed trade it renders `No completed trades yet` rather than zero-valued post-trade KPIs.
+- The sidebar keeps only trader-facing controls visible by default: auto refresh, paper automation, Operations (validation/replay generation), and navigation. Downloads are under `Tools: Downloads`, raw artifacts are under `Advanced files`, and runtime key status is not rendered outside Developer.
 - `Post Market: Generate Everything` runs daily validation report generation and offline replay generation, then refreshes the dashboard.
 - `Trading`, `Replay`, and `Developer` pages share the same metadata-card pattern: scan id/data version, scan timing, refresh age, symbol count, and freshness status.
 - Scanner rows persist `Scan ID` and `Data Version`; `dashboard_state.json` also carries `scan_id` and `data_version` for end-to-end traceability.
 - `dashboard_state.json` is written under `data/live/dashboard_state.json` and `data/daily/YYYY-MM-DD/dashboard_state.json` whenever scanner outputs are written.
 - The `Developer` page keeps legacy diagnostic panels available without putting them above the fold during live trading.
+
+### Dashboard Page Responsibilities
+
+| Page | Question answered | Contents | V1/V2 visibility |
+| --- | --- | --- | --- |
+| Trading | What should I trade right now? | Decision Center, top-five V1 decisions, open V1 trades, compact performance, and market summary | V1 only; V2 has no live execution control. |
+| Validation | Did execution behave well today? | Trade Doctor, trade efficiency, Candidate Outcomes, Decision Analysis, V1/V2 comparison, Trend Outcome Attribution, execution failures, and V2 Learning Summary | Post-trade V2 evidence only. |
+| Replay | What would saved scanner state have done? | Offline replay coverage, blockers, and summaries | V1-oriented today; V1/V2 replay comparison is pending Candidate Evidence merge. |
+| Reports | Is performance improving across days? | Report status, historical Trade Efficiency, and Execution Learning Trends | Aggregated research only. |
+| Developer | Is the system healthy? | Runtime, scheduler, cache, and engineering diagnostics | Operational diagnostics only. |
+
+The Daily Validation Report is the post-market artifact for the Validation page. It includes V2 shadow counts, completed comparisons, Trend Outcome Attribution, strong-trend execution failures, and the V2 Learning Summary.
+
+### Deprecated UI Migration
+
+`_render_command_center`, `_render_current_opportunities`, `_render_why_no_trade`, `_render_missed_opportunities`, `_render_trading_page`, and `_render_trading_page_from_state` are marked `DEPRECATED` in `app/dashboard.py`. They are retained only until the state-driven Trading page has a live paper-session validation and the Candidate Evidence merge restores richer missed-winner analysis in Validation.
 
 ### Scanner Performance And Background Persistence
 
@@ -209,6 +225,15 @@ At a high level, each scan does this per symbol:
 - `app/strategies/momentum_strategy.py` scores bullish, bearish, and neutral evidence using EMA, MACD, RSI, VWAP, relative volume, ATR expansion, candle body strength, market structure, breakout/breakdown behavior, failed reclaim patterns, and market regime.
 - `app/strategies/entry_engine.py` detects entries including breakout, VWAP reclaim, EMA pullback, higher-low continuation, coiled breakout, coiled breakdown, bearish breakdown short, and VWAP rejection. The active EMA pullback trigger requires bullish signal, close above EMA9, EMA9 above EMA20, and latest low within `0.40 * ATR` of EMA9.
 - Multi-timeframe bias is combined in `app/main.py`, with heavier weighting on 15m and 1h signals.
+- Entry/Exit V2 runs in shadow mode only. `entry_engine_v1.py` / `exit_engine_v1.py` are explicit V1 adapters for unchanged production behavior. `entry_engine_v2.py` records trend age, pullback number, bars since breakout, EMA/VWAP extension, volume confirmation, and an Entry Efficiency Score independent from V1 setup quality. `trend_health_engine.py` and `exit_engine_v2.py` record live Trend Health, MFE in $R$, confirmed trend failure, and exit phase. V1 remains the only engine allowed to open/close trades or send alerts.
+- `entry_exit_v2_shadow_state.json` stores V2-only simulated trade state. V2 uses its own entry proposal and shared risk geometry, then manages and closes only this separate state. `engine_trade_events.csv` records completed V1/V2 facts; `engine_trade_comparisons.csv` sequence-matches completed pairs and calculates timing, entry/exit price, $R$, and MFE deltas; `engine_differences.csv` records scanner-level V1/V2 disagreements.
+- The Daily Validation Report and cached Validation page compare V1 versus V2 scanner counts, disagreement count, V2 entry-efficiency/MFE averages, exit-phase distribution, and completed-trade $R$/timing/MFE metrics. Promote V2 only after 2-3 weeks of paper evidence improves Trend Capture, TES, left on table, `EXIT_TOO_EARLY` rate, win rate, or average $R$ without increasing false positives. Feature flags `ENTRY_ENGINE=v1|v2` and `EXIT_ENGINE=v1|v2` are a Phase 3 controlled-switch step and are not active in shadow mode.
+- V2 operating boundary: V1 owns `trade_state.json`, paper execution, Telegram, and suggestion mutation. V2 owns only `entry_exit_v2_shadow_state.json` and never modifies V1 state. V2 uses its own indicator/trend/price entry proposal plus shared risk geometry; it does not consume a V1 entry decision. Hard stop and target remain absolute in the V2 simulation.
+- Artifact map: `entry_exit_v2_shadow.csv` contains per-scan proposals and disagreements; `engine_differences.csv` contains only disagreements; `engine_trade_events.csv` contains completed V1/V2 facts; `engine_trade_comparisons.csv` contains sequence-matched V1/V2 completed pairs. Pairing is currently symbol + direction + per-engine sequence. Merge the master `candidate_evidence` foundation into this branch before candidate-key matching, Candidate Intelligence engine-version fields, Replay version comparison, or multi-week Reports aggregation are treated as complete.
+- Every completed engine event includes stock direction, trade direction, stock finish, trade finish, trend outcome, capture flag, and `trend_capture_pct`. The Daily Validation Report writes `engine_trend_outcomes.csv`, displaying all outcomes and flagging `STRONG_TREND_EXECUTION_FAILED`: directional stock movement of at least $1R$ with a non-profitable engine result. `stock_finish` is the latest scanner price when the report runs and is provisional until market close.
+- Trend Capture % is the primary Entry/Exit V2 engineering target. V2 promotion requires improved capture while win rate, average $R$, TES, left on table, and risk behavior remain similar or better. The event capture formula is `max(0, min(100, final_R / MFE_R * 100))` when MFE is positive.
+- `app/analytics/v2_learning_dataset.py` defines a compact one-row-per-completed-engine-trade execution-learning record. It captures V2-only entry timing features, continuous trend-health/MFE/MAE state aggregates, exit state, Trend Capture %, and derived entry/exit/execution-quality labels. `v2_learning_writer.py` writes `v2_learning_dataset.csv` and optionally Parquet under the daily folder.
+- Validation renders a daily V2 Learning Summary. Reports renders multi-day Execution Learning Trends for Trend Age, Entry Efficiency, Trend Capture %, TES, and exit phase. The Daily Validation Report includes the same daily summary. Candidate Evidence payload upsert is a future optional adapter; do not enable it on this branch until the missing master `candidate_evidence` foundation is merged.
 
 ### Risk And Position Sizing
 

@@ -3,7 +3,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+
 from app.ui.cache.report_state_builder import (
+    build_historical_v2_learning,
     build_historical_trade_efficiency,
     build_report_state_payload,
     write_report_state,
@@ -55,6 +58,30 @@ class ReportStateBuilderTests(unittest.TestCase):
         self.assertEqual(payload["metadata"]["scan_id"], "scan")
         self.assertTrue(payload["daily_report"]["exists"])
         self.assertEqual(payload["scan_id"], "scan")
+
+    def test_builds_historical_v2_learning(self):
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            root = Path(temp_dir)
+            for day, score in [("2026-07-18", 80), ("2026-07-19", 90)]:
+                directory = root / day
+                directory.mkdir()
+                pd.DataFrame([{
+                    "trading_day": day,
+                    "trend_age": 1,
+                    "entry_efficiency_score": score,
+                    "trend_capture_pct": 70,
+                    "tes": 85,
+                    "exit_phase": "TREND_FAILURE",
+                }]).to_csv(directory / "v2_learning_dataset.csv", index=False)
+
+            with patch("app.ui.cache.report_state_builder.DAILY_DIR", root):
+                history = build_historical_v2_learning()
+
+        self.assertEqual(len(history["daily"]), 2)
+        self.assertEqual(history["daily"][0]["Entry Efficiency"], 80.0)
+        self.assertEqual(history["exit_phase"][0]["Exit Phase"], "TREND_FAILURE")
 
     def test_write_report_state_writes_live_and_daily_json(self):
 

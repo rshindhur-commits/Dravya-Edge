@@ -2,6 +2,7 @@ from app.utils.json_store import (
     load_json_file,
     save_json_file
 )
+from app.storage.session_manager import now_et
 
 TRADE_STATE_FILE = (
     "app/state/trade_state.json"
@@ -39,13 +40,15 @@ def open_trade(
     take_profit,
     entry_type=None,
     option_data=None,
-    contracts=None
+    contracts=None,
+    execution_features=None
 
 ):
 
     state = load_trade_state()
 
     option_data = option_data or {}
+    execution_features = execution_features or {}
 
     state[symbol] = {
 
@@ -115,6 +118,56 @@ def open_trade(
 
         "entry_source": "SCANNER_STATE",
 
+        "engine_version": "v1",
+
+        "opened_at": now_et().isoformat(),
+
+        "trend_age": execution_features.get("trend_age_bars"),
+
+        "pullback_number": execution_features.get("pullback_number"),
+
+        "bars_since_breakout": execution_features.get("bars_since_breakout"),
+
+        "entry_efficiency_score": execution_features.get(
+            "entry_efficiency_score"
+        ),
+
+        "distance_from_ema9_pct": execution_features.get(
+            "distance_from_ema9_pct"
+        ),
+
+        "distance_from_ema20_pct": execution_features.get(
+            "distance_from_ema20_pct"
+        ),
+
+        "distance_from_vwap_pct": execution_features.get(
+            "distance_from_vwap_pct"
+        ),
+
+        "atr_extension": execution_features.get("atr_extension"),
+
+        "ema_alignment_score": execution_features.get(
+            "ema_alignment_score"
+        ),
+
+        "volume_confirmation_score": execution_features.get(
+            "volume_confirmation_score"
+        ),
+
+        "max_trend_health": None,
+
+        "min_trend_health": None,
+
+        "trend_health_sum": 0.0,
+
+        "trend_health_sum_sq": 0.0,
+
+        "trend_health_samples": 0,
+
+        "mfe_r": 0.0,
+
+        "mae_r": 0.0,
+
         "is_real_money": False,
 
         "exit_alert_sent": False
@@ -145,7 +198,8 @@ def update_trade(
     bars_in_trade=None,
     partial_profit_taken=None,
     option_data=None,
-    option_pl=None
+    option_pl=None,
+    execution_metrics=None
 
 ):
 
@@ -224,6 +278,54 @@ def update_trade(
         )
         state[symbol]["option_pl_dollars"] = option_pl.get(
             "option_pl_dollars"
+        )
+
+    if execution_metrics:
+
+        health = execution_metrics.get("trend_health_score")
+
+        if health is not None:
+
+            health = float(health)
+            samples = int(
+                state[symbol].get("trend_health_samples", 0)
+            ) + 1
+            state[symbol]["trend_health_samples"] = samples
+            state[symbol]["trend_health_sum"] = (
+                float(state[symbol].get("trend_health_sum", 0) or 0)
+                + health
+            )
+            state[symbol]["trend_health_sum_sq"] = (
+                float(state[symbol].get("trend_health_sum_sq", 0) or 0)
+                + health * health
+            )
+            state[symbol]["max_trend_health"] = (
+                health
+                if state[symbol].get("max_trend_health") is None
+                else max(
+                    float(state[symbol]["max_trend_health"]),
+                    health
+                )
+            )
+            state[symbol]["min_trend_health"] = (
+                health
+                if state[symbol].get("min_trend_health") is None
+                else min(
+                    float(state[symbol]["min_trend_health"]),
+                    health
+                )
+            )
+
+        state[symbol]["mfe_r"] = max(
+            float(state[symbol].get("mfe_r", 0) or 0),
+            float(execution_metrics.get("mfe_r", 0) or 0),
+        )
+        state[symbol]["mae_r"] = max(
+            float(state[symbol].get("mae_r", 0) or 0),
+            float(execution_metrics.get("mae_r", 0) or 0),
+        )
+        state[symbol]["trend_health_at_exit"] = execution_metrics.get(
+            "trend_health_score"
         )
 
     state[symbol][
