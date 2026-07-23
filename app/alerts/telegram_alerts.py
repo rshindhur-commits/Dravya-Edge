@@ -29,6 +29,22 @@ EXIT_ALERT_TRADE_MODES = {
 }
 
 
+class TelegramDeliveryError(RuntimeError):
+
+    def __init__(self, status_code, response_body):
+
+        self.status_code = status_code
+        self.telegram_response = response_body
+        description = (
+            response_body.get("description")
+            if isinstance(response_body, dict)
+            else response_body
+        )
+        super().__init__(
+            f"Telegram API error {status_code}: {description}"
+        )
+
+
 def _bool_value(value, default=False):
 
     if value is None:
@@ -481,7 +497,42 @@ def _send_telegram_alert_direct(message):
             json=payload,
             timeout=10
         )
-    response.raise_for_status()
+    try:
+
+        response.raise_for_status()
+
+    except requests.HTTPError as exc:
+
+        try:
+
+            response_body = response.json()
+
+        except ValueError:
+
+            response_body = response.text
+
+        raise TelegramDeliveryError(
+            response.status_code,
+            response_body
+        ) from exc
+
+    try:
+
+        response_body = response.json()
+
+    except ValueError:
+
+        response_body = {}
+
+    if isinstance(response_body, dict):
+
+        result = response_body.get("result") or {}
+        return {
+            "telegram_message_id": result.get("message_id"),
+            "telegram_response": response_body
+        }
+
+    return {}
 
 
 def send_telegram_alert(message, after_success=None, scan_id=None, dispatch_metadata=None):
@@ -1029,7 +1080,12 @@ def build_telegram_rule_evaluations(scanner_context, result, scan_id, symbol, se
 
 
 @_telegram_attempt_logger("PAPER_ENTRY")
-def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
+def maybe_send_paper_entry_alert(
+    trade,
+    scanner_context=None,
+    reason=None,
+    scan_id=None
+):
 
     if not telegram_entry_alerts_enabled():
 
@@ -1125,8 +1181,12 @@ def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
     )
     metadata = {
         "symbol": symbol,
+        "direction": direction,
         "option_ticker": option_ticker,
         "event_type": ENTRY_EVENT_TYPE,
+        "message_type": "PAPER_ENTRY",
+        "decision": action_status,
+        "candidate_key": trade.get("trade_key") or alert_key,
         "source": "paper_entry",
         "action_status": action_status,
         "setup_key": "_".join([
@@ -1139,6 +1199,11 @@ def maybe_send_paper_entry_alert(trade, scanner_context=None, reason=None):
     send_result = send_telegram_alert(
         message,
         after_success=lambda _result: mark_alert_sent(alert_key, metadata),
+        scan_id=(
+            scan_id
+            or trade.get("scan_id")
+            or scanner_context.get("Scan ID")
+        ),
         dispatch_metadata={
             "alert_key": alert_key,
             "metadata": metadata,
@@ -1207,7 +1272,8 @@ def maybe_send_trade_exit_alert(
     expected_underlying_price=None,
     price_source=None,
     scanner_row_symbol=None,
-    candidate_prices=None
+    candidate_prices=None,
+    scan_id=None
 ):
 
     if not telegram_exit_alerts_enabled():
@@ -1335,8 +1401,13 @@ def maybe_send_trade_exit_alert(
 
     metadata = {
         "symbol": symbol,
+        "direction": trade.get("direction"),
         "option_ticker": option_ticker,
         "event_type": event_type,
+        "message_type": "TRADE_EXIT",
+        "decision": "EXIT_ELIGIBLE",
+        "candidate_key": trade.get("trade_key") or alert_key,
+        "trade_id": trade.get("trade_key"),
         "exit_reason": exit_reason,
         "outcome": outcome,
         "current_price": current_price,
@@ -1347,6 +1418,7 @@ def maybe_send_trade_exit_alert(
     send_result = send_telegram_alert(
         message,
         after_success=after_success,
+        scan_id=scan_id or trade.get("scan_id"),
         dispatch_metadata={
             "alert_key": alert_key,
             "metadata": metadata,
@@ -1377,7 +1449,8 @@ def maybe_send_scanner_entry_alert(
     setup_score=0,
     alignment_score=0,
     rs_rank_score=0,
-    relative_volume=0
+    relative_volume=0,
+    scan_id=None
 ):
 
     if not telegram_entry_alerts_enabled():
@@ -1436,8 +1509,12 @@ def maybe_send_scanner_entry_alert(
 
     metadata = {
         "symbol": symbol,
+        "direction": option_contract.get("type"),
         "option_ticker": option_ticker,
         "event_type": ENTRY_EVENT_TYPE,
+        "message_type": "SCANNER_ENTRY",
+        "decision": action_status,
+        "candidate_key": alert_key,
         "action_status": action_status,
         "final_signal": final_signal,
         "setup_key": setup_key,
@@ -1446,6 +1523,7 @@ def maybe_send_scanner_entry_alert(
     send_result = send_telegram_alert(
         message,
         after_success=lambda _result: mark_alert_sent(alert_key, metadata),
+        scan_id=scan_id,
         dispatch_metadata={
             "alert_key": alert_key,
             "metadata": metadata,

@@ -79,7 +79,29 @@ def _queue_record(job_id, name, scan_id, message, dispatch_metadata=None):
     }
 
 
-def _audit_record(event, name, scan_id, attempt=None, job_id=None, error=None):
+def _audit_record(
+    event,
+    name,
+    scan_id,
+    attempt=None,
+    job_id=None,
+    error=None,
+    dispatch_metadata=None,
+    latency_ms=None,
+    result=None
+):
+
+    metadata = (dispatch_metadata or {}).get(
+        "metadata",
+        dispatch_metadata or {}
+    )
+    telegram_response = (
+        getattr(error, "telegram_response", None)
+        if error
+        else (result or {}).get("telegram_response")
+        if isinstance(result, dict)
+        else None
+    )
 
     return {
         "event": event,
@@ -88,11 +110,29 @@ def _audit_record(event, name, scan_id, attempt=None, job_id=None, error=None):
         "scan_id": scan_id,
         "job_id": job_id,
         "attempt": attempt,
+        "symbol": metadata.get("symbol"),
+        "direction": metadata.get("direction"),
+        "candidate_key": metadata.get("candidate_key"),
+        "message_type": metadata.get("message_type") or metadata.get("event_type"),
+        "decision": metadata.get("decision"),
+        "policy": metadata.get("policy"),
+        "parse_mode": metadata.get("parse_mode", "HTML"),
+        "message_length": metadata.get("message_length"),
+        "latency_ms": latency_ms,
+        "telegram_response": telegram_response,
         "error": str(error) if error else None,
     }
 
 
-def _record_dispatch_db(event, scan_id, dispatch_metadata=None, error=None, result=None):
+def _record_dispatch_db(
+    event,
+    scan_id,
+    dispatch_metadata=None,
+    error=None,
+    result=None,
+    attempt=None,
+    latency_ms=None
+):
     """Best-effort scheduler-only promotion of the dispatcher audit event."""
     try:
         from app.db.telegram_dispatch_repository import TelegramDispatchRepository
@@ -105,8 +145,16 @@ def _record_dispatch_db(event, scan_id, dispatch_metadata=None, error=None, resu
                 "scan_id": scan_id,
                 "trade_id": metadata.get("trade_id"),
                 "symbol": metadata.get("symbol"),
+                "direction": metadata.get("direction"),
+                "candidate_key": metadata.get("candidate_key"),
                 "message_type": metadata.get("event_type") or metadata.get("message_type") or "UNKNOWN",
                 "decision": metadata.get("decision") or "ELIGIBLE",
+                "policy": metadata.get("policy"),
+                "parse_mode": metadata.get("parse_mode", "HTML"),
+                "message_length": metadata.get("message_length"),
+                "telegram_response": getattr(error, "telegram_response", None) if error else (result or {}).get("telegram_response") if isinstance(result, dict) else None,
+                "attempt": attempt,
+                "latency_ms": latency_ms,
                 "attempted": event in {"ATTEMPT", "SENT", "FAILED"},
                 "delivered": event == "SENT",
                 "status": status,
@@ -130,6 +178,11 @@ def dispatch_telegram_message(
 ):
 
     job_id_holder = {"job_id": None}
+    dispatch_metadata = dict(dispatch_metadata or {})
+    metadata = dict(dispatch_metadata.get("metadata") or {})
+    metadata.setdefault("message_length", len(str(message or "")))
+    metadata.setdefault("parse_mode", "HTML")
+    dispatch_metadata["metadata"] = metadata
 
     def execute_send():
 
@@ -140,6 +193,8 @@ def dispatch_telegram_message(
 
             try:
 
+                attempt_started = time.perf_counter()
+
                 _append_jsonl(
                     TELEGRAM_AUDIT_FILE,
                     _audit_record(
@@ -147,10 +202,16 @@ def dispatch_telegram_message(
                         name,
                         scan_id,
                         attempt=attempts + 1,
-                        job_id=job_id_holder.get("job_id")
+                        job_id=job_id_holder.get("job_id"),
+                        dispatch_metadata=dispatch_metadata
                     )
                 )
-                _record_dispatch_db("ATTEMPT", scan_id, dispatch_metadata)
+                _record_dispatch_db(
+                    "ATTEMPT",
+                    scan_id,
+                    dispatch_metadata,
+                    attempt=attempts + 1
+                )
 
                 result = send_func(message)
 
@@ -165,10 +226,26 @@ def dispatch_telegram_message(
                         name,
                         scan_id,
                         attempt=attempts + 1,
-                        job_id=job_id_holder.get("job_id")
+                        job_id=job_id_holder.get("job_id"),
+                        dispatch_metadata=dispatch_metadata,
+                        latency_ms=round(
+                            (time.perf_counter() - attempt_started) * 1000,
+                            2
+                        ),
+                        result=result
                     )
                 )
-                _record_dispatch_db("SENT", scan_id, dispatch_metadata, result=result)
+                _record_dispatch_db(
+                    "SENT",
+                    scan_id,
+                    dispatch_metadata,
+                    result=result,
+                    attempt=attempts + 1,
+                    latency_ms=round(
+                        (time.perf_counter() - attempt_started) * 1000,
+                        2
+                    )
+                )
 
                 return result
 
@@ -190,10 +267,25 @@ def dispatch_telegram_message(
                             scan_id,
                             attempt=attempts,
                             job_id=job_id_holder.get("job_id"),
-                            error=exc
+                            error=exc,
+                            dispatch_metadata=dispatch_metadata,
+                            latency_ms=round(
+                                (time.perf_counter() - attempt_started) * 1000,
+                                2
+                            )
                         )
                     )
-                    _record_dispatch_db("FAILED", scan_id, dispatch_metadata, error=exc)
+                    _record_dispatch_db(
+                        "FAILED",
+                        scan_id,
+                        dispatch_metadata,
+                        error=exc,
+                        attempt=attempts,
+                        latency_ms=round(
+                            (time.perf_counter() - attempt_started) * 1000,
+                            2
+                        )
+                    )
 
                     raise
 
