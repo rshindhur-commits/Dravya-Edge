@@ -286,6 +286,28 @@ After writing the daily and live JSON summaries, the Learning Engine promotes th
 
 The Learning summary also includes a rolling last-50 refresh success rate, TQS outcome buckets, evidence-based Rule ROI, and a feature promotion tracker. Rule ROI is observational: it uses resolved candidate outcomes and is never a direct trading input.
 
+Feature promotion is versioned through `feature_registry` and `feature_statistics` (migration `010_feature_registry.sql`). A feature remains `SHADOW` while lift is not measurable; it becomes a promotion candidate only with 100 completed samples, 95% confidence, and positive measured lift. Promotion status never changes V1 automatically.
+
+`app/analytics/market_regime.py` normalizes existing regime and breadth facts into an observational macro state and risk mode. `app/analytics/trade_lifecycle.py` classifies persisted trade facts as `SETUP`, `READY`, `EARLY`, `EXPANSION`, `PROTECTION`, `WEAKENING`, or `EXIT`. Both feed Learning distributions only and do not alter V1 decisions.
+
+Learning also materializes completed paper-trade performance from persisted event facts: completed count, wins/losses, win rate, total and average $R$, profit factor, and maximum drawdown in $R$.
+
+The Learning page prefers the latest warehouse summary when optional DB writes are active and always falls back to the live file-backed summary. Promotion review may mark a feature for controlled validation, but never switches V1 automatically.
+
+Learning computes summaries from immutable persisted facts, attempts repository/Neon persistence first, and then exports the same summary to daily/live JSON regardless of database outcome. The JSON is a resilient cache and inspection artifact, not a learning input.
+
+Learning also materializes resolved setup, regime/market, and lifecycle/decision aggregates into `analytics_summary`. Human promotion reviews are persisted in `promotion_review`; review may approve controlled validation but cannot switch V1 automatically.
+
+Use `python tools/reconcile_learning_memory.py --date YYYY-MM-DD --backfill` to regenerate daily Candidate Evidence/Learning summaries from persisted facts, promote them to Neon when enabled, and compare file versus database counts. The tool never reads generated HTML reports.
+
+Reconciliation reports `MATCH` for aligned file/database facts, `DB_AUTHORITATIVE` when historical database facts exist without a recoverable daily CSV, and `REVIEW` only for conflicting nonzero counts.
+
+## Version 1.0 Evidence Freeze
+
+Version 1.0 is feature-frozen for strategy behavior. Do not add or loosen V1 entry, exit, risk, or sizing rules until at least 100-200 completed paper trades span 20 or more trading days and multiple market regimes. New ideas must run in shadow mode, accumulate persisted evidence, and move only through the human-controlled promotion workflow.
+
+Validation baseline: `python -m unittest discover tests` currently passes all 134 tests. The intentional background-worker failure printed by `test_background_queue.py` verifies failure isolation and does not fail the suite.
+
 ```mermaid
 flowchart TD
 	Scanner --> V1[V1 Engine]
@@ -662,6 +684,8 @@ Use `OPTION_CAPITAL_PROFILE=GROWTH_ACCOUNT` as buying power grows, or `OPTION_AF
 ## Telegram Alerts
 
 Telegram entry and exit alerts are opt-in and use duplicate protection so dashboard/scanner refreshes do not resend the same signal. Keep real bot tokens in local `.streamlit/secrets.toml` or Streamlit Cloud Secrets; do not commit them.
+
+For local `.env` configuration, credential lookup accepts both `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` and the legacy lowercase `bot_token` / `chat_id` keys. The direct test utility is `python tools/send_test_telegram_alert.py`. If Telegram returns `Bad Request: chat not found`, refresh the chat ID after the bot has been started or added to the destination chat; rotate any token exposed in a terminal URL/error trace.
 
 Exit alerts are only allowed for explicitly tracked `PAPER` or `REAL` trades. Legacy scanner-managed `trade_state.json` entries are treated as dashboard state and do not send Telegram exits unless promoted to a confirmed paper/real trade mode. Successful exit alerts mark `exit_alert_sent` on the trade, and deterministic alert keys include symbol, option ticker, open time, and exit reason.
 

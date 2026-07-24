@@ -9,12 +9,19 @@ def render(df=None):
 
     import streamlit as st
 
-    path = live_path("daily_engine_summary.json")
-
     try:
-        summary = json.loads(path.read_text(encoding="utf-8"))
+        from app.db.learning_engine_repository import LearningEngineRepository
+        repository = LearningEngineRepository()
+        summary = repository.get_daily_summary() or repository.latest_summary() or {}
     except Exception:
         summary = {}
+
+    if not summary:
+        path = live_path("daily_engine_summary.json")
+        try:
+            summary = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            summary = {}
 
     st.subheader("Learning")
 
@@ -33,6 +40,10 @@ def render(df=None):
         with column:
             st.metric(label, value if value is not None else "-")
 
+    performance = summary.get("performance") or {}
+    st.subheader("Performance")
+    st.dataframe({"Metric": ["Completed Trades", "Win Rate", "Average R", "Profit Factor", "Max Drawdown R"], "Value": [performance.get("completed_trades"), performance.get("win_rate"), performance.get("average_r"), performance.get("profit_factor"), performance.get("max_drawdown_r")]}, width="stretch", hide_index=True)
+
     st.subheader("Premature Exit Research")
     st.dataframe({
         "Metric": ["Wait one bar improved", "Wait two bars improved", "Avg +1 bar move", "Avg +2 bars move"],
@@ -45,11 +56,25 @@ def render(df=None):
         width="stretch",
         hide_index=True,
     )
+    for title, key in [("Market Distribution", "market_distribution"), ("Lifecycle Distribution", "lifecycle_distribution")]:
+        values = summary.get(key) or {}
+        if values:
+            st.markdown(f"### {title}")
+            st.dataframe([{"State": state, "Count": count} for state, count in values.items()], width="stretch", hide_index=True)
     feedback = summary.get("feedback_loop") or {}
     st.subheader("Feedback Loop")
     st.metric("Refresh Success Rate (Last 50)", feedback.get("refresh_success_rate_last_50") if feedback.get("refresh_success_rate_last_50") is not None else "-")
     for title, key in [("TQS Outcome Calibration", "tqs_calibration"), ("Rule ROI", "rule_roi"), ("Feature Promotion Tracker", "feature_promotion")]:
         rows = feedback.get(key) or []
+        if rows:
+            st.markdown(f"### {title}")
+            st.dataframe(rows, width="stretch", hide_index=True)
+    promotion = feedback.get("feature_promotion") or []
+    if promotion:
+        st.caption("Promotion candidates require human controlled-validation review; this page cannot alter V1.")
+    aggregates = summary.get("aggregate_statistics") or []
+    for title, kind in [("Setup Performance", "setup"), ("Market Performance", "market"), ("Lifecycle Performance", "lifecycle")]:
+        rows = [row for row in aggregates if row.get("summary_type") == kind]
         if rows:
             st.markdown(f"### {title}")
             st.dataframe(rows, width="stretch", hide_index=True)
