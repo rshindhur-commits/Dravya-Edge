@@ -3453,12 +3453,16 @@ def _render_daily_validation_report_controls():
 
             output_path = _generate_daily_validation_report(
                 report_date,
-                finalize_report=finalize_report
+                finalize_report=True
             )
             _replay_path, summary_path = _generate_offline_replay(report_date)
+            from app.regression import freeze_baseline
+
+            baseline_path = freeze_baseline(report_date)
             st.session_state["daily_validation_report_path"] = str(output_path)
             st.session_state["offline_replay_summary_path"] = str(summary_path)
-            st.sidebar.success("Validation report and replay generated.")
+            baseline_message = "Baseline frozen." if baseline_path else "Baseline not available yet."
+            st.sidebar.success(f"Validation report and replay generated. {baseline_message}")
             st.rerun()
 
         except Exception as exc:
@@ -3900,6 +3904,16 @@ def _auto_refresh_defaults():
             )
         )
 
+    if "restore_multiday_positions" not in st.session_state:
+
+        st.session_state["restore_multiday_positions"] = _boolish(
+            saved_auto_settings.get(
+                "restore_multiday_positions",
+                True
+            ),
+            True
+        )
+
     if "auto_paper_profit_r" not in st.session_state:
 
         st.session_state["auto_paper_profit_r"] = float(
@@ -3950,8 +3964,12 @@ def _render_auto_paper_controls():
         key="auto_paper_exit_enabled"
     )
     eod_close_enabled = st.sidebar.toggle(
-        "End-of-day Auto Close",
+        "Auto Close Intraday Trades",
         key="auto_paper_eod_close_enabled"
+    )
+    restore_multiday_positions = st.sidebar.toggle(
+        "Restore Multi-day Positions",
+        key="restore_multiday_positions"
     )
 
     profit_r = st.sidebar.number_input(
@@ -3974,6 +3992,7 @@ def _render_auto_paper_controls():
         "direction": direction,
         "auto_exit_enabled": auto_exit_enabled,
         "eod_close_enabled": eod_close_enabled,
+        "restore_multiday_positions": restore_multiday_positions,
         "profit_r": float(profit_r)
     }
 
@@ -3985,6 +4004,7 @@ def _render_auto_paper_controls():
         "auto_paper_direction": controls["direction"],
         "auto_paper_exit_enabled": controls["auto_exit_enabled"],
         "auto_paper_eod_close_enabled": controls["eod_close_enabled"],
+        "restore_multiday_positions": controls["restore_multiday_positions"],
         "auto_paper_profit_r": controls["profit_r"]
     })
 
@@ -5005,7 +5025,7 @@ def _is_swing_hold_eligible(trade, scanner_row):
     return True
 
 
-def _auto_exit_reason(trade, current_price, scanner_row, controls):
+def _legacy_auto_exit_reason(trade, current_price, scanner_row, controls):
 
     if not controls["auto_exit_enabled"]:
 
@@ -5084,6 +5104,18 @@ def _auto_exit_reason(trade, current_price, scanner_row, controls):
         return "Auto paper exit: end-of-day close"
 
     return None
+
+
+def _auto_exit_reason(trade, current_price, scanner_row, controls):
+
+    from app.runtime.paper_automation_support import _auto_exit_reason as runtime_auto_exit_reason
+
+    return runtime_auto_exit_reason(
+        trade,
+        current_price,
+        scanner_row,
+        controls,
+    )
 
 
 def _run_auto_paper_exits(df, controls):
@@ -9195,6 +9227,7 @@ def main():
             "Trading",
             "Validation",
             "Replay",
+            "Regression",
             "Reports",
             "Learning",
             "Developer",
@@ -9259,6 +9292,13 @@ def main():
             refresh_state=refresh_state
         )
         st.caption("Replay page rendered from replay_state.json. Auto-refresh controls are in the sidebar.")
+        return
+
+    if page == "Regression":
+
+        from app.ui.pages.regression import render
+
+        render()
         return
 
     if page == "Reports" and _load_cached_state("report_state.json", profile="reports"):

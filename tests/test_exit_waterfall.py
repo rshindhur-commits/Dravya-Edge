@@ -64,6 +64,57 @@ class ExitWaterfallTests(unittest.TestCase):
             "SELECTED",
         )
 
+    def test_profitable_healthy_first_ema_break_waits_one_bar(self):
+
+        result = evaluate_exit(
+            pd.DataFrame([
+                {
+                    "Close": 101,
+                    "High": 103,
+                    "Low": 100.5,
+                    "ATR": 1,
+                    "EMA9": 100,
+                    "EMA9_SLOPE": -1,
+                    "EMA20": 98,
+                    "VWAP": 99,
+                    "MACD": 1,
+                    "MACD_SIGNAL": 0.5,
+                    "RSI": 60,
+                    "REL_VOLUME": 1.2,
+                    "HIGHER_HIGH": True,
+                    "HIGHER_LOW": True,
+                },
+                {
+                    "Close": 99.5,
+                    "High": 102,
+                    "Low": 99,
+                    "ATR": 1,
+                    "EMA9": 100,
+                    "EMA9_SLOPE": -1,
+                    "EMA20": 98,
+                    "VWAP": 99,
+                    "MACD": 1,
+                    "MACD_SIGNAL": 0.5,
+                    "RSI": 60,
+                    "REL_VOLUME": 1.2,
+                    "HIGHER_HIGH": True,
+                    "HIGHER_LOW": True,
+                },
+            ]),
+            {},
+            {
+                "entry_price": 98,
+                "stop_loss": 96,
+                "take_profit": 108,
+            },
+            entry_setup={"entry_type": "EMA_PULLBACK"},
+            trade_state={"highest_price": 103, "lowest_price": 98, "bars_in_trade": 3},
+        )
+
+        self.assertFalse(result["exit_signal"])
+        self.assertTrue(result["grace_zone_active"])
+        self.assertTrue(result["v1_ema_grace_pending"])
+
 
 if __name__ == "__main__":
 

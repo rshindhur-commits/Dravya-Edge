@@ -20,6 +20,7 @@ class TradeDecision:
     confidence: float
     reasons: list[str] = field(default_factory=list)
     block_reasons: list[str] = field(default_factory=list)
+    holding_profile: str = "INTRADAY"
 
     @property
     def score(self) -> float:
@@ -109,6 +110,9 @@ def _append_reason(reasons: list[str], reason) -> None:
 def evaluate_candidate(candidate: dict[str, Any] | None) -> TradeDecision:
 
     candidate = candidate or {}
+    from app.state.holding_policy import derive_holding_profile
+
+    holding_profile = derive_holding_profile(candidate).value
     action = str(
         _row_get(
             candidate,
@@ -197,6 +201,7 @@ def evaluate_candidate(candidate: dict[str, Any] | None) -> TradeDecision:
         confidence=confidence,
         reasons=reasons,
         block_reasons=block_reasons,
+        holding_profile=holding_profile,
     )
 
 

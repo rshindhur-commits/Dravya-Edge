@@ -248,20 +248,23 @@ def run_auto_paper_entries(df, controls):
 
 
 def run_auto_paper_exits(df, controls):
-
-    if not controls["auto_exit_enabled"]:
-
-        return []
-
     from app.runtime.paper_automation_support import (
         _auto_exit_reason,
         _close_paper_trade,
         _scanner_context_from_row,
     )
+    from app.alerts.telegram_alerts import (
+        maybe_send_multiday_position_continue_alert,
+        maybe_send_paper_trade_update_alert,
+    )
     from app.state.paper_trade_manager import load_paper_trades
+    from app.state.trade_session_lifecycle import initialize_session_lifecycle
 
     try:
 
+        initialize_session_lifecycle(
+            restore_multiday_positions=controls.get("restore_multiday_positions", True),
+        )
         paper_trades = load_paper_trades()
 
     except Exception:
@@ -295,13 +298,37 @@ def run_auto_paper_exits(df, controls):
 
                 scanner_row = matching_rows.iloc[0]
 
+        scanner_context = (
+            _scanner_context_from_row(scanner_row)
+            if scanner_row is not None
+            else None
+        )
         reason = _auto_exit_reason(trade, current_price, scanner_row, controls)
 
         if not reason:
 
+            try:
+
+                maybe_send_multiday_position_continue_alert(
+                    trade,
+                    current_price,
+                    scanner_context,
+                )
+                maybe_send_paper_trade_update_alert(
+                    trade,
+                    current_price,
+                    scanner_context,
+                )
+
+            except Exception as exc:
+
+                print(
+                    f"[PAPER TELEGRAM UPDATE ALERT ERROR] "
+                    f"{symbol}: {exc}"
+                )
+
             continue
 
-        scanner_context = _scanner_context_from_row(scanner_row) if scanner_row is not None else None
         _close_paper_trade(
             symbol,
             current_price,

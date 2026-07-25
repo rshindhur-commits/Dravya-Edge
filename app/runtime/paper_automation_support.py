@@ -15,6 +15,7 @@ from app.gates import (
     is_symbol_in_cooldown,
     symbol_trade_count_today,
 )
+from app.state.holding_policy import holding_policy
 from app.storage.auto_paper_decision_store import (
     append_daily_auto_paper_decision,
     classify_decision_time,
@@ -267,7 +268,11 @@ def _paper_trade_candidates(df):
 def _scanner_context_from_row(row):
 
     context_fields = [field for field in row.index]
-    return {field: row.get(field) for field in context_fields}
+    context = {field: row.get(field) for field in context_fields}
+    from app.state.holding_policy import derive_holding_profile
+
+    context["Holding Profile"] = derive_holding_profile(context).value
+    return context
 
 
 def _real_entry_checklist(row):
@@ -374,7 +379,7 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         return False, "puts only"
     symbol = row.get("Symbol")
     if has_active_symbol_trade(paper_trades, symbol):
-        return False, "DUPLICATE_OPEN_SYMBOL"
+        return False, "ALREADY_HOLDING_NO_ADDITIONAL_ENTRY"
     cooldown_minutes = env_int("AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES", 60)
     if is_symbol_in_cooldown(symbol, _closed_paper_trades(paper_trades), now_et, cooldown_minutes):
         return False, "SYMBOL_COOLDOWN_ACTIVE"
@@ -443,46 +448,37 @@ def _calculate_trade_r_progress(trade, current_price):
     return ((entry - current) / risk) if direction == "SHORT" else ((current - entry) / risk)
 
 
-def _is_swing_hold_eligible(trade, scanner_row):
-    if scanner_row is None:
-        return False
-    expiration_bucket = str(scanner_row.get("Expiration Bucket") or "").upper()
-    setup = _safe_float(scanner_row.get("Setup %"), 0)
-    rr = _safe_float(scanner_row.get("RR"), 0)
-    option_quality = _safe_float(scanner_row.get("Option Quality Score"), 0)
-    return expiration_bucket in ["PREFERRED_14_30", "LONGER_DTE"] and setup >= 80 and rr >= 1.8 and option_quality >= 75 and not _boolish(scanner_row.get("Live Exit Signal"))
-
-
 def _auto_exit_reason(trade, current_price, scanner_row, controls):
-    if not controls["auto_exit_enabled"]:
-        return None
     entry = _safe_float(trade.get("entry_price"), None)
     stop = _safe_float(trade.get("stop_loss"), None)
     target = _safe_float(trade.get("take_profit"), None)
     current = _safe_float(current_price, None)
     if entry is None or current is None:
         return None
-    direction = _infer_trade_direction(trade.get("direction") or trade.get("entry_type"))
-    if direction == "SHORT":
-        if stop is not None and current >= stop:
-            return "Auto paper exit: stop hit"
-        if target is not None and current <= target:
-            return "Auto paper exit: target hit"
-    else:
-        if stop is not None and current <= stop:
-            return "Auto paper exit: stop hit"
-        if target is not None and current >= target:
-            return "Auto paper exit: target hit"
-    if scanner_row is not None:
-        if _boolish(scanner_row.get("Live Exit Signal")):
-            return "Auto paper exit: live exit signal"
-        live_exit_reason = str(scanner_row.get("Live Exit Reason") or "")
-        if any(token in live_exit_reason.lower() for token in ["momentum", "vwap", "ema20", "failed breakout", "breakdown"]):
-            return f"Auto paper exit: {live_exit_reason}"
-    if _calculate_trade_r_progress(trade, current) >= controls.get("profit_r", 1.0):
-        return "Auto paper exit: profit threshold reached"
-    if controls["eod_close_enabled"] and _current_et().time() >= AUTO_PAPER_EOD_CLOSE:
-        if _is_swing_hold_eligible(trade, scanner_row):
+
+    if controls.get("auto_exit_enabled", False):
+        direction = _infer_trade_direction(trade.get("direction") or trade.get("entry_type"))
+        if direction == "SHORT":
+            if stop is not None and current >= stop:
+                return "Auto paper exit: stop hit"
+            if target is not None and current <= target:
+                return "Auto paper exit: target hit"
+        else:
+            if stop is not None and current <= stop:
+                return "Auto paper exit: stop hit"
+            if target is not None and current >= target:
+                return "Auto paper exit: target hit"
+        if scanner_row is not None:
+            if _boolish(scanner_row.get("Live Exit Signal")):
+                return "Auto paper exit: live exit signal"
+            live_exit_reason = str(scanner_row.get("Live Exit Reason") or "")
+            if any(token in live_exit_reason.lower() for token in ["momentum", "vwap", "ema20", "failed breakout", "breakdown"]):
+                return f"Auto paper exit: {live_exit_reason}"
+        if _calculate_trade_r_progress(trade, current) >= controls.get("profit_r", 1.0):
+            return "Auto paper exit: profit threshold reached"
+
+    if controls.get("eod_close_enabled", False) and _current_et().time() >= AUTO_PAPER_EOD_CLOSE:
+        if not holding_policy(trade.get("holding_profile")).force_eod_exit:
             return None
         return "Auto paper exit: end-of-day close"
     return None

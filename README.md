@@ -26,11 +26,82 @@ The app now has a first-pass research layer for validating edge quality before a
 
 The backtesting framework is intentionally stock-first. It validates whether the underlying setup hit target before stop using historical candles; historical option quote replay and option P/L approximation are later steps.
 
+## Historical Scanner Regression
+
+Historical Scanner Regression (HSR) answers whether a strategy change would have produced better or worse **trade outcomes** for an archived trading day. It is separate from Replay and Backtesting and lives in `app/regression/`.
+
+Set `REGRESSION_SNAPSHOT_ENABLED=true` to enable recording. When enabled, every completed scanner persistence cycle queues one immutable Neon `scanner_snapshot` row per `(scan_id, symbol)` after alerts and live state work complete. Each row keeps a computed `decision_payload` plus a bounded `market_payload` containing the last 200 5-minute, 80 15-minute, and 40 1-hour OHLCV bars. This is the durable HSR system of record. A matching immutable local developer/cache artifact is also written under:
+
+```text
+data/daily/YYYY-MM-DD/scanner_snapshots/HHMMSS_scan-id.parquet
+```
+
+CSV is used automatically if Parquet support is unavailable. The companion `manifest.json` records the scan IDs/timestamps, scanner version, non-secret entry/exit engine configuration, and the observed watchlist. Existing local snapshot files are never overwritten, but they are not required for regression when Neon is available.
+
+Only a zero-failure completed scan is eligible for regression recording. The recorder is a separate normal-priority, best-effort runtime job; live alerts, paper state, dashboard state, and scanner completion never wait for Neon, hashing, or snapshot serialization. Per-symbol decision payloads are hashed, so an unchanged decision state is recorded as a dropped duplicate rather than a new durable snapshot. Developer > Regression Snapshot shows enabled state, queued/completed/dropped/failure totals, and average persist time.
+
+At daily finalization, the system freezes the reconstructed baseline in Neon table `scanner_regression_baseline`, materializing a local cache at `data/regression/YYYY-MM-DD/baseline/baseline_trades.csv`. It falls back to completed paper-trade events when archive reconstruction is unavailable. A frozen baseline is never overwritten.
+
+Run a read-only comparison with:
+
+```powershell
+python tools/regression_runner.py --date 2026-07-15
+```
+
+**When to enable it:** set `REGRESSION_SNAPSHOT_ENABLED=true` before the scanner session you want to study. Leave it `false` during ordinary sessions when you do not need a future regression archive. It takes effect on the next scanner process start, so restart the local scanner or Streamlit app after changing local `.env` or Cloud Secrets. Recording also requires `DB_WRITE_ENABLED=true` and a working `DATABASE_URL`.
+
+**How to run it:** after the market session, finalize the day to freeze its baseline, then run HSR against that date:
+
+```powershell
+python tools/daily_validation_report.py --date 2026-07-15 --finalize
+python tools/regression_runner.py --date 2026-07-15 --strategy-version v1.0.15
+```
+
+### Regression Page
+
+The Streamlit sidebar includes **Regression** for the same workflow without a terminal. Choose a trading day and strategy-version label; the page shows durable archive availability, archived scan and snapshot-row counts, and frozen baseline version/time. When an archive exists but no baseline has been frozen, **Freeze Baseline** is enabled. It invokes the same immutable baseline workflow as terminal finalization and cannot overwrite an existing baseline. **Run Regression** is enabled only when both the archive and baseline exist.
+
+After completion, the page shows baseline/current trade totals, win-rate change, net $R$, changed-trade count, and verdict. **Regression History** lists the latest versioned Neon runs with strategy, tested date, verdict, net $R$, and completion time. This page creates only new `regression_run` / `regression_result` records; it cannot modify paper trades, daily validation reports, or the frozen baseline.
+
+**Post-market shortcut:** **Post Market: Generate Everything** always finalizes the selected trading day, generates Validation and Replay artifacts, and attempts to freeze its regression baseline. It reports whether a baseline was frozen or whether archive/evidence is not available yet.
+
+HSR never calls Polygon, Telegram, OpenAI, runtime/background jobs, dashboard code, or paper-trade automation. It reads immutable snapshots and baselines from Neon first, falls back to local daily cache files when Neon is unavailable, reconstructs trades through a pure evaluator, and compares them at the trade level. When database writes are enabled it may append a new, isolated `regression_run` and `regression_result`; it never updates production trades, daily reports, baselines, validation, or learning records.
+
+```text
+data/regression/YYYY-MM-DD/
+	regression_summary.json
+	regression_trades.csv
+	regression_report.html
+```
+
+Migrations `app/db/migrations/013_scanner_regression.sql`, `014_regression_symbol_snapshots.sql`, and `015_regression_snapshot_deduplication.sql` create the durable snapshot, baseline, versioned run, per-trade result, and payload-hash deduplication schema. Each HSR invocation records a new run when database writes are enabled; existing daily reports and baselines remain unchanged. The summary reports total/winning/losing trades, win rate, total and average $R$, profit factor, added/removed/changed trades, net $R$ impact, and a strategy-improvement verdict. Historical days that were scanned before this feature have no immutable archive, so HSR will report that the archive is unavailable rather than fabricate a result.
+
 ## Candidate Evidence Model
 
 `app/analytics/candidate_evidence.py` materializes one daily row per stable candidate identity: `trading_day + symbol + direction + setup`. It consolidates repeated scan observations with suggestion status, paper-trade status, replay outcome, target/stop-first flags, winner/missed-winner labels, option quality, trend health, trend capture, Trade Efficiency Score (TES), quote freshness, and engineering root cause.
 
 Each scan refreshes `data/daily/YYYY-MM-DD/candidate_evidence.parquet` when Parquet support is available and always writes `candidate_evidence.csv`. The same records upsert into Postgres table `candidate_evidence` through migrations `004_candidate_evidence.sql` and `006_candidate_intelligence_dimensions.sql`, with core analysis fields as columns and the full record in `payload` JSONB.
+
+## Session-Aware Trade Lifecycle
+
+Each candidate and paper trade has a `holding_profile`: `INTRADAY` or `MULTIDAY`. The profile is explicit when supplied by a candidate; otherwise the system derives it before the shared decision adapter runs from expected-hold intent or the eligible multi-day contract/setup profile.
+
+`app/state/holding_policy.py` is the single source of session behavior:
+
+| Profile | End of day | Next session | Telegram |
+| --- | --- | --- | --- |
+| `INTRADAY` | Force close when EOD automation is enabled | Does not restore | No continuation message |
+| `MULTIDAY` | Remains open unless the exit engine triggers | Restores and refreshes holding duration | Sends one `POSITION CONTINUES` message |
+
+Paper-trade state retains `trade_state`, `holding_profile`, `opened_at`, `closed_at`, `days_held`, `overnight_count`, `forced_eod_exit`, `session_id_open`, `session_id_current`, and `session_id_close`. At session startup, `initialize_session_lifecycle()` restores open multi-day positions and archives prior-session candidates unless they are promoted multi-day positions. Suggestions use `ARCHIVED` as their terminal session-cleanup state.
+
+The Day 2 subscriber message is `POSITION CONTINUES`, not `NEW TRADE`; it identifies when the trade opened, current $R$, trend health, and the hold action. The Trading page shows separate Intraday and Multi-day counts for open trades.
+
+`Auto Exit` controls normal stop, target, live-exit, and profit-threshold rules. `Auto Close Intraday Trades` is an independent final EOD policy step: when enabled, it closes only trades whose **current** profile is `INTRADAY`, even when normal Auto Exit is disabled. Multi-day positions remain open unless a normal exit rule fires. `Restore Multi-day Positions` defaults to on and controls next-session restoration without changing candidate archival.
+
+Holding profile is frozen when a trade opens. It may change only through the paper-trade manager's `MANUAL_OVERRIDE` or future `BROKER_SYNC` source; scanner, exit engine, Telegram, and ranking code do not promote or demote it. `PAUSED` and `RESUMED` are operational trade states for data/provider outages, halts, or controlled runtime restarts. A paused trade blocks additional entries for that symbol and does not receive automated management until resumed.
+
+Migration `app/db/migrations/012_holding_profiles.sql` exposes `holding_profile` and lifecycle dimensions as Postgres columns for reporting. Apply it manually through `DATABASE_DIRECT_URL` before querying those columns; runtime scans never execute schema DDL.
 
 ## Candidate Intelligence
 
@@ -169,6 +240,7 @@ Dashboard KPI rows use the shared `kpi_card()` helper in `app/ui/components.py` 
 | **Trading** | What should I trade right now? | Today’s Decision Center, top-five ranked V1 decisions, open V1 trades, compact performance, and market summary | V1 only. V2 does not place trades, alter state, or create competing live controls. |
 | **Validation** | Did execution behave well today? | Trade Doctor, Strategy Confidence, Trade Efficiency, Candidate Outcomes, Decision Analysis, V1/V2 completed-trade comparison, Trend Outcome Attribution, strong-trend execution failures, and V2 Learning Summary | Post-trade V2 evidence only. |
 | **Replay** | What would the saved scanner state have done? | Offline replay coverage, blockers, saved replay outputs, and replay summary | Current replay is V1-oriented. V1/V2 replay comparison is pending the Candidate Evidence merge. |
+| **Regression** | Would current strategy code have improved an archived day? | Neon archive/baseline status, on-demand HSR execution, result deltas, and versioned run history | Read-only against immutable snapshots and baselines; never changes daily truth. |
 | **Reports** | Is performance improving across days? | Daily report status, historical Trade Efficiency, and multi-day Execution Learning Trends for trend age, entry efficiency, Trend Capture %, TES, and exit phase | Aggregated research only; no routing or execution controls. |
 | **Developer** | Is the system healthy? | Runtime state, scheduler and performance diagnostics, cache/report status, and lazy-loaded engineering diagnostics | Operational diagnostics only. |
 
@@ -231,7 +303,7 @@ Current scanner performance implementation:
 - Production hardening modules include `scan_generation.py`, `generation_validator.py`, `runtime_watchdog.py`, `shutdown_manager.py`, and `startup_manager.py`. Live JSON state files now include top-level generation metadata and are written atomically where runtime builders own the write path. `runtime_health.json` summarizes queue depth, scanner timeout, dashboard staleness, worker health, and Telegram latency warnings.
 - Developer diagnostics are now explicitly lazy-loaded. Each heavy Developer panel has a `Load ...` toggle inside its expander, so collapsed sections do not execute CSV/report/coverage work on every refresh.
 - Dashboard page-specific imports are now lazy where practical: market coverage loads only when that Developer section is requested, trend-capture analytics loads only when the uncached Trade Efficiency fallback renders, and dashboard-state building imports only when live cache fallback is needed.
-- Dashboard navigation now routes through concrete page modules under `app/ui/pages/`: `trading.py`, `validation.py`, `replay.py`, `reports.py`, and `developer.py`. Shared helpers remain in `dashboard.py` during the transition, but page entry-point bodies are now owned by the page modules.
+- Dashboard navigation now routes through concrete page modules under `app/ui/pages/`: `trading.py`, `validation.py`, `replay.py`, `regression.py`, `reports.py`, and `developer.py`. Shared helpers remain in `dashboard.py` during the transition, but page entry-point bodies are now owned by the page modules.
 - Live JSON state loading now uses page-specific cache profiles: Trading state TTL is 5 seconds, Validation state TTL is 60 seconds, Developer runtime state TTL is 120 seconds, and Replay/Reports state caches invalidate by file modified time.
 - Performance mode configuration lives in `app/config/performance.py`. Defaults keep `lazy_imports`, background validation/replay/report cache generation, and Trading `dashboard_state_only` enabled. TTLs and state-only behavior can be overridden with `PERFORMANCE_TRADING_CACHE_TTL`, `PERFORMANCE_VALIDATION_CACHE_TTL`, `PERFORMANCE_DEVELOPER_CACHE_TTL`, and `PERFORMANCE_DASHBOARD_STATE_ONLY`.
 - Telegram dispatch now has a runtime facade in `app/runtime/telegram_dispatcher.py`. `TELEGRAM_DISPATCH_MODE=DIRECT` is the default and preserves synchronous send behavior; `QUEUED` is available as an opt-in critical-priority scheduler path. In queued mode, alert sent-state persistence runs only from the dispatcher's after-success callback after the Telegram send succeeds. Queued sends append replayable message records to `data/live/telegram_dispatch_queue.jsonl`, while ATTEMPT, SENT, and FAILED rows append to `data/live/telegram_dispatch_audit.jsonl`. Audit rows correlate scan, symbol, direction, candidate key, decision, message type, parse mode, message length, attempt, and send latency. Failed Telegram responses retain the structured API response, including the actionable `description` returned for a `400` rejection. `recover_pending_telegram_dispatches()` can resubmit queued records that have no successful audit event.
@@ -252,10 +324,12 @@ Current scanner performance implementation:
 
 ## Shared Trade Decision And Telegram Policy
 
-Entry alerting is scanner-owned: Telegram is a notification transport, not a second decision engine.
+Telegram is a trade-lifecycle notification transport, not a second decision engine or a scanner-event feed.
 
 - `app/decision/decision_engine.py` exposes `evaluate_candidate()` and returns a `TradeDecision` with action, setup score, RR, option quality, confidence score, reasons, and block reasons.
-- Scanner/dashboard/paper rows are the decision source. Telegram sends when `Action Status` is `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART` and entry alerts are enabled.
+- Scanner/dashboard/paper rows remain the decision source. Scanner `ENTER` / `ENTER_PAPER` rows are held until a confirmed V1 or paper trade opens, then publish one `NEW TRADE` event. `ACTIVE_TRADE` and `REVIEW_TV_CHART` rows never publish subscriber alerts.
+- The subscriber protocol is fixed to six message types: `NEW TRADE`, `TRADE UPDATE`, `PARTIAL PROFIT`, `POSITION CONTINUES`, `TRADE CLOSED`, and `TRADE CANCELLED`. Every message includes its ET date/time. `TRADE UPDATE` requires a material $R$/trend/confidence/stop change; `POSITION CONTINUES` is sent once for an overnight transition, not every morning; and a review candidate that expires without entry may send `TRADE CANCELLED`.
+- Closed-trade messages include a subscriber-facing exit reason icon, holding time, and available execution/Trend Capture information. Losses state that risk was managed according to plan; execution grading is not shown while a trade remains open.
 - Telegram does not recompute setup, RR, option quality, quote freshness, affordability, event, regime, top-candidate, session, conviction, or alert-score eligibility. Legacy `TELEGRAM_ALERT_POLICY` and score/threshold settings do not block an alertable action.
 - Duplicate-alert protection remains a transport safeguard. A Telegram delivery failure is not a trade-decision failure.
 
@@ -266,8 +340,9 @@ Paper-trade promotion reconciles the matching suggestion immediately. A matching
 The current calibration layer records additional execution-quality evidence without changing V1 scanner eligibility, paper execution, Telegram delivery, or live exit selection.
 
 - `app/analytics/entry_timing_engine.py` converts existing V2 entry-location features into an `Entry Timing Score` from 0-100. Its weights are Entry Efficiency 35%, Trend Age 20%, Pullback Number 20%, Bars Since Breakout 10%, EMA extension 10%, and VWAP extension 5%. Grades are `EXCELLENT` above 80, `GOOD` from 70-80, `AVERAGE` from 55-69, and `LATE_ENTRY` below 55.
-- `app/analytics/trade_ranker.py` computes the observational `Trade Quality Score` (TQS): Setup 25%, Entry Timing 20%, Trend Health 20%, Option Quality 15%, Relative Strength 10%, and Liquidity 10%. It writes `Candidate Rank` and `Rank Reason` without changing scanner row order, alert order, or execution decisions.
-- Candidate snapshots and Candidate Evidence retain Entry Timing score/grade/reason, TQS, and candidate rank so later outcome research can compare score bands against winners, Trend Capture %, and TES.
+- `app/analytics/trade_ranker.py` computes the `Trade Quality Score` (TQS): Setup 25%, Entry Timing 20%, Trend Health 20%, Option Quality 15%, Relative Strength 10%, and Liquidity 10%.
+- `app/decision/entry_optimizer.py` ranks already-valid candidates by entry location without changing setup eligibility, indicators, RR, risk, or option rules. It applies the pullback/trend-age/breakout-window priority adjustment to `Ranking Score` and exposes `Expected Remaining Trend` plus a projected `A`/`B`/`C` entry grade. `Candidate Rank` uses `Ranking Score`; execution and alert eligibility remain unchanged.
+- Candidate snapshots and Candidate Evidence retain Entry Timing score/grade/reason, TQS, Entry Priority Adjustment, Expected Remaining Trend, Projected Entry Grade, Ranking Score, and candidate rank so later outcome research can compare score bands against winners, Trend Capture %, and TES.
 - `app/analytics/exit_waterfall.py` formats existing V1 exit diagnostics as an ordered waterfall. Scanner rows retain `Exit Waterfall`, `Exit Rule`, and `Exit Stage`; the live exit engine still owns priority and final selection.
 - `app/analytics/decision_waterfall.py` merges persisted Entry Diagnostics with native RuleEvaluation records into a candidate-level Decision Waterfall. Its fixed stage order is Momentum, Entry, Risk, Option, Affordability, Realtime, Telegram, Paper, and Decision. Each stage carries pass/fail/not-evaluated status, summary, passed rules, failed rules, and actual/required values. The payload exposes `final_action`, `final_reason`, `blocking_stage`, and `blocking_rule`.
 - `dashboard_state.json` and `validation_state.json` retain V1 waterfalls, V1/V2 shadow path comparisons, and today’s blocking-stage percentage summary. Validation renders the selected candidate’s grouped stages, failed values, first blocker, V1/V2 comparison, and current blocker distribution.
@@ -278,7 +353,7 @@ The current calibration layer records additional execution-quality evidence with
 
 These metrics remain observational until the existing evidence threshold is met: at least 20 evidence days and 80 completed trades. They must not automatically tighten or loosen V1 trading rules.
 
-V2 shadow exits also record an `Exit Confidence Score` that measures deterioration rather than permission to hold. Hard stop and target remain immediate. Soft EMA/VWAP/MACD/volume deterioration can enter `MONITOR` when the Grace Zone applies, requiring confirmation persistence before a V2 shadow exit. `data/daily/YYYY-MM-DD/daily_engine_summary.json` is written during deferred scan persistence from V2 learning, completed comparisons, exit-quality facts, and shadow blocker observations; it is a research artifact and cannot change V1 exits.
+V2 shadow exits also record an `Exit Confidence Score` that measures deterioration rather than permission to hold. Hard stop and target remain immediate. Soft EMA/VWAP/MACD/volume deterioration can enter `MONITOR` when the Grace Zone applies, requiring confirmation persistence before a V2 shadow exit. V1 also uses this confidence evidence for one narrow live behavior: a profitable first EMA-only break with otherwise healthy trend evidence is held for one candle and recorded as a pending EMA grace state. A persistent EMA break exits on the next evaluation; hard stops, targets, VWAP loss, MACD reversal, and stacked deterioration remain immediate. `data/daily/YYYY-MM-DD/daily_engine_summary.json` is written during deferred scan persistence from V2 learning, completed comparisons, exit-quality facts, and shadow blocker observations.
 
 The `Learning` dashboard page reads the materialized live daily summary and displays V2 comparison, Exit Confidence, blocker, and existing one-/two-bar post-exit continuation metrics. Migration `009_learning_engine.sql` adds optional warehouse tables: `daily_engine_summary`, `v2_learning_metrics`, `trade_comparison`, `rule_performance`, and `exit_quality_metrics`. File-backed daily summaries remain available when DB writes are disabled.
 
@@ -504,7 +579,7 @@ Current daily files live under `data/daily/YYYY-MM-DD/`; dashboard/latest mirror
 
 The dashboard reads `data/live/scanner_output_latest.csv` first, then `data/live/scanner_output_latest.xlsx`, then falls back to `scanner_output.xlsx`. Scanner execution is protected by a stale-aware lock at `data/live/scanner_run.lock` and a persistent cooldown/status file at `data/live/scanner_run_status.json`, so Streamlit refreshes or multiple browser sessions do not start overlapping or back-to-back scanner runs. Polygon aggregate requests use the short `POLYGON_CACHE_TTL` cache to avoid duplicate candle requests during rapid refreshes.
 
-The main Streamlit page is now organized as a trading workstation with sidebar navigation: `Trading`, `Validation`, `Replay`, `Reports`, and `Developer`. The default `Trading` page answers the live operating questions: whether anything is tradable, why not, what is closest, and whether the engine is current. Developer diagnostics such as market coverage, action center, scanner watchlist, suggestion lifecycle, auto-paper logs, validation data health, telemetry, and last-seen candidates are kept under the `Developer` page.
+The main Streamlit page is now organized as a trading workstation with sidebar navigation: `Trading`, `Validation`, `Replay`, `Regression`, `Reports`, and `Developer`. The default `Trading` page answers the live operating questions: whether anything is tradable, why not, what is closest, and whether the engine is current. Developer diagnostics such as market coverage, action center, scanner watchlist, suggestion lifecycle, auto-paper logs, validation data health, telemetry, and last-seen candidates are kept under the `Developer` page.
 
 The sidebar is intentionally trader-first: `Auto Refresh`, `Paper Automation`, compact `Downloads`, `Daily Validation`, and navigation. Raw engineering exports such as telemetry, paper state, candidate snapshots, lifecycle events, and audit files are hidden under `Downloads > Advanced`. Runtime key status is not shown in the trading UI.
 
@@ -685,9 +760,11 @@ Use `OPTION_CAPITAL_PROFILE=GROWTH_ACCOUNT` as buying power grows, or `OPTION_AF
 
 Telegram entry and exit alerts are opt-in and use duplicate protection so dashboard/scanner refreshes do not resend the same signal. Keep real bot tokens in local `.streamlit/secrets.toml` or Streamlit Cloud Secrets; do not commit them.
 
+Subscriber messages are decision-first rather than scanner-first. `NEW TRADE` leads with `BUY NOW` or `SELL NOW`, then lists underlying entry/stop/target, $R$, Trade Quality or projected grade, confidence, recommended option strike/expiration/premium/cost/spread/liquidity, and the setup rationale. `TRADE UPDATE`, `STOP MOVED`, and `PARTIAL PROFIT` messages are compact state transitions. `TRADE CLOSED` leads with outcome and $R$, then explains the exit and includes Trend Capture % and left-on-table $R$ when MFE data is available. Internal action codes, quote provenance, and other scanner diagnostics remain in the dispatch audit rather than subscriber messages.
+
 For local `.env` configuration, credential lookup accepts both `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` and the legacy lowercase `bot_token` / `chat_id` keys. The direct test utility is `python tools/send_test_telegram_alert.py`. If Telegram returns `Bad Request: chat not found`, refresh the chat ID after the bot has been started or added to the destination chat; rotate any token exposed in a terminal URL/error trace.
 
-Exit alerts are only allowed for explicitly tracked `PAPER` or `REAL` trades. Legacy scanner-managed `trade_state.json` entries are treated as dashboard state and do not send Telegram exits unless promoted to a confirmed paper/real trade mode. Successful exit alerts mark `exit_alert_sent` on the trade, and deterministic alert keys include symbol, option ticker, open time, and exit reason.
+Exit alerts are allowed for explicitly tracked `PAPER`, `REAL`, and confirmed `SCANNER_TRACKED` V1 lifecycle trades. Successful exit alerts mark `exit_alert_sent` on the trade, and deterministic alert keys include symbol, option ticker, open time, and exit reason.
 
 Scanner entry-dispatch results include `Telegram Error Type`, `Telegram Error Reason`, and `Telegram Stage` in addition to eligibility, block reason, sent status, and alert score. Normal evaluations use `ENTRY_EVALUATION`; caught dispatch failures use `ENTRY_DISPATCH` with a normalized `TELEGRAM_ERROR_<EXCEPTION_TYPE>` reason. The **Downloads > Advanced** area exposes `data/live/telegram_dispatch_audit.jsonl` for operational inspection. For a Telegram `400`, inspect `telegram_response.description` to distinguish problems such as an invalid chat, malformed HTML entities, or an overlong message. These fields are audit data only and do not bypass alert-policy, duplicate, cooldown, or rate-limit controls.
 
@@ -743,15 +820,13 @@ bot_token = "YOUR_BOT_TOKEN_FROM_BOTFATHER"
 chat_id = "YOUR_TELEGRAM_CHAT_ID"
 ```
 
-For the current validation phase, use `TELEGRAM_ALERT_POLICY=PAPER`. In this mode, Telegram uses the shared `ENTER_PAPER` decision and `TELEGRAM_MIN_ENTRY_ALERT_SCORE`; it does not reapply the old ultra-strict real-review RR/quality/top-candidate gate before notifying. `TELEGRAM_MIN_RR`, `TELEGRAM_MIN_OPTION_QUALITY_SCORE`, `TELEGRAM_MAX_SPREAD_PCT`, and `TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE` remain available for `CUSTOM` / `REAL_REVIEW` compatibility but are not the primary paper-alert controls. Entry alerts are scored after the full scan is ranked, then attempted strongest-first in the same scan; the system does not wait for a later time bucket to compare future candidates. Notification controls still apply: duplicate protection, cooldowns, daily caps, active-alert caps, and the no-late-entry cutoff. A+ alerts at or above `TELEGRAM_INSTANT_ENTRY_ALERT_SCORE` bypass per-bucket caps but still respect the daily max, active alerted trade cap, duplicate cooldown, symbol cooldown, and no-late-entry cutoff. Exit alerts send only when confirmed paper/real trades close manually or automatically; scanner-managed `trade_state.json` exits remain dashboard-only.
+For the current validation phase, use `TELEGRAM_ALERT_POLICY=PAPER`. Scanner eligibility remains shared, but subscriber delivery is lifecycle-based: confirmed V1/paper opens publish `NEW TRADE`, a multi-day position publishes one next-session `POSITION CONTINUES` message, updates publish only for material $R$/health/confidence/stop/partial transitions, and exits publish once with available Trend Capture %. Scanner `ENTER` rows and `ACTIVE_TRADE` refreshes do not publish.
 
 Real-trade readiness is dashboard guidance only. `REAL_TRADING_ENABLED=false` and `REAL_ALERTS_ONLY=true` keep the app in manual-review mode; no real orders are placed. Rows marked `A_PLUS_REAL_REVIEW` must already have an active paper trade open for the same symbol, be `ENTER`, `ENTER_PAPER`, or `REVIEW_TV_CHART`, be `BULLISH_TOP_1` or `BEARISH_TOP_1`, meet the real thresholds, have a live quote age within `REAL_MAX_QUOTE_AGE_MINUTES`, avoid late/chase and missed-move flags, avoid event/regime blocks, appear in at least two consecutive suggested-trade scans, remain under `MAX_DAILY_REAL_LOSS`, and occur before `REAL_ENTRY_CUTOFF_ET`. The dashboard shows `Paper Trade Opened`, `Real Trade Readiness`, `Real Review Scan Count`, and `Real Entry Checklist` for manual tiny-trade review only.
 
 Affordability is intentionally split by workflow: suggested-trade lifecycle and paper validation can include technically valid expensive setups for research when the ignore flags are enabled, but real-trade readiness and real/Telegram safety checks remain affordability-gated. Auto paper entries normally respect setup, RR, quote freshness, bid/ask, spread, option quality, event/regime, cooldown, duplicate, and daily-cap checks. When `PAPER_IGNORE_AFFORDABILITY=true`, affordability can be bypassed for paper validation only and the trade is tagged with `Paper Affordability Override`. Telegram and real-trade readiness may remain stricter.
 
-Paper auto-exits still honor stop, target, live exit signal, momentum/VWAP/EMA invalidation, failed-breakout/breakdown invalidation, and profit-threshold exits before any end-of-day rule. End-of-day close is conditional: weak, short-dated, late/chase, missed-move, or exit-signal rows still close at `AUTO_PAPER_EOD_CLOSE`, while strong `PREFERRED_14_30` or `LONGER_DTE` paper trades with setup >= 80, RR >= 1.8, option quality >= 75, no late chase, no missed move, and no live exit signal can hold overnight for swing validation.
-
-For 14-30 DTE paper validation, keep `Auto Exit` enabled so stops, targets, live-exit signals, invalidations, and profit-threshold exits still protect paper trades. Keep `End-of-day Auto Close` off unless explicitly testing intraday-only exits; the dashboard defaults this toggle to off and shows an `EOD Close` status card so forced EOD behavior is visible during live review.
+Paper auto-exits still honor stop, target, live exit signal, momentum/VWAP/EMA invalidation, failed-breakout/breakdown invalidation, and profit-threshold exits before any end-of-day rule. For paper validation, keep `Auto Exit` enabled so those protections apply to every profile. When `End-of-day Auto Close` is enabled, the holding policy closes `INTRADAY` positions at `AUTO_PAPER_EOD_CLOSE`; `MULTIDAY` positions remain open unless an ordinary exit rule fires.
 
 ## Validate
 

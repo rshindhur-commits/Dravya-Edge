@@ -3,6 +3,7 @@ import unittest
 import pandas as pd
 
 from app.strategies.entry_engine import _entry_score, detect_entry
+from app.decision.entry_optimizer import evaluate_entry_optimizer
 
 
 class EntryEngineTests(unittest.TestCase):
@@ -116,6 +117,21 @@ class EntryEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(score_with_short_alias, score_with_long_alias)
+
+    def test_entry_optimizer_penalizes_mature_repeated_pullbacks_without_blocking(self):
+
+        result = evaluate_entry_optimizer({
+            "trend_age_bars": 9,
+            "pullback_number": 3,
+            "bars_since_breakout": 24,
+            "ema9_extension_atr": 1.2,
+            "vwap_extension_atr": 1.5,
+            "relative_volume": 0.8,
+            "adx": 18,
+        })
+
+        self.assertEqual(result["entry_priority_adjustment"], -60)
+        self.assertEqual(result["projected_entry_grade"], "C")
 
 
 if __name__ == "__main__":

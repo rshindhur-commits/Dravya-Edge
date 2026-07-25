@@ -1,4 +1,7 @@
-from app.alerts.telegram_alerts import resolve_exit_price_context
+from app.alerts.telegram_alerts import (
+    build_trade_exit_alert_message,
+    resolve_exit_price_context,
+)
 
 
 def test_prefers_latest_quote_over_5m_and_15m():
@@ -24,3 +27,17 @@ def test_falls_back_to_5m_close_when_quote_missing():
 
     assert result["current_price"] == 100.9
     assert result["price_source"] == "df_5m_latest_close"
+
+
+def test_exit_message_includes_trend_capture_when_available():
+    message = build_trade_exit_alert_message(
+        "NFLX",
+        {"entry_price": 100, "option_ticker": "O:NFLX"},
+        "Trend failure",
+        r_multiple=1.1,
+        trend_capture_pct=71.4,
+    )
+
+    assert "TRADE CLOSED" in message
+    assert "WIN: 1.1R" in message
+    assert "Trend Capture: 71.4%" in message

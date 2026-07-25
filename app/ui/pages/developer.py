@@ -36,7 +36,30 @@ def render(df, auto_paper_controls, refresh_state=None):
 
     import streamlit as st
 
+    def render_regression_snapshot_metrics():
+        import os
+
+        from app.storage.daily_paths import live_path
+        from app.utils.json_store import load_json_file
+
+        metrics = load_json_file(str(live_path("regression_snapshot_metrics.json")), {})
+        enabled = str(os.getenv("REGRESSION_SNAPSHOT_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}
+        columns = st.columns(3)
+        columns[0].metric("Enabled", "Yes" if enabled else "No")
+        columns[1].metric("Queued", metrics.get("queued", 0))
+        columns[2].metric("Completed", metrics.get("completed", 0))
+        columns = st.columns(3)
+        columns[0].metric("Dropped", metrics.get("dropped", 0))
+        columns[1].metric("Failures", metrics.get("failures", 0))
+        columns[2].metric("Average Persist", f"{metrics.get('average_persist_ms', 0):.0f} ms")
+
     with st.expander("Developer Diagnostics", expanded=True):
+
+        _render_lazy_developer_section(
+            "Regression Snapshot",
+            "regression_snapshot",
+            render_regression_snapshot_metrics,
+        )
 
         _render_lazy_developer_section(
             "Runtime Performance",

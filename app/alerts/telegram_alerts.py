@@ -1,5 +1,6 @@
 import html
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from inspect import signature
@@ -21,11 +22,14 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 ALERT_STATE_FILE = ROOT_DIR / "app" / "state" / "telegram_alert_state.json"
 MAX_SENT_ALERTS = 1000
 ENTRY_EVENT_TYPE = "ENTRY"
+REVIEW_EVENT_TYPE = "REVIEW"
+UPDATE_EVENT_TYPE = "UPDATE"
 
 
 EXIT_ALERT_TRADE_MODES = {
     "PAPER",
-    "REAL"
+    "REAL",
+    "SCANNER_TRACKED",
 }
 
 
@@ -369,6 +373,52 @@ def _alert_attempt_context(alert_type, arguments):
             }
         }
 
+    if alert_type == "TRADE_UPDATE":
+
+        trade = arguments.get("trade") or {}
+        scanner_context = arguments.get("scanner_context") or {}
+        r_multiple = _trade_r_multiple(
+            trade,
+            arguments.get("current_price")
+        )
+        trend_health = (
+            scanner_context.get("V2 Trend Health Status")
+            or scanner_context.get("Trend Health State")
+        )
+        return {
+            "symbol": trade.get("symbol"),
+            "direction": trade.get("direction"),
+            "option_ticker": trade.get("option_ticker"),
+            "dedupe_key": _trade_update_alert_key(
+                trade,
+                r_multiple,
+                trend_health
+            ),
+            "payload": {
+                "trade_key": trade.get("trade_key"),
+                "r_multiple": r_multiple,
+                "trend_health": trend_health,
+            }
+        }
+
+    if alert_type == "TRADE_OPEN":
+
+        trade = arguments.get("trade") or {}
+        scanner_context = arguments.get("scanner_context") or {}
+        return {
+            "symbol": trade.get("symbol"),
+            "direction": (
+                trade.get("direction")
+                or scanner_context.get("Candidate Direction")
+            ),
+            "option_ticker": trade.get("option_ticker"),
+            "dedupe_key": _trade_open_alert_key(trade),
+            "payload": {
+                "trade_key": trade.get("trade_key"),
+                "scanner_context": scanner_context,
+            }
+        }
+
     option_contract = arguments.get("option_contract") or {}
     action_decision = arguments.get("action_decision") or {}
     action_status = action_decision.get("action_status")
@@ -664,6 +714,46 @@ def _paper_entry_alert_key(trade, scanner_context=None):
         str(option_ticker),
         "PAPER_ENTRY",
         opened_date
+    ])
+
+
+def _trade_open_alert_key(trade):
+
+    return "_".join([
+        str(trade.get("symbol")),
+        str(trade.get("direction")),
+        str(trade.get("option_ticker") or "NO_CONTRACT"),
+        "TRADE_OPEN",
+        str(trade.get("opened_at") or "NO_OPEN_TIME"),
+    ])
+
+
+def _review_alert_key(symbol, entry_type):
+
+    return "_".join([
+        str(symbol),
+        str(entry_type or "NO_SETUP"),
+        "REVIEW",
+        str(_today_key())
+    ])
+
+
+def _state_key_for_alert(trade):
+
+    return "_".join([
+        str(trade.get("symbol")),
+        str(trade.get("option_ticker") or "NO_CONTRACT"),
+        str(trade.get("opened_at") or "NO_OPEN_TIME")
+    ])
+
+
+def _trade_update_alert_key(trade, r_multiple, trend_health):
+
+    return "|".join([
+        "UPDATE",
+        str(trade.get("trade_key") or _state_key_for_alert(trade)),
+        str(round(_float_value(r_multiple), 2)),
+        str(trend_health or "UNKNOWN")
     ])
 
 
@@ -1001,6 +1091,412 @@ def _fmt(value, default="-"):
     return html.escape(str(value))
 
 
+def _number(value, default=None):
+
+    try:
+
+        return float(value)
+
+    except (TypeError, ValueError):
+
+        return default
+
+
+def _money(value):
+
+    amount = _number(value)
+    return "-" if amount is None else f"${amount:,.2f}"
+
+
+def _score_stars(value):
+
+    score = _number(value)
+    if score is None:
+
+        return ""
+
+    filled = max(1, min(5, round(score / 20)))
+    return "★" * filled + "☆" * (5 - filled)
+
+
+def _confidence_label(value):
+
+    score = _number(value)
+    if score is None:
+
+        return None
+
+    if score >= 90:
+
+        return "★★★★★ Excellent"
+
+    if score >= 80:
+
+        return "★★★★☆ High"
+
+    if score >= 70:
+
+        return "★★★☆☆ Medium"
+
+    if score >= 60:
+
+        return "★★☆☆☆ Low"
+
+    return "★☆☆☆☆ Weak"
+
+
+def _trade_stage_label(scanner_context):
+
+    pullback = _number(scanner_context.get("V2 Pullback Number"), None)
+    if pullback == 1:
+
+        return "First Pullback"
+
+    if pullback == 2:
+
+        return "Second Pullback"
+
+    if pullback is not None and pullback >= 3:
+
+        return "Late Trend"
+
+    health = str(scanner_context.get("V2 Trend Health Status") or "").upper()
+    if health in {"STRONG", "HEALTHY"}:
+
+        return "Fresh Trend"
+
+    return None
+
+
+def _trade_quality_grade(score, projected_grade=None):
+
+    numeric = _number(score)
+    if numeric is None:
+
+        return projected_grade or ""
+
+    if numeric >= 90:
+
+        return "A+"
+
+    if numeric >= 80:
+
+        return "A"
+
+    if numeric >= 70:
+
+        return "B"
+
+    return "C"
+
+
+def _format_expected_hold(value):
+
+    text = str(value or "").strip()
+    if not text:
+
+        return None
+
+    normalized = text.lower()
+    if normalized in {"intraday", "daytrade"}:
+
+        return None
+
+    if "min" in normalized or "hr" in normalized or "hour" in normalized:
+
+        return text
+
+    if normalized == "scalp":
+
+        return "Scalp"
+
+    if normalized == "momentum":
+
+        return "Momentum"
+
+    if normalized == "swing intraday":
+
+        return "Swing Intraday"
+
+    return None
+
+
+def _format_trade_reference(trade_key, entry=True):
+
+    trade_id = str(trade_key or "").strip()
+    prefix = "Signal" if entry else "Trade"
+    if not trade_id:
+
+        return prefix
+
+    digits = re.findall(r"\d+", trade_id)
+    if digits:
+
+        return f"{prefix} #{digits[-1]}"
+
+    return f"{prefix} {trade_id}"
+
+
+def _parse_datetime(value):
+
+    if not value:
+
+        return None
+
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+
+            return datetime.strptime(text, fmt)
+
+        except Exception:
+
+            continue
+
+    try:
+
+        return datetime.fromisoformat(text)
+
+    except Exception:
+
+        return None
+
+
+def _format_event_time(timestamp):
+
+    dt = _parse_datetime(timestamp)
+    if dt is None:
+
+        return None
+
+    if dt.tzinfo is None:
+
+        dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
+
+    try:
+
+        dt = dt.astimezone(ZoneInfo("America/New_York"))
+
+    except Exception:
+
+        pass
+
+    return dt.strftime("%H:%M ET")
+
+
+def _format_alert_timestamp(timestamp=None):
+
+    dt = _parse_datetime(timestamp) or datetime.now(ZoneInfo("America/New_York"))
+    if dt.tzinfo is None:
+
+        dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
+
+    return dt.astimezone(ZoneInfo("America/New_York")).strftime("%b %d, %Y · %H:%M ET")
+
+
+def _holding_time_label(opened_at, event_timestamp=None):
+
+    start = _parse_datetime(opened_at)
+    end = _parse_datetime(event_timestamp)
+
+    if not start or not end:
+
+        return None
+
+    if start.tzinfo is None:
+
+        start = start.replace(tzinfo=timezone.utc)
+
+    if end.tzinfo is None:
+
+        end = end.replace(tzinfo=timezone.utc)
+
+    delta = end - start
+    minutes = int(delta.total_seconds() // 60)
+
+    if minutes < 60:
+
+        return f"Holding Time: {minutes} min"
+
+    hours = minutes // 60
+    remainder = minutes % 60
+    return f"Holding Time: {hours}h {remainder}m" if remainder else f"Holding Time: {hours}h"
+
+
+def _signed_money(value):
+
+    amount = _number(value)
+    if amount is None:
+
+        return "-"
+
+    return f"{'+' if amount > 0 else ''}${amount:,.2f}"
+
+
+def _exit_reason_label(exit_reason):
+
+    normalized = str(exit_reason or "").upper()
+    if "TARGET" in normalized:
+
+        return "🎯 Target Hit"
+
+    if "STOP" in normalized:
+
+        return "🛑 Trade Thesis Invalidated"
+
+    if "TIME" in normalized or "END_OF_DAY" in normalized:
+
+        return "⏰ Time Exit"
+
+    if "PROFIT" in normalized:
+
+        return "📊 Profit Lock"
+
+    if "MARKET" in normalized:
+
+        return "⚠ Market Weakness"
+
+    if any(token in normalized for token in ("TREND", "MOMENTUM", "VWAP", "EMA", "BREAKDOWN")):
+
+        return "📉 Trend Failure"
+
+    return str(exit_reason or "Exit signal").replace("_", " ").title()
+
+
+def _trade_status_line(event_type):
+
+    if event_type in {ENTRY_EVENT_TYPE, "TRADE_OPEN", UPDATE_EVENT_TYPE, "STOP_MOVED"}:
+
+        return "Trade Status: 🟢 Open"
+
+    if event_type in {"PARTIAL", "PARTIAL_EXIT"}:
+
+        return "Trade Status: 🟡 Partial"
+
+    return "Trade Status: 🔴 Closed"
+
+
+def _reason_checklist(reasons):
+
+    if not reasons:
+
+        return ["✅ Confirmed setup"]
+
+    return [f"✅ {reason}" for reason in reasons if reason]
+
+
+def _execution_label(trend_capture_pct):
+
+    pct = _number(trend_capture_pct)
+    if pct is None:
+
+        return None
+
+    if pct >= 85:
+
+        return "Excellent"
+
+    if pct >= 70:
+
+        return "Good"
+
+    if pct >= 50:
+
+        return "Average"
+
+    return "Poor"
+
+
+def _trade_update_reason(event_type, r_multiple, trend_health, updated_stop, partial_profit_taken):
+
+    if event_type == "PARTIAL":
+
+        return "Partial profit taken"
+
+    if event_type == "STOP_MOVED":
+
+        if r_multiple is not None and r_multiple >= 1:
+
+            return "Higher low confirmed"
+
+        return "Higher low confirmed"
+
+    if updated_stop is not None:
+
+        return "Stop moved"
+
+    return "Hold and monitor"
+
+
+def _risk_change_label(trade, updated_stop):
+
+    old_stop = _float_value(trade.get("stop_loss"), None)
+    new_stop = _float_value(updated_stop, None)
+    if old_stop is None or new_stop is None:
+
+        return None
+
+    is_short = str(trade.get("direction") or "").upper() in {"PUT", "SHORT"}
+
+    if is_short:
+
+        if new_stop < old_stop:
+
+            return "Reduced"
+
+        if new_stop > old_stop:
+
+            return "Wider"
+
+    else:
+
+        if new_stop > old_stop:
+
+            return "Reduced"
+
+        if new_stop < old_stop:
+
+            return "Wider"
+
+    return "Updated"
+
+
+def _option_cost(scanner_context, option_mid):
+
+    cost = _number(scanner_context.get("Option Contract Cost"))
+    if cost is not None:
+
+        return cost
+
+    premium = _number(option_mid)
+    return premium * 100 if premium is not None else None
+
+
+def _entry_reasons(scanner_context, setup):
+
+    setup_label = str(setup).replace("_", " ").title()
+    setup_label = setup_label.replace("Ema", "EMA").replace("Vwap", "VWAP")
+    reasons = [setup_label]
+    health = str(scanner_context.get("V2 Trend Health Status") or "").upper()
+    if health in {"STRONG", "HEALTHY"}:
+
+        reasons.append(f"{health.title()} trend")
+
+    if _number(scanner_context.get("Relative Volume"), 0) >= 1:
+
+        reasons.append("Volume confirmed")
+
+    if abs(_number(scanner_context.get("RS Rank Score"), 0)) > 0:
+
+        reasons.append("Relative strength confirmed")
+
+    if _number(scanner_context.get("V2 Trend Age Bars")) == 1:
+
+        reasons.append("First pullback")
+
+    return reasons[:5]
+
+
 def build_scanner_entry_alert_message(
     symbol,
     final_signal,
@@ -1051,23 +1547,259 @@ def build_paper_entry_alert_message(trade, scanner_context, reason=None):
         or scanner_context.get("Option Midpoint")
     )
 
+    side = "SELL" if str(direction or "").upper() in {"PUT", "SHORT"} else "BUY"
+    setup = trade.get("entry_type") or scanner_context.get("Entry")
+    trade_quality = scanner_context.get("Trade Quality Score")
+    confidence = (
+        scanner_context.get("Expected Remaining Trend")
+        or scanner_context.get("V2 Trend Health Score")
+    )
+    option_strike = scanner_context.get("Option Strike") or "-"
+    expiration = scanner_context.get("Option Expiration") or "-"
+    option_cost = _option_cost(scanner_context, option_mid)
+    reasons = _entry_reasons(scanner_context, setup)
+    checklist = _reason_checklist(reasons)
+    contract_type = "P" if str(direction or "").upper() in {"PUT", "SHORT"} else "C"
+    quality_grade = _trade_quality_grade(
+        trade_quality,
+        scanner_context.get("Projected Entry Grade")
+    )
+    quality_line = quality_grade
+    confidence_line = _confidence_label(confidence)
+    stage_line = _trade_stage_label(scanner_context)
+    expected_hold_line = _format_expected_hold(scanner_context.get("Expected Hold"))
+    trade_ref = _format_trade_reference(trade.get("trade_key") or scanner_context.get("Candidate Key") or symbol, entry=True)
+
+    lines = [
+        "🟢 <b>NEW TRADE</b>",
+        f"{trade_ref}",
+        _format_alert_timestamp(trade.get("opened_at") or scanner_context.get("Signal Time") or scanner_context.get("Bar Timestamp")),
+        f"{_fmt(symbol)} {_fmt(direction)}",
+        "",
+        "<b>ACTION</b>",
+        f"<b>{side} NOW</b>",
+        "",
+        "<b>TRADE</b>",
+        f"Entry: {_money(trade.get('entry_price'))}",
+        f"Stop: {_money(trade.get('stop_loss'))}",
+        f"Target: {_money(trade.get('take_profit'))}",
+        f"RR: {_fmt(trade.get('planned_rr') or scanner_context.get('Candidate RR') or scanner_context.get('RR'))}R",
+        "",
+        "<b>SETUP</b>",
+        _fmt(str(setup or "Confirmed setup").replace("_", " ").title().replace("Ema", "EMA").replace("Vwap", "VWAP")),
+        f"{_score_stars(confidence)} {confidence_line}" if confidence_line else None,
+        "",
+        "<b>OPTION</b>",
+        f"Contract: {_fmt(option_strike)}{contract_type}",
+        f"Premium: {_money(option_mid)}",
+        "",
+        _trade_status_line(ENTRY_EVENT_TYPE),
+    ]
+
+    return "\n".join([line for line in lines if line])
+
+
+def build_review_alert_message(symbol, entry_type, next_condition):
+
     return "\n".join([
-        "<b>ENTRY ALERT</b>",
+        "⚪ <b>WATCHLIST REVIEW</b>",
         f"Ticker: {_fmt(symbol)}",
-        f"Direction: {_fmt(direction)}",
-        f"Contract: {_fmt(option_ticker)}",
-        f"Entry: {_fmt(trade.get('entry_price'))}",
-        f"Stop: {_fmt(trade.get('stop_loss'))}",
-        f"Target: {_fmt(trade.get('take_profit'))}",
-        f"Setup: {_fmt(scanner_context.get('Setup Grade'))} / {_fmt(scanner_context.get('Setup %'))}",
-        f"RR: {_fmt(trade.get('planned_rr') or scanner_context.get('Candidate RR') or scanner_context.get('RR'))}",
-        f"Option Mid: {_fmt(option_mid)}",
-        f"Contract Cost: ${_fmt(scanner_context.get('Option Contract Cost'))}",
-        f"Quote: {_fmt(scanner_context.get('Option Quote Freshness'))}",
-        f"Action: {_fmt(scanner_context.get('Action Status'))}",
-        f"Reason: {_fmt(reason or scanner_context.get('Action Reason'))}",
-        "Skip if broker bid/ask, spread, or chart confirmation disagrees."
+        f"Setup: {_fmt(entry_type)}",
+        f"Required confirmation: {_fmt(next_condition)}",
+        "Status: Waiting for entry readiness. No action yet."
     ])
+
+
+def _trade_r_multiple(trade, current_price):
+
+    entry = _float_value(trade.get("entry_price"), None)
+    stop = _float_value(trade.get("stop_loss"), None)
+    price = _float_value(current_price, None)
+    if entry is None or stop is None or price is None:
+        return None
+    risk = abs(entry - stop)
+    if risk <= 0:
+        return None
+    is_short = str(trade.get("direction") or "").upper() in {"PUT", "SHORT"}
+    return round((entry - price if is_short else price - entry) / risk, 2)
+
+
+def _trend_health_rank(status):
+
+    return {
+        "STRONG": 4,
+        "HEALTHY": 3,
+        "WEAKENING": 2,
+        "BROKEN": 1,
+    }.get(str(status or "").upper(), 0)
+
+
+def _last_trade_lifecycle_metadata(trade):
+
+    trade_key = trade.get("trade_key") or _state_key_for_alert(trade)
+    latest = None
+    for metadata in _load_alert_state().get("sent", {}).values():
+        if metadata.get("trade_key") != trade_key:
+            continue
+        if metadata.get("message_type") not in {
+            "PAPER_ENTRY",
+            "TRADE_OPEN",
+            "TRADE_UPDATE",
+        }:
+            continue
+        if latest is None or metadata.get("sent_at", "") > latest.get("sent_at", ""):
+            latest = metadata
+    return latest or {}
+
+
+def build_paper_trade_update_message(
+    trade,
+    r_multiple,
+    trend_health,
+    updated_stop=None,
+    partial_profit_taken=False,
+    confidence_score=None,
+    event_type="UPDATE",
+    event_timestamp=None,
+):
+
+    title = (
+        "PARTIAL PROFIT"
+        if event_type == "PARTIAL"
+        else "TRADE UPDATE"
+    )
+
+    reason_line = _trade_update_reason(event_type, r_multiple, trend_health, updated_stop, partial_profit_taken)
+    risk_label = _risk_change_label(trade, updated_stop)
+    stop_line = None
+    if updated_stop is not None:
+        if trade.get("stop_loss") is not None:
+            stop_line = f"Stop: {_money(trade.get('stop_loss'))} → {_money(updated_stop)}"
+        else:
+            stop_line = f"Stop: {_money(updated_stop)}"
+
+    if event_type == "PARTIAL":
+        partial_stop = (
+            "Moved to Breakeven"
+            if updated_stop is not None
+            and _float_value(updated_stop) == _float_value(trade.get("entry_price"))
+            else stop_line
+        )
+        lines = [
+            "🟡 <b>PARTIAL PROFIT</b>",
+            _format_alert_timestamp(event_timestamp),
+            f"<b>{_fmt(trade.get('symbol'))} {_fmt(trade.get('direction'))}</b>",
+            "",
+            f"Result: {_fmt(r_multiple)}R",
+            "Position: Partial closed",
+            "Runner: Still Open",
+            f"Stop: {partial_stop}" if partial_stop else None,
+            "",
+            _trade_status_line(event_type),
+        ]
+        return "\n".join([line for line in lines if line])
+
+    lines = [
+        "🔵 <b>TRADE UPDATE</b>",
+        _format_alert_timestamp(event_timestamp),
+        f"<b>{_fmt(trade.get('symbol'))} {_fmt(trade.get('direction'))}</b>",
+        "",
+        f"Current: {_fmt(r_multiple)}R",
+        f"Risk: {risk_label}" if risk_label else None,
+        stop_line,
+        f"Reason: {reason_line}",
+        "Action: Continue Holding",
+        f"Trend: {_fmt(trend_health)}" if trend_health else None,
+        "",
+        _trade_status_line(event_type),
+    ]
+
+    return "\n".join([line for line in lines if line])
+
+
+def build_multiday_position_continue_message(trade, current_price, trend_health, event_timestamp=None):
+
+    r_multiple = _trade_r_multiple(trade, current_price)
+    days_held = int(_number(trade.get("days_held"), 1) or 1)
+    opened_dt = _parse_datetime(trade.get("opened_at_et") or trade.get("opened_at"))
+    if opened_dt is not None:
+        if opened_dt.tzinfo is None:
+            opened_dt = opened_dt.replace(tzinfo=ZoneInfo("America/New_York"))
+        opened_label = opened_dt.astimezone(ZoneInfo("America/New_York")).strftime("%d %b")
+    else:
+        opened_label = "Previous session"
+
+    return "\n".join([
+        "🌅 <b>POSITION CONTINUES</b>",
+        _format_alert_timestamp(event_timestamp),
+        f"<b>{_fmt(trade.get('symbol'))} {_fmt(trade.get('direction'))}</b>",
+        "",
+        f"Opened: {opened_label}",
+        f"Current: {_fmt(r_multiple)}R",
+        f"Holding: Day {days_held}",
+        f"Trend: {_fmt(trend_health or 'UNKNOWN')}",
+        "Action: Continue Holding",
+        "",
+        "Trade Status: 🟢 Open",
+    ])
+
+
+@_telegram_attempt_logger("POSITION_CONTINUES")
+def maybe_send_multiday_position_continue_alert(trade, current_price, scanner_context=None):
+
+    from app.state.holding_policy import holding_policy
+    from app.state.paper_trade_manager import load_paper_trades, save_paper_trades
+
+    trade = trade or {}
+    if not telegram_entry_alerts_enabled():
+        return {"sent": False, "reason": "TELEGRAM_ENTRY_ALERTS_DISABLED"}
+    if str(trade.get("status") or "").upper() != "OPEN":
+        return {"sent": False, "reason": "TRADE_NOT_OPEN"}
+    if not holding_policy(trade.get("holding_profile")).telegram_resume:
+        return {"sent": False, "reason": "NOT_MULTIDAY"}
+    if not trade.get("overnight_transition"):
+        return {"sent": False, "reason": "NO_OVERNIGHT_TRANSITION"}
+
+    scanner_context = scanner_context or {}
+    trend_health = (
+        scanner_context.get("V2 Trend Health Status")
+        or scanner_context.get("Trend Health State")
+        or "UNKNOWN"
+    )
+    alert_key = "|".join([
+        "POSITION_CONTINUES",
+        str(trade.get("trade_key") or _state_key_for_alert(trade)),
+        str(trade.get("session_id_current") or ""),
+    ])
+    if alert_was_sent(alert_key):
+        return {"sent": False, "reason": "DUPLICATE_ALERT", "alert_key": alert_key}
+
+    metadata = {
+        "symbol": trade.get("symbol"),
+        "direction": trade.get("direction"),
+        "option_ticker": trade.get("option_ticker"),
+        "event_type": "POSITION_CONTINUES",
+        "message_type": "POSITION_CONTINUES",
+        "candidate_key": trade.get("trade_key") or alert_key,
+        "trade_key": trade.get("trade_key") or _state_key_for_alert(trade),
+        "closed": False,
+    }
+
+    def mark_continuation_sent(_result):
+        mark_alert_sent(alert_key, metadata)
+        state = load_paper_trades()
+        state_key = trade.get("trade_key") or _state_key_for_alert(trade)
+        if state_key in state:
+            state[state_key]["overnight_transition"] = False
+            save_paper_trades(state)
+
+    send_result = send_telegram_alert(
+        build_multiday_position_continue_message(trade, current_price, trend_health),
+        after_success=mark_continuation_sent,
+        scan_id=trade.get("scan_id") or scanner_context.get("Scan ID"),
+        dispatch_metadata={"alert_key": alert_key, "metadata": metadata},
+    )
+    return _queued_send_result(send_result, alert_key)
 
 
 def build_telegram_rule_evaluations(scanner_context, result, scan_id, symbol, setup=None):
@@ -1103,11 +1835,7 @@ def maybe_send_paper_entry_alert(
     option_ticker = trade.get("option_ticker") or scanner_context.get("Option Ticker") or "NO_CONTRACT"
     action_status = str(scanner_context.get("Action Status") or "").upper()
 
-    if action_status not in [
-        "ENTER",
-        "ENTER_PAPER",
-        "REVIEW_TV_CHART"
-    ]:
+    if action_status not in ["ENTER", "ENTER_PAPER"]:
 
         return {
             "sent": False,
@@ -1191,6 +1919,9 @@ def maybe_send_paper_entry_alert(
         "candidate_key": trade.get("trade_key") or alert_key,
         "source": "paper_entry",
         "action_status": action_status,
+        "trade_key": trade.get("trade_key") or _state_key_for_alert(trade),
+        "last_r_multiple": 0.0,
+        "last_trend_health": scanner_context.get("V2 Trend Health Status"),
         "setup_key": "_".join([
             str(symbol),
             str(direction),
@@ -1215,6 +1946,122 @@ def maybe_send_paper_entry_alert(
     return _queued_send_result(send_result, alert_key)
 
 
+@_telegram_attempt_logger("TRADE_UPDATE")
+def maybe_send_paper_trade_update_alert(
+    trade,
+    current_price,
+    scanner_context=None,
+    updated_stop=None,
+    partial_profit_taken=False,
+    confidence_score=None
+):
+
+    if not telegram_entry_alerts_enabled():
+
+        return {"sent": False, "reason": "TELEGRAM_ENTRY_ALERTS_DISABLED"}
+
+    trade = trade or {}
+    if str(trade.get("status") or "").upper() != "OPEN":
+
+        return {"sent": False, "reason": "TRADE_NOT_OPEN"}
+
+    r_multiple = _trade_r_multiple(trade, current_price)
+    if r_multiple is None:
+
+        return {"sent": False, "reason": "R_MULTIPLE_UNAVAILABLE"}
+
+    scanner_context = scanner_context or {}
+    trend_health = (
+        scanner_context.get("V2 Trend Health Status")
+        or scanner_context.get("Trend Health State")
+        or "UNKNOWN"
+    )
+    previous = _last_trade_lifecycle_metadata(trade)
+    previous_r = _float_value(previous.get("last_r_multiple"), 0.0)
+    previous_health = previous.get("last_trend_health")
+    previous_stop = _float_value(previous.get("last_stop"), None)
+    previous_confidence = _float_value(previous.get("last_confidence"), None)
+    material_r_move = abs(r_multiple - previous_r) >= 0.5
+    health_deteriorated = (
+        _trend_health_rank(trend_health) < _trend_health_rank(previous_health)
+    )
+    stop_moved = (
+        updated_stop is not None
+        and previous_stop is not None
+        and _float_value(updated_stop) != previous_stop
+    )
+    partial_taken = partial_profit_taken and not bool(
+        previous.get("partial_profit_taken")
+    )
+    confidence_changed = (
+        confidence_score is not None
+        and previous_confidence is not None
+        and abs(_float_value(confidence_score) - previous_confidence) >= 10
+    )
+    if not any([
+        material_r_move,
+        health_deteriorated,
+        stop_moved,
+        partial_taken,
+        confidence_changed,
+    ]):
+
+        return {"sent": False, "reason": "NO_MATERIAL_TRADE_CHANGE"}
+
+    event_type = (
+        "PARTIAL"
+        if partial_taken
+        else "STOP_MOVED"
+        if stop_moved
+        else "UPDATE"
+    )
+    alert_key = "|".join([
+        _trade_update_alert_key(trade, r_multiple, trend_health),
+        event_type,
+        str(updated_stop),
+        str(confidence_score),
+    ])
+    if alert_was_sent(alert_key):
+
+        return {
+            "sent": False,
+            "reason": "DUPLICATE_ALERT",
+            "alert_key": alert_key
+        }
+
+    metadata = {
+        "symbol": trade.get("symbol"),
+        "direction": trade.get("direction"),
+        "option_ticker": trade.get("option_ticker"),
+        "event_type": UPDATE_EVENT_TYPE,
+        "message_type": "TRADE_UPDATE",
+        "decision": "HOLD",
+        "candidate_key": trade.get("trade_key") or alert_key,
+        "trade_key": trade.get("trade_key") or _state_key_for_alert(trade),
+        "last_r_multiple": r_multiple,
+        "last_trend_health": trend_health,
+        "last_stop": updated_stop,
+        "partial_profit_taken": bool(partial_profit_taken),
+        "last_confidence": confidence_score,
+        "lifecycle_event": event_type,
+    }
+    send_result = send_telegram_alert(
+        build_paper_trade_update_message(
+            trade,
+            r_multiple,
+            trend_health,
+            updated_stop=updated_stop,
+            partial_profit_taken=partial_profit_taken,
+            confidence_score=confidence_score,
+            event_type=event_type,
+        ),
+        after_success=lambda _result: mark_alert_sent(alert_key, metadata),
+        scan_id=trade.get("scan_id") or scanner_context.get("Scan ID"),
+        dispatch_metadata={"alert_key": alert_key, "metadata": metadata},
+    )
+    return _queued_send_result(send_result, alert_key)
+
+
 def build_trade_exit_alert_message(
     symbol,
     trade,
@@ -1226,37 +2073,81 @@ def build_trade_exit_alert_message(
     outcome=None,
     event_type="EXIT",
     expected_underlying_price=None,
-    price_source=None
+    price_source=None,
+    trend_capture_pct=None,
+    mfe_r=None,
+    event_timestamp=None,
 ):
 
-    option_ticker = _fmt(
-        trade.get("option_ticker")
-        or trade.get("ticker")
-    )
-    entry_price = _fmt(trade.get("entry_price"))
-    option_entry_mid = _fmt(
+    direction = trade.get("direction") or ""
+    entry_price = _money(trade.get("entry_price"))
+    option_entry_mid = _number(
         trade.get("option_entry_mid")
         or trade.get("option_mid")
     )
+    option_current_mid = _number(option_current_mid)
+    contracts = max(1, int(_number(trade.get("option_contracts"), 1)))
+    option_pnl = (
+        (option_current_mid - option_entry_mid) * contracts * 100
+        if option_entry_mid is not None and option_current_mid is not None
+        else None
+    )
+    final_r = _number(r_multiple)
+    is_win = final_r is not None and final_r > 0
+    result_label = "✅ WIN" if is_win else "Loss" if final_r is not None and final_r < 0 else "Closed"
+    execution_label = _execution_label(trend_capture_pct)
+    status_line = _trade_status_line(event_type)
+    holding_time = _holding_time_label(
+        trade.get("opened_at_et") or trade.get("opened_at"),
+        event_timestamp,
+    )
 
-    title = "PARTIAL EXIT ALERT" if event_type == "PARTIAL_EXIT" else "EXIT ALERT"
+    if event_type == "PARTIAL_EXIT":
+        return "\n".join([line for line in [
+            "🟡 <b>PARTIAL PROFIT</b>",
+            _format_alert_timestamp(event_timestamp),
+            f"<b>{_fmt(symbol)} {_fmt(direction)}</b>",
+            "",
+            f"Result: {_fmt(r_multiple)}R",
+            "Position: Partial closed",
+            "Runner: Still Open",
+            "",
+            status_line,
+        ] if line])
 
-    return "\n".join([
-        f"<b>{title}</b>",
-        f"Ticker: {_fmt(symbol)}",
-        f"Contract: {option_ticker}",
-        f"Entry: {entry_price}",
-        f"Current: {_fmt(current_price)}",
-        f"Expected Same-Symbol Close: {_fmt(expected_underlying_price)}",
-        f"Price Source: {_fmt(price_source)}",
-        f"Option Entry Mid: {option_entry_mid}",
-        f"Option Current Mid: {_fmt(option_current_mid)}",
-        f"P/L %: {_fmt(pnl_pct)}",
-        f"R Multiple: {_fmt(r_multiple)}",
-        f"Outcome: {_fmt(outcome)}",
-        f"Action: {_fmt(event_type)}",
-        f"Reason: {_fmt(exit_reason)}"
-    ])
+    lines = [
+        "🔴 <b>TRADE CLOSED</b>",
+        _format_alert_timestamp(event_timestamp),
+        f"<b>{_fmt(symbol)} {_fmt(direction)}</b>",
+        "",
+        "<b>RESULT</b>",
+        result_label,
+        f"{_fmt(r_multiple)}R",
+        f"Option P/L: {_signed_money(option_pnl)}",
+        "",
+        f"Reason: {_exit_reason_label(exit_reason)}",
+        "",
+        f"Execution: {execution_label}" if execution_label else None,
+        f"Trend Capture: {_fmt(trend_capture_pct)}%" if trend_capture_pct is not None else None,
+        holding_time,
+        "Risk Managed: According to Plan" if final_r is not None and final_r < 0 else None,
+        "",
+        status_line,
+        "Next: Monitoring for the next qualified setup.",
+    ]
+
+    return "\n".join([line for line in lines if line])
+
+
+def _trend_capture_pct(r_multiple, mfe_r):
+
+    final_r = _float_value(r_multiple, None)
+    maximum_r = _float_value(mfe_r, None)
+    if final_r is None or maximum_r is None or maximum_r <= 0:
+
+        return None
+
+    return round(max(0, min(100, final_r / maximum_r * 100)), 1)
 
 
 @_telegram_attempt_logger("TRADE_EXIT")
@@ -1275,7 +2166,9 @@ def maybe_send_trade_exit_alert(
     price_source=None,
     scanner_row_symbol=None,
     candidate_prices=None,
-    scan_id=None
+    scan_id=None,
+    mfe_r=None,
+    trend_capture_pct=None
 ):
 
     if not telegram_exit_alerts_enabled():
@@ -1369,6 +2262,12 @@ def maybe_send_trade_exit_alert(
             "alert_key": alert_key
         }
 
+    trend_capture_pct = (
+        trend_capture_pct
+        if trend_capture_pct is not None
+        else _trend_capture_pct(r_multiple, mfe_r)
+    )
+
     message = build_trade_exit_alert_message(
         symbol=symbol,
         trade=trade,
@@ -1380,7 +2279,10 @@ def maybe_send_trade_exit_alert(
         outcome=outcome,
         event_type=event_type,
         expected_underlying_price=expected_underlying_price,
-        price_source=price_source
+        price_source=price_source,
+        trend_capture_pct=trend_capture_pct,
+        mfe_r=mfe_r,
+        event_timestamp=event_timestamp or trade.get("closed_at") or datetime.now(ZoneInfo("America/New_York")),
     )
 
     def after_success(_result):
@@ -1415,7 +2317,9 @@ def maybe_send_trade_exit_alert(
         "current_price": current_price,
         "expected_underlying_price": expected_underlying_price,
         "price_source": price_source,
-        "scanner_row_symbol": scanner_row_symbol
+        "scanner_row_symbol": scanner_row_symbol,
+        "mfe_r": mfe_r,
+        "trend_capture_pct": trend_capture_pct,
     }
     send_result = send_telegram_alert(
         message,
@@ -1463,11 +2367,20 @@ def maybe_send_scanner_entry_alert(
         }
 
     action_status = action_decision.get("action_status")
-    if action_status not in [
-        "ENTER",
-        "ENTER_PAPER",
-        "REVIEW_TV_CHART"
-    ]:
+    entry_type = str(entry_setup.get("entry_type") or "").upper()
+    if entry_type in {"ACTIVE_TRADE", "PAPER_TRADE", "OPEN_TRADE"}:
+
+        return {"sent": False, "reason": "ACTIVE_TRADE_SUPPRESSED"}
+
+    if action_status in {"ENTER", "ENTER_PAPER"}:
+
+        return {"sent": False, "reason": "ENTRY_AWAITING_TRADE_OPEN"}
+
+    if action_status == "REVIEW_TV_CHART":
+
+        return {"sent": False, "reason": "REVIEW_ALERT_SUPPRESSED"}
+
+    if action_status != "REVIEW_TV_CHART":
 
         return {
             "sent": False,
@@ -1477,18 +2390,7 @@ def maybe_send_scanner_entry_alert(
     option_contract = option_contract or {}
 
     option_ticker = option_contract.get("ticker") or "NO_CONTRACT"
-    setup_key = "_".join([
-        str(symbol),
-        str(entry_setup.get("entry_type")),
-        str(action_status)
-    ])
-
-    alert_key = _scanner_entry_alert_key(
-        symbol,
-        option_ticker,
-        action_status,
-        bar_timestamp
-    )
+    alert_key = _review_alert_key(symbol, entry_type)
 
     if alert_was_sent(alert_key):
 
@@ -1498,28 +2400,23 @@ def maybe_send_scanner_entry_alert(
             "alert_key": alert_key
         }
 
-    message = build_scanner_entry_alert_message(
-        symbol=symbol,
-        final_signal=final_signal,
-        action_status=action_status,
-        entry_setup=entry_setup,
-        risk_setup=risk_setup,
-        option_contract=option_contract,
-        latest_price=latest_price,
-        next_condition=next_condition
+    message = build_review_alert_message(
+        symbol,
+        entry_type,
+        next_condition
     )
 
     metadata = {
         "symbol": symbol,
         "direction": option_contract.get("type"),
         "option_ticker": option_ticker,
-        "event_type": ENTRY_EVENT_TYPE,
-        "message_type": "SCANNER_ENTRY",
+        "event_type": REVIEW_EVENT_TYPE,
+        "message_type": "REVIEW",
         "decision": action_status,
         "candidate_key": alert_key,
         "action_status": action_status,
         "final_signal": final_signal,
-        "setup_key": setup_key,
+        "setup_key": "_".join([str(symbol), entry_type]),
         "closed": False
     }
     send_result = send_telegram_alert(
@@ -1532,4 +2429,104 @@ def maybe_send_scanner_entry_alert(
         }
     )
 
+    return _queued_send_result(send_result, alert_key)
+
+
+@_telegram_attempt_logger("TRADE_OPEN")
+def maybe_send_trade_open_alert(trade, scanner_context=None, scan_id=None):
+
+    if not telegram_entry_alerts_enabled():
+
+        return {"sent": False, "reason": "TELEGRAM_ENTRY_ALERTS_DISABLED"}
+
+    trade = trade or {}
+    scanner_context = scanner_context or {}
+    if str(trade.get("status") or "").upper() != "OPEN":
+
+        return {"sent": False, "reason": "TRADE_NOT_OPEN"}
+
+    action_status = str(scanner_context.get("Action Status") or "").upper()
+    if action_status not in {"ENTER", "ENTER_PAPER"}:
+
+        return {"sent": False, "reason": "ACTION_NOT_ALERTABLE"}
+
+    alert_key = _trade_open_alert_key(trade)
+    if alert_was_sent(alert_key):
+
+        return {
+            "sent": False,
+            "reason": "DUPLICATE_ALERT",
+            "alert_key": alert_key,
+        }
+
+    metadata = {
+        "symbol": trade.get("symbol"),
+        "direction": trade.get("direction"),
+        "option_ticker": trade.get("option_ticker"),
+        "event_type": ENTRY_EVENT_TYPE,
+        "message_type": "TRADE_OPEN",
+        "decision": action_status,
+        "candidate_key": trade.get("trade_key") or alert_key,
+        "trade_key": trade.get("trade_key") or _state_key_for_alert(trade),
+        "last_r_multiple": 0.0,
+        "last_stop": trade.get("stop_loss"),
+        "last_trend_health": scanner_context.get("V2 Trend Health Status"),
+        "last_confidence": scanner_context.get("V2 Trend Health Score"),
+        "partial_profit_taken": False,
+        "closed": False,
+    }
+    send_result = send_telegram_alert(
+        build_paper_entry_alert_message(trade, scanner_context),
+        after_success=lambda _result: mark_alert_sent(alert_key, metadata),
+        scan_id=scan_id or trade.get("scan_id") or scanner_context.get("Scan ID"),
+        dispatch_metadata={"alert_key": alert_key, "metadata": metadata},
+    )
+    return _queued_send_result(send_result, alert_key)
+
+
+def build_trade_cancelled_alert_message(suggestion, reason=None, event_timestamp=None):
+
+    suggestion = suggestion or {}
+    message_reason = reason or suggestion.get("validity_reason") or "Entry conditions never confirmed."
+
+    return "\n".join([
+        "⚫ <b>TRADE CANCELLED</b>",
+        _format_alert_timestamp(event_timestamp),
+        f"<b>{_fmt(suggestion.get('symbol'))} {_fmt(suggestion.get('direction'))}</b>",
+        "",
+        f"Reason: {_fmt(message_reason)}",
+        "Status: Cancelled",
+        "No action taken.",
+    ])
+
+
+@_telegram_attempt_logger("TRADE_CANCELLED")
+def maybe_send_trade_cancelled_alert(suggestion, reason=None, event_timestamp=None):
+
+    suggestion = suggestion or {}
+    if not telegram_entry_alerts_enabled():
+        return {"sent": False, "reason": "TELEGRAM_ENTRY_ALERTS_DISABLED"}
+
+    alert_key = "|".join([
+        "TRADE_CANCELLED",
+        str(suggestion.get("suggestion_id") or suggestion.get("symbol") or "UNKNOWN"),
+        str(event_timestamp or suggestion.get("expired_at") or _today_key()),
+    ])
+    if alert_was_sent(alert_key):
+        return {"sent": False, "reason": "DUPLICATE_ALERT", "alert_key": alert_key}
+
+    metadata = {
+        "symbol": suggestion.get("symbol"),
+        "direction": suggestion.get("direction"),
+        "option_ticker": suggestion.get("option_ticker"),
+        "event_type": "TRADE_CANCELLED",
+        "message_type": "TRADE_CANCELLED",
+        "candidate_key": suggestion.get("suggestion_id") or alert_key,
+        "closed": True,
+    }
+    send_result = send_telegram_alert(
+        build_trade_cancelled_alert_message(suggestion, reason, event_timestamp),
+        after_success=lambda _result: mark_alert_sent(alert_key, metadata),
+        dispatch_metadata={"alert_key": alert_key, "metadata": metadata},
+    )
     return _queued_send_result(send_result, alert_key)

@@ -39,6 +39,7 @@ def open_trade(
     stop_loss,
     take_profit,
     entry_type=None,
+    direction=None,
     option_data=None,
     contracts=None,
     execution_features=None
@@ -61,6 +62,8 @@ def open_trade(
         "take_profit": take_profit,
 
         "entry_type": entry_type,
+
+        "direction": direction,
 
         "highest_price": entry_price,
 
@@ -170,7 +173,9 @@ def open_trade(
 
         "is_real_money": False,
 
-        "exit_alert_sent": False
+        "exit_alert_sent": False,
+
+        "v1_ema_grace_pending": False
 
     }
 
@@ -199,7 +204,8 @@ def update_trade(
     partial_profit_taken=None,
     option_data=None,
     option_pl=None,
-    execution_metrics=None
+    execution_metrics=None,
+    exit_state=None
 
 ):
 
@@ -326,6 +332,12 @@ def update_trade(
         )
         state[symbol]["trend_health_at_exit"] = execution_metrics.get(
             "trend_health_score"
+        )
+
+    if exit_state is not None:
+
+        state[symbol]["v1_ema_grace_pending"] = bool(
+            exit_state.get("v1_ema_grace_pending")
         )
 
     state[symbol][

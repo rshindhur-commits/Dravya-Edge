@@ -1,0 +1,44 @@
+{
+  "trading_day": "2026-07-15",
+  "context": {
+    "trading_day": "2026-07-15",
+    "snapshot_folder": "C:\\Users\\rshin\\AppData\\Local\\Temp\\pytest-of-rshin\\pytest-3\\test_historical_regression_com0\\2026-07-15\\scanner_snapshots",
+    "baseline_folder": "D:\\Dravya_Trade_Works\\data\\regression\\2026-07-15\\baseline",
+    "results_folder": "D:\\Dravya_Trade_Works\\data\\regression\\2026-07-15",
+    "current_strategy_version": "current",
+    "baseline_version": "frozen",
+    "readonly": true
+  },
+  "baseline": {
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "win_rate": 100.0,
+    "total_r": 2.0,
+    "average_r": 2.0,
+    "profit_factor": null
+  },
+  "current": {
+    "trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "win_rate": 100.0,
+    "total_r": 3.0,
+    "average_r": 3.0,
+    "profit_factor": null
+  },
+  "comparison": {
+    "new": [],
+    "removed": [],
+    "changed": [
+      {
+        "trade_key": "NVDA|CALL|EMA_PULLBACK",
+        "old_r": 2.0,
+        "new_r": 3.0,
+        "delta_r": 1.0
+      }
+    ]
+  },
+  "net_gain_r": 1.0,
+  "verdict": "\u2705 Strategy Improved"
+}

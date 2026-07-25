@@ -19,7 +19,9 @@ def test_candidate_evidence_collapses_scans_and_joins_outcomes():
                 "scan_timestamp": "2026-07-22 10:05:00", "candidate_rr": 2.4,
                 "setup_percent": 82, "action_status": "ENTER_PAPER",
                 "entry_timing_score": 88, "entry_timing_grade": "EXCELLENT",
-                "trade_quality_score": 91, "candidate_rank": 1,
+                "trade_quality_score": 91, "entry_priority_adjustment": 35,
+                "expected_remaining_trend": 86, "projected_entry_grade": "A",
+                "ranking_score": 126, "candidate_rank": 1,
                 "replay_outcome": "TARGET_FIRST", "top_candidate": "BULLISH_TOP_1",
                 "option_quote_freshness": "LIVE_QUOTE",
             },
@@ -38,6 +40,10 @@ def test_candidate_evidence_collapses_scans_and_joins_outcomes():
     assert row["entry_timing_score"] == 88
     assert row["entry_timing_grade"] == "EXCELLENT"
     assert row["trade_quality_score"] == 91
+    assert row["entry_priority_adjustment"] == 35
+    assert row["expected_remaining_trend"] == 86
+    assert row["projected_entry_grade"] == "A"
+    assert row["ranking_score"] == 126
     assert row["candidate_rank"] == 1
     assert row["entered"]
     assert row["target_first"]

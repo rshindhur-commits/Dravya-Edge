@@ -6,8 +6,10 @@ import requests
 from app.alerts.telegram_alerts import (
     TelegramDeliveryError,
     _send_telegram_alert_direct,
+    build_paper_entry_alert_message,
     calculate_entry_alert_score,
     _entry_alert_policy,
+    maybe_send_paper_trade_update_alert,
     maybe_send_scanner_entry_alert,
 )
 from app.gates import EntryGateConfig, evaluate_entry_gate
@@ -80,7 +82,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             "relative_volume": 2,
         }
 
-    def test_scanner_alert_paper_policy_does_not_require_high_conviction(self):
+    def test_scanner_review_alert_is_suppressed_by_lifecycle_contract(self):
 
         with patch.dict(
             "os.environ",
@@ -115,20 +117,17 @@ class TelegramAlertPolicyTests(unittest.TestCase):
         ), patch(
             "app.alerts.telegram_alerts.alert_was_sent",
             return_value=False
-        ), patch(
-            "app.alerts.telegram_alerts.send_telegram_alert"
-        ), patch(
-            "app.alerts.telegram_alerts.mark_alert_sent"
-        ):
+        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
 
             result = maybe_send_scanner_entry_alert(
                 **self._scanner_alert_kwargs()
             )
 
-        self.assertTrue(result["sent"])
-        self.assertEqual(result["reason"], "SENT")
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
+        send_alert.assert_not_called()
 
-    def test_scanner_alert_sends_despite_legacy_alert_score_threshold(self):
+    def test_scanner_review_alert_remains_suppressed_despite_score_setting(self):
 
         with patch.dict(
             "os.environ",
@@ -138,23 +137,17 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_MIN_ENTRY_ALERT_SCORE": "100",
             },
             clear=False,
-        ), patch(
-            "app.alerts.telegram_alerts.alert_was_sent",
-            return_value=False
-        ), patch(
-            "app.alerts.telegram_alerts.send_telegram_alert"
-        ), patch(
-            "app.alerts.telegram_alerts.mark_alert_sent"
-        ):
+        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
 
             result = maybe_send_scanner_entry_alert(
                 **self._scanner_alert_kwargs()
             )
 
-        self.assertTrue(result["sent"])
-        self.assertEqual(result["reason"], "SENT")
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
+        send_alert.assert_not_called()
 
-    def test_scanner_alert_real_review_policy_does_not_reject_alertable_action(self):
+    def test_scanner_review_alert_is_suppressed_under_real_review_policy(self):
 
         with patch.dict(
             "os.environ",
@@ -164,23 +157,134 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
             },
             clear=False,
-        ), patch(
-            "app.alerts.telegram_alerts.alert_was_sent",
-            return_value=False
-        ), patch(
-            "app.alerts.telegram_alerts.send_telegram_alert"
-        ), patch(
-            "app.alerts.telegram_alerts.mark_alert_sent"
-        ):
+        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
 
             result = maybe_send_scanner_entry_alert(
                 **self._scanner_alert_kwargs()
             )
 
-        self.assertTrue(result["sent"])
-        self.assertEqual(result["reason"], "SENT")
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
+        send_alert.assert_not_called()
 
-    def test_scanner_alert_queued_mode_returns_queued_without_marking_sent(self):
+    def test_scanner_entry_waits_for_confirmed_trade_open(self):
+
+        kwargs = self._scanner_alert_kwargs()
+        kwargs["action_decision"] = {"action_status": "ENTER_PAPER"}
+
+        with patch.dict(
+            "os.environ",
+            {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1"},
+            clear=False,
+        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
+
+            result = maybe_send_scanner_entry_alert(**kwargs)
+
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "ENTRY_AWAITING_TRADE_OPEN")
+        send_alert.assert_not_called()
+
+    def test_active_trade_scanner_alert_is_suppressed(self):
+
+        kwargs = self._scanner_alert_kwargs()
+        kwargs["entry_setup"] = {"entry_type": "ACTIVE_TRADE"}
+
+        with patch.dict(
+            "os.environ",
+            {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1"},
+            clear=False,
+        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
+
+            result = maybe_send_scanner_entry_alert(**kwargs)
+
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "ACTIVE_TRADE_SUPPRESSED")
+        send_alert.assert_not_called()
+
+    def test_confirmed_trade_message_uses_subscriber_facing_language(self):
+
+        message = build_paper_entry_alert_message(
+            {
+                "symbol": "NFLX",
+                "direction": "CALL",
+                "entry_type": "EMA_PULLBACK",
+                "entry_price": 100,
+                "stop_loss": 98,
+                "take_profit": 104,
+                "planned_rr": 2,
+            },
+            {
+                "Action Status": "ENTER_PAPER",
+                "Expected Remaining Trend": 86,
+                "Projected Entry Grade": "A",
+                "Trade Quality Score": 97,
+                "Option Strike": 700,
+                "Option Expiration": "2026-08-21",
+                "Option Mid Price": 2.35,
+                "Option Contract Cost": 235,
+                "Option Risk At Stop": 47,
+                "Option Spread %": 0.85,
+                "Option Quality Score": 96,
+                "V2 Trend Health Status": "STRONG",
+                "V2 Pullback Number": 1,
+                "Relative Volume": 1.5,
+                "RS Rank Score": 2,
+            },
+        )
+
+        self.assertIn("NEW TRADE", message)
+        self.assertIn("BUY NOW", message)
+        self.assertIn("TRADE", message)
+        self.assertIn("SETUP", message)
+        self.assertIn("OPTION", message)
+        self.assertIn("EMA Pullback", message)
+        self.assertIn("Contract: 700C", message)
+        self.assertIn("Premium: $2.35", message)
+        self.assertIn("RR: 2R", message)
+        self.assertIn("ET", message)
+        self.assertIn("🟢 Open", message)
+        self.assertNotIn("ENTER_PAPER", message)
+
+    def test_trade_update_requires_material_change(self):
+
+        trade = {
+            "symbol": "NFLX",
+            "direction": "CALL",
+            "entry_price": 100,
+            "stop_loss": 98,
+            "opened_at": "2026-07-24 09:24:00",
+            "status": "OPEN",
+        }
+        with patch.dict(
+            "os.environ",
+            {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1"},
+            clear=False,
+        ), patch(
+            "app.alerts.telegram_alerts._last_trade_lifecycle_metadata",
+            return_value={"last_r_multiple": 0.0, "last_trend_health": "STRONG"},
+        ), patch(
+            "app.alerts.telegram_alerts.send_telegram_alert"
+        ) as send_alert, patch(
+            "app.alerts.telegram_alerts._record_alert_attempt"
+        ):
+
+            sent = maybe_send_paper_trade_update_alert(
+                trade,
+                101.5,
+                {"V2 Trend Health Status": "HEALTHY"},
+            )
+            unchanged = maybe_send_paper_trade_update_alert(
+                trade,
+                100.4,
+                {"V2 Trend Health Status": "STRONG"},
+            )
+
+        self.assertTrue(sent["sent"])
+        self.assertFalse(unchanged["sent"])
+        self.assertEqual(unchanged["reason"], "NO_MATERIAL_TRADE_CHANGE")
+        self.assertEqual(send_alert.call_count, 1)
+
+    def test_scanner_review_alert_does_not_queue_or_mark_sent(self):
 
         with patch.dict(
             "os.environ",
@@ -214,22 +318,18 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             "app.alerts.telegram_alerts._recent_closed_symbol_alert",
             return_value=False
         ), patch(
-            "app.alerts.telegram_alerts.alert_was_sent",
-            return_value=False
-        ), patch(
             "app.runtime.telegram_dispatcher.get_runtime_scheduler"
         ) as scheduler_factory, patch(
             "app.alerts.telegram_alerts.mark_alert_sent"
         ) as mark_sent:
 
-            scheduler_factory.return_value.submit_critical.return_value = "job-id"
             result = maybe_send_scanner_entry_alert(
                 **self._scanner_alert_kwargs()
             )
 
         self.assertFalse(result["sent"])
-        self.assertTrue(result["queued"])
-        self.assertEqual(result["reason"], "QUEUED")
+        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
+        scheduler_factory.assert_not_called()
         mark_sent.assert_not_called()
 
     def test_telegram_gate_accepts_enter_paper_candidate(self):
