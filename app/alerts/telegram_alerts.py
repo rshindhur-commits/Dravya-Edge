@@ -1356,7 +1356,15 @@ def _exit_reason_label(exit_reason):
 
         return "🟦 VWAP Exit"
 
-    if "TIME" in normalized or "END_OF_DAY" in normalized:
+    if (
+        "TIME" in normalized
+        or "END_OF_DAY" in normalized
+        or "END-OF-DAY" in normalized
+        or "END OF DAY" in normalized
+        or "NEAR_CLOSE" in normalized
+        or "NEAR-CLOSE" in normalized
+        or "NEAR CLOSE" in normalized
+    ):
 
         return "🟪 Time Exit"
 

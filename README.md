@@ -109,7 +109,7 @@ Multi-day positions remain open unless a normal exit rule fires.
 
 Disabling `Auto Close Intraday Trades` does **not** promote an `INTRADAY` trade to `MULTIDAY`. If such a trade remains open overnight, the next session restores it as `INTRADAY`, refreshes its holding duration, and records the warning: `Intraday trade carried overnight because Auto Close Intraday Trades was disabled.` It does not receive a `POSITION CONTINUES` alert or become eligible for multi-day restoration rules.
 
-`TRADE CLOSED` remains one subscriber message type, but its `Reason` line uses a standardized category when applicable: `🟥 Stop Loss`, `🟩 Target Hit`, `🟨 EMA Exit`, `🟦 VWAP Exit`, `🟪 Time Exit`, `⚠️ Failed Breakout`, or `📈 Manual Exit`. Other engine exits retain a concise generic trend, market, or profit-lock category.
+`TRADE CLOSED` remains one subscriber message type, but its `Reason` line uses a standardized category when applicable: `🟥 Stop Loss`, `🟩 Target Hit`, `🟨 EMA Exit`, `🟦 VWAP Exit`, `🟪 Time Exit`, `⚠️ Failed Breakout`, or `📈 Manual Exit`. Near-close exits, end-of-day closures, and other time-based terminations are normalized to `🟪 Time Exit`. Other engine exits retain a concise generic trend, market, or profit-lock category.
 
 Holding profile is frozen when a trade opens. It may change only through the paper-trade manager's `MANUAL_OVERRIDE` or future `BROKER_SYNC` source; scanner, exit engine, Telegram, and ranking code do not promote or demote it. `PAUSED` and `RESUMED` are operational trade states for data/provider outages, halts, or controlled runtime restarts. A paused trade blocks additional entries for that symbol and does not receive automated management until resumed.
 

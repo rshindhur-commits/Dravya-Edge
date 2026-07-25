@@ -335,5 +335,8 @@ def test_closed_trade_exit_categories_are_consistent():
     assert _exit_reason_label("EMA20_BREAK") == "🟨 EMA Exit"
     assert _exit_reason_label("VWAP_LOSS") == "🟦 VWAP Exit"
     assert _exit_reason_label("END_OF_DAY") == "🟪 Time Exit"
+    assert _exit_reason_label("NEAR_CLOSE") == "🟪 Time Exit"
+    assert _exit_reason_label("Near-close exit without sufficient profit") == "🟪 Time Exit"
+    assert _exit_reason_label("Auto paper exit: end-of-day close") == "🟪 Time Exit"
     assert _exit_reason_label("FAILED_BREAKOUT") == "⚠️ Failed Breakout"
     assert _exit_reason_label("Manual paper exit") == "📈 Manual Exit"
