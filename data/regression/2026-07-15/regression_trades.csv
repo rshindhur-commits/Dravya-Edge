@@ -1,0 +1,2 @@
+trade_key,symbol,direction,setup,entry_time,entry_price,stop_price,target_price,holding_profile,status,exit_time,exit_price,exit_reason,r_multiple,outcome
+NVDA|CALL|EMA_PULLBACK,NVDA,CALL,EMA_PULLBACK,2026-07-15 09:30:00,100.0,98.0,106.0,INTRADAY,CLOSED,2026-07-15 09:40:00,106.0,TARGET_HIT,3.0,WIN

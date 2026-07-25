@@ -63,6 +63,7 @@ def _score_row(row):
     option = max(0, min(100, _number(row.get("Option Quality Score"))))
     relative_strength = _scale_relative_strength(row.get("RS Rank Score"))
     liquidity = _liquidity_score(row)
+    entry_priority = _number(row.get("Entry Priority Adjustment"))
     score = round(
         setup * 0.25
         + timing * 0.20
@@ -72,6 +73,7 @@ def _score_row(row):
         + liquidity * 0.10,
         2
     )
+    ranking_score = round(score + entry_priority, 2)
     components = {
         "setup": round(setup, 1),
         "timing": round(timing, 1),
@@ -85,7 +87,7 @@ def _score_row(row):
         key=lambda item: item[1],
         reverse=True
     )[:3]
-    return score, "; ".join(
+    return score, ranking_score, "; ".join(
         f"{name}={value:g}" for name, value in leaders
     )
 
@@ -100,9 +102,10 @@ def rank_candidates(frame):
     ranked = frame.copy()
     scored = ranked.apply(_score_row, axis=1)
     ranked["Trade Quality Score"] = scored.map(lambda item: item[0])
-    ranked["Rank Reason"] = scored.map(lambda item: item[1])
+    ranked["Ranking Score"] = scored.map(lambda item: item[1])
+    ranked["Rank Reason"] = scored.map(lambda item: item[2])
     ranked["Candidate Rank"] = (
-        ranked["Trade Quality Score"]
+        ranked["Ranking Score"]
         .rank(method="first", ascending=False)
         .astype(int)
     )

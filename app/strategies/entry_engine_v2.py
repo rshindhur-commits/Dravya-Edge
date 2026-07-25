@@ -130,6 +130,9 @@ def evaluate_shadow_entry_v2(df, analysis):
         "ema_alignment_score": 100 if (latest.get("EMA9") > latest.get("EMA20") if direction == "CALL" else latest.get("EMA9") < latest.get("EMA20")) else 0,
         "volume_confirmation": rel_volume >= 1.0,
         "volume_confirmation_score": min(100, round(rel_volume * 50)),
+        "relative_volume": rel_volume,
+        "adx": _number(latest.get("ADX")),
+        "body_strength": _number(latest.get("BODY_STRENGTH")),
         "entry_efficiency_score": score,
         "reason": reason,
     }

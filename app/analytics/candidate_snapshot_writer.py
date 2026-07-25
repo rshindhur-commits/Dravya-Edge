@@ -64,6 +64,10 @@ SNAPSHOT_COLUMNS = [
     "entry_timing_grade",
     "entry_timing_reason",
     "trade_quality_score",
+    "entry_priority_adjustment",
+    "expected_remaining_trend",
+    "projected_entry_grade",
+    "ranking_score",
     "candidate_rank",
     "rank_reason",
     "exit_waterfall",
@@ -206,6 +210,26 @@ def normalize_candidate_row(
             row,
             "Trade Quality Score",
             "trade_quality_score"
+        ),
+        "entry_priority_adjustment": _row_get(
+            row,
+            "Entry Priority Adjustment",
+            "entry_priority_adjustment"
+        ),
+        "expected_remaining_trend": _row_get(
+            row,
+            "Expected Remaining Trend",
+            "expected_remaining_trend"
+        ),
+        "projected_entry_grade": _row_get(
+            row,
+            "Projected Entry Grade",
+            "projected_entry_grade"
+        ),
+        "ranking_score": _row_get(
+            row,
+            "Ranking Score",
+            "ranking_score"
         ),
         "candidate_rank": _row_get(
             row,

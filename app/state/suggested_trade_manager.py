@@ -3,6 +3,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from app.gates import price_geometry_error
+from app.state.holding_policy import derive_holding_profile
 from app.storage.signal_lifecycle_store import record_signal_expiry_transition
 from app.utils.json_store import load_json_file, save_json_file
 
@@ -242,6 +243,7 @@ def upsert_suggestion_from_scan(row):
         "suggestion_id": suggestion_id,
         "symbol": row.get("Symbol"),
         "direction": row.get("Candidate Direction"),
+        "holding_profile": derive_holding_profile(row).value,
         "setup_type": row.get("Entry"),
         "option_ticker": row.get("Option Ticker"),
         "entry_price": row.get("Candidate Entry Price"),
@@ -331,6 +333,22 @@ def mark_suggestion_expired(suggestion_id, reason="not present in latest scan"):
     suggestion["last_seen_at"] = suggestion.get("last_seen_at")
     state[suggestion_id] = suggestion
     save_suggestions(state)
+
+    if suggestion.get("current_action_status") == "REVIEW_TV_CHART":
+
+        try:
+
+            from app.alerts.telegram_alerts import maybe_send_trade_cancelled_alert
+
+            maybe_send_trade_cancelled_alert(
+                suggestion,
+                reason="Entry conditions never confirmed.",
+                event_timestamp=expired_at,
+            )
+
+        except Exception as exc:
+
+            print(f"[TELEGRAM TRADE CANCELLED ALERT ERROR] {suggestion.get('symbol')}: {exc}")
 
     return suggestion
 

@@ -12,6 +12,7 @@ from app.gates import (
     active_symbol_trade,
     build_trade_key
 )
+from app.state.holding_policy import derive_holding_profile, holding_policy
 from app.storage.daily_paths import daily_path
 from app.storage.session_manager import (
     get_or_create_session_manifest,
@@ -27,6 +28,7 @@ PAPER_TRADE_STATE_FILE = str(
     ROOT_DIR / "app" / "state" / "paper_trade_state.json"
 )
 ET_TZ = ZoneInfo("America/New_York")
+PROFILE_OVERRIDE_SOURCES = {"MANUAL_OVERRIDE", "BROKER_SYNC"}
 
 PAPER_TELEMETRY_REQUIRED_FIELDS = [
     "paper_trade",
@@ -332,7 +334,7 @@ def _append_trend_capture_for_closed_trade(trade):
             cancelable=True,
             scan_id=trade.get("scan_id"),
         ))
-        return output
+        return row
 
     except Exception as exc:
 
@@ -650,7 +652,14 @@ def open_paper_trade(
         "trade_id": str(uuid4()),
         "symbol": symbol,
         "status": "OPEN",
+        "trade_state": "OPEN",
         "direction": direction,
+        "holding_profile": derive_holding_profile(scanner_context or {}).value,
+        "holding_profile_locked_at": opened_at,
+        "holding_profile_override_source": None,
+        "overnight_count": 0,
+        "days_held": 1,
+        "forced_eod_exit": False,
         "entry_type": entry_type,
         "entry_price": entry_price,
         "stop_loss": stop_loss,
@@ -682,6 +691,9 @@ def open_paper_trade(
     trading_day = get_trading_day()
     trade["trading_day"] = trading_day
     trade["session_id"] = get_session_id(trading_day)
+    trade["session_id_open"] = trade["session_id"]
+    trade["session_id_close"] = None
+    trade["session_id_current"] = trade["session_id"]
     trade["scan_id"] = (
         (scanner_context or {}).get("scan_id")
         or get_scan_id(trading_day)
@@ -756,7 +768,7 @@ def close_paper_trade(
 
         return None
 
-    if trade.get("status") != "OPEN":
+    if trade.get("status") not in {"OPEN", "PAUSED"}:
 
         return trade
 
@@ -772,9 +784,18 @@ def close_paper_trade(
     closed_dt = _now_et()
 
     trade["status"] = "CLOSED"
+    trade["trade_state"] = "CLOSED"
     trade["closed_at"] = _timestamp_for_key(closed_dt)
     trade["closed_at_et"] = closed_dt.isoformat()
     trade["closed_at_utc"] = closed_dt.astimezone(timezone.utc).isoformat()
+    trade["session_id_close"] = get_session_id(get_trading_day(closed_dt))
+    trade["forced_eod_exit"] = "end-of-day close" in str(exit_reason or "").lower()
+    opened_dt = _parse_datetime(trade.get("opened_at_et") or trade.get("opened_at"))
+    if opened_dt is not None:
+        if opened_dt.tzinfo is None:
+            opened_dt = opened_dt.replace(tzinfo=ET_TZ)
+        trade["days_held"] = max(1, (closed_dt.date() - opened_dt.date()).days + 1)
+        trade["overnight_count"] = max(0, trade["days_held"] - 1)
     trade["close_price"] = close_price
     trade["exit_reason"] = exit_reason
     trade["pnl_pct"] = result["pnl_pct"]
@@ -798,7 +819,7 @@ def close_paper_trade(
         event_type,
         exit_price=close_price
     )
-    _append_trend_capture_for_closed_trade(trade)
+    trend_capture_row = _append_trend_capture_for_closed_trade(trade)
     _save_paper_trade_telemetry(trade)
 
     try:
@@ -822,7 +843,12 @@ def close_paper_trade(
             price_source="paper_trade_close_price",
             scanner_row_symbol=(
                 scanner_context or {}
-            ).get("Symbol")
+            ).get("Symbol"),
+            trend_capture_pct=(
+                (trend_capture_row or {}).get("Trend Capture %")
+                if isinstance(trend_capture_row, dict)
+                else None
+            )
         )
 
         if telegram_result.get("sent"):
@@ -835,5 +861,84 @@ def close_paper_trade(
         print(
             f"[PAPER TELEGRAM EXIT ALERT ERROR] {symbol}: {e}"
         )
+
+    return trade
+
+
+def _active_paper_trade(state, symbol):
+
+    trade_key, trade = active_symbol_trade(state, symbol)
+    if trade is not None:
+
+        return trade_key, trade
+
+    legacy_trade = state.get(symbol)
+    if legacy_trade and legacy_trade.get("status") in {"OPEN", "PAUSED"}:
+
+        return symbol, legacy_trade
+
+    return None, None
+
+
+def pause_paper_trade(symbol, reason="Operational pause"):
+
+    state = load_paper_trades()
+    trade_key, trade = _active_paper_trade(state, symbol)
+    if trade is None or trade.get("status") == "PAUSED":
+
+        return trade
+
+    paused_at = _now_et()
+    trade["status"] = "PAUSED"
+    trade["trade_state"] = "PAUSED"
+    trade["paused_at"] = _timestamp_for_key(paused_at)
+    trade["pause_reason"] = reason
+    state[trade_key] = trade
+    save_paper_trades(state)
+    _append_paper_trade_event(trade, "PAUSED")
+
+    return trade
+
+
+def resume_paper_trade(symbol):
+
+    state = load_paper_trades()
+    trade_key, trade = _active_paper_trade(state, symbol)
+    if trade is None or trade.get("status") != "PAUSED":
+
+        return trade
+
+    resumed_at = _now_et()
+    trade["status"] = "OPEN"
+    trade["trade_state"] = "OPEN"
+    trade["resumed_at"] = _timestamp_for_key(resumed_at)
+    trade["pause_reason"] = None
+    state[trade_key] = trade
+    save_paper_trades(state)
+    _append_paper_trade_event(trade, "RESUMED")
+
+    return trade
+
+
+def override_paper_trade_holding_profile(symbol, holding_profile, source="MANUAL_OVERRIDE"):
+
+    source = str(source or "").upper()
+    if source not in PROFILE_OVERRIDE_SOURCES:
+
+        raise ValueError("Holding profile changes require MANUAL_OVERRIDE or BROKER_SYNC")
+
+    state = load_paper_trades()
+    trade_key, trade = _active_paper_trade(state, symbol)
+    if trade is None:
+
+        return None
+
+    profile = holding_policy(holding_profile).holding_profile.value
+    trade["holding_profile"] = profile
+    trade["holding_profile_override_source"] = source
+    trade["holding_profile_overridden_at"] = _timestamp_for_key(_now_et())
+    state[trade_key] = trade
+    save_paper_trades(state)
+    _append_paper_trade_event(trade, "HOLDING_PROFILE_OVERRIDE")
 
     return trade

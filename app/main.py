@@ -120,8 +120,12 @@ from app.analytics.scanner_profiler import (
 from app.analytics.candidate_snapshot_writer import (
     append_candidate_snapshots
 )
+from app.regression import write_scan_snapshot
 from app.analytics.entry_timing_engine import (
     evaluate_entry_timing
+)
+from app.decision.entry_optimizer import (
+    evaluate_entry_optimizer
 )
 from app.analytics.trade_ranker import (
     rank_candidates
@@ -142,13 +146,15 @@ from app.analytics.replay_engine import (
 from app.alerts.telegram_alerts import (
     calculate_entry_alert_score,
     maybe_send_scanner_entry_alert,
+    maybe_send_trade_open_alert,
+    maybe_send_paper_trade_update_alert,
     maybe_send_trade_exit_alert
 )
 from app.db.persistence import (
     print_db_status,
     record_scanner_run_start
 )
-from app.db.artifact_persistence import persist_scan_artifacts
+from app.db.artifact_persistence import persist_regression_snapshot, persist_scan_artifacts
 from app.utils.runtime_logging import debug_print
 from app.runtime import append_runtime_performance
 from app.storage.daily_paths import (
@@ -175,6 +181,28 @@ from app.storage.session_manager import (
 )
 
 console = Console(width=120)
+
+
+def _regression_market_snapshot(df_5m, df_15m, df_1h):
+
+    def bars(frame, limit):
+        if frame is None or frame.empty:
+            return []
+        output = frame.tail(limit).reset_index()
+        columns = [
+            column for column in output.columns
+            if str(column).lower() in {
+                "timestamp", "datetime", "date", "open", "high", "low", "close", "volume"
+            }
+        ]
+        return output[columns].to_dict("records") if columns else []
+
+    return {
+        "bars_5m": bars(df_5m, 200),
+        "bars_15m": bars(df_15m, 80),
+        "bars_1h": bars(df_1h, 40),
+        "market_snapshot_version": "v1",
+    }
 
 
 SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
@@ -2706,6 +2734,30 @@ def _dispatch_telegram_entry_alerts(df_results, scan_id=None):
 
     for index, row in df_results.iterrows():
 
+        action_status = str(row.get("Action Status") or "").upper()
+        entry_type = str(row.get("Entry") or "").upper()
+        if entry_type in {"ACTIVE_TRADE", "PAPER_TRADE", "OPEN_TRADE"}:
+
+            reason = "ACTIVE_TRADE_SUPPRESSED"
+
+        elif action_status != "REVIEW_TV_CHART":
+
+            reason = "NOT_LIFECYCLE_EVENT"
+
+        else:
+
+            reason = None
+
+        if reason:
+
+            df_results.at[index, "Telegram Eligibility"] = reason
+            df_results.at[index, "Telegram Block Reason"] = reason
+            df_results.at[index, "Telegram Sent"] = False
+            df_results.at[index, "Telegram Stage"] = "LIFECYCLE_FILTER"
+            summary["blocked_count"] += 1
+            summary["reasons"][reason] = summary["reasons"].get(reason, 0) + 1
+            continue
+
         option_contract = {
             "ticker": row.get("Option Ticker"),
             "type": row.get("Candidate Direction"),
@@ -2920,6 +2972,14 @@ def _persist_scan_outputs(
         profile_timer.record(stage_name, seconds)
 
     snapshot_result = None
+    regression_market_snapshots = {}
+    if "__Regression Market Snapshot" in df_results.columns:
+        for _, row in df_results.iterrows():
+            symbol = row.get("Symbol")
+            payload = row.get("__Regression Market Snapshot")
+            if symbol and payload:
+                regression_market_snapshots[str(symbol)] = payload
+        df_results = df_results.drop(columns=["__Regression Market Snapshot"])
     records = df_results.to_dict("records")
 
     try:
@@ -3081,6 +3141,12 @@ def _persist_scan_outputs(
             trading_day=trading_day,
             scan_id=scan_id
         )
+        regression_snapshot_result = write_scan_snapshot(
+            df_results,
+            trading_day=trading_day,
+            scan_id=scan_id,
+            scan_timestamp=observed_at,
+        )
 
     try:
 
@@ -3110,6 +3176,13 @@ def _persist_scan_outputs(
             "[CANDIDATE SNAPSHOTS] "
             f"saved {snapshot_result['rows']} rows to "
             f"{snapshot_result['path']}"
+        )
+
+    if regression_snapshot_result:
+
+        print(
+            "[REGRESSION SNAPSHOT] "
+            f"saved {regression_snapshot_result['path']}"
         )
 
     try:
@@ -3191,11 +3264,31 @@ def _persist_scan_outputs(
                 scan_id,
                 health_payload,
                 output_file,
+                observed_at.isoformat(),
             ),
             cancelable=True,
             scan_id=scan_id,
         )
     )
+
+    if health_payload.get("scan_completed_successfully"):
+        get_runtime_scheduler().submit_normal(
+            RuntimeJob(
+                name="persist_regression_snapshot",
+                priority=3,
+                func=persist_regression_snapshot,
+                args=(
+                    records,
+                    trading_day,
+                    scan_id,
+                    health_payload,
+                    observed_at.isoformat(),
+                    regression_market_snapshots,
+                ),
+                cancelable=True,
+                scan_id=scan_id,
+            )
+        )
 
 
 def _finalize_scan_outputs(
@@ -3285,6 +3378,7 @@ def _finalize_scan_outputs(
         "exceptions": health.exceptions,
         "symbols_completed": health.symbols_completed,
         "symbols_failed": health.symbols_failed,
+        "scan_completed_successfully": health.symbols_failed == 0,
         "average_symbol_runtime": health.average_symbol_runtime,
         "candidate_funnel": candidate_funnel,
         "telegram_summary": telegram_summary,
@@ -3748,6 +3842,7 @@ def _run_scanner_impl():
             entry_timing = evaluate_entry_timing(
                 shadow_entry_v2
             )
+            entry_optimizer = evaluate_entry_optimizer(shadow_entry_v2)
 
             if not df_15m.empty:
 
@@ -4233,7 +4328,8 @@ def _run_scanner_impl():
                                     else None
                                 )
                             },
-                            scan_id=scan_id
+                            scan_id=scan_id,
+                            mfe_r=shadow_exit_v2.get("mfe_r"),
                         )
                         debug_print(
                             f"[TELEGRAM EXIT ALERT] {symbol} "
@@ -4292,7 +4388,43 @@ def _run_scanner_impl():
 
                 else:
 
-                    if exit_setup.get("trade_action") == "PARTIAL_PROFIT":
+                    try:
+
+                        telegram_update_result = maybe_send_paper_trade_update_alert(
+                            active_trade,
+                            current_symbol_close,
+                            {
+                                "V2 Trend Health Status": shadow_exit_v2.get(
+                                    "trend_health_status"
+                                ),
+                                "V2 Trend Health Score": shadow_exit_v2.get(
+                                    "trend_health_score"
+                                ),
+                                "Scan ID": scan_id,
+                            },
+                            updated_stop=exit_setup.get("updated_stop"),
+                            partial_profit_taken=exit_setup.get(
+                                "partial_profit_taken",
+                                False,
+                            ),
+                            confidence_score=shadow_exit_v2.get(
+                                "trend_health_score"
+                            ),
+                        )
+                        debug_print(
+                            f"[TELEGRAM TRADE UPDATE] {symbol} "
+                            f"sent={telegram_update_result.get('sent')} "
+                            f"reason={telegram_update_result.get('reason')}"
+                        )
+
+                    except Exception as exc:
+
+                        print(f"[TELEGRAM TRADE UPDATE ERROR] {symbol}: {exc}")
+
+                    if (
+                        exit_setup.get("trade_action") == "PARTIAL_PROFIT"
+                        and active_trade.get("trade_mode") in {"PAPER", "REAL"}
+                    ):
 
                         try:
 
@@ -4374,7 +4506,9 @@ def _run_scanner_impl():
 
                         option_pl=active_option_pl,
 
-                        execution_metrics=shadow_exit_v2
+                        execution_metrics=shadow_exit_v2,
+
+                        exit_state=exit_setup
 
                     )          
 
@@ -4873,6 +5007,7 @@ def _run_scanner_impl():
                         risk_setup["stop_loss"],
                         risk_setup["take_profit"],
                         entry_type=entry_setup["entry_type"],
+                        direction=shadow_entry_v2.get("direction"),
                         option_data=option_recommendation,
                         contracts=(
                             position_data.get("contracts")
@@ -5008,6 +5143,65 @@ def _run_scanner_impl():
                 and not action_decision.get("realtime_confirmation_needed")
             )
 
+            if opened_trade_this_scan and active_trade:
+
+                try:
+
+                    telegram_open_result = maybe_send_trade_open_alert(
+                        active_trade,
+                        {
+                            "Action Status": action_decision["action_status"],
+                            "Candidate Direction": shadow_entry_v2.get("direction"),
+                            "Final Signal": final_signal,
+                            "Candidate RR": risk_setup.get("risk_reward"),
+                            "Expected Remaining Trend": entry_optimizer.get(
+                                "expected_remaining_trend"
+                            ),
+                            "Projected Entry Grade": entry_optimizer.get(
+                                "projected_entry_grade"
+                            ),
+                            "V2 Trend Health Score": None,
+                            "V2 Trend Health Status": None,
+                            "V2 Trend Age Bars": shadow_entry_v2.get(
+                                "trend_age_bars"
+                            ),
+                            "V2 Pullback Number": shadow_entry_v2.get(
+                                "pullback_number"
+                            ),
+                            "Relative Volume": relative_volume,
+                            "RS Rank Score": rs_rank_score,
+                            "Option Strike": option_recommendation.get("strike"),
+                            "Option Expiration": option_recommendation.get(
+                                "expiration"
+                            ),
+                            "Option Mid Price": option_recommendation.get(
+                                "mid_price"
+                            ),
+                            "Option Contract Cost": option_recommendation.get(
+                                "contract_cost"
+                            ),
+                            "Option Risk At Stop": option_recommendation.get(
+                                "risk_at_stop"
+                            ),
+                            "Option Spread %": option_spread_pct,
+                            "Option Quality Score": option_recommendation.get(
+                                "option_quality_score"
+                            ),
+                            "Option Quote Freshness": option_quote_status,
+                            "Scan ID": scan_id,
+                        },
+                        scan_id=scan_id,
+                    )
+                    debug_print(
+                        f"[TELEGRAM TRADE OPEN] {symbol} "
+                        f"sent={telegram_open_result.get('sent')} "
+                        f"reason={telegram_open_result.get('reason')}"
+                    )
+
+                except Exception as exc:
+
+                    print(f"[TELEGRAM TRADE OPEN ERROR] {symbol}: {exc}")
+
             explanation, next_condition = build_explanation_and_hint(
                 final_signal=final_signal,
                 entry_setup=entry_setup,
@@ -5063,6 +5257,12 @@ def _run_scanner_impl():
             result_row = {
 
                 "Symbol": symbol,
+
+                "__Regression Market Snapshot": _regression_market_snapshot(
+                    df_5m,
+                    df_15m,
+                    df_1h,
+                ),
 
                 "Suggestion Status": None,
 
@@ -5215,6 +5415,18 @@ def _run_scanner_impl():
 
                 "Entry Timing Reason": (
                     entry_timing.get("entry_timing_reason")
+                ),
+
+                "Entry Priority Adjustment": (
+                    entry_optimizer.get("entry_priority_adjustment")
+                ),
+
+                "Expected Remaining Trend": (
+                    entry_optimizer.get("expected_remaining_trend")
+                ),
+
+                "Projected Entry Grade": (
+                    entry_optimizer.get("projected_entry_grade")
                 ),
 
                 "V2 Shadow Trade Status": (

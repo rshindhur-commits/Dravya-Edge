@@ -8,7 +8,7 @@ from app.alerts.telegram_alerts import (
 
 class TelegramExitAlertGuardTests(unittest.TestCase):
 
-    def test_scanner_tracked_trade_cannot_send_exit_alert(self):
+    def test_scanner_tracked_trade_can_send_lifecycle_exit_alert(self):
 
         allowed, reason = _can_send_exit_alert(
             {
@@ -18,11 +18,8 @@ class TelegramExitAlertGuardTests(unittest.TestCase):
             "EXIT"
         )
 
-        self.assertFalse(allowed)
-        self.assertEqual(
-            reason,
-            "EXIT_ALERT_NOT_CONFIRMED_TRADE"
-        )
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "ELIGIBLE")
 
     def test_paper_trade_can_send_exit_alert_once(self):
 

@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 
-from app.analytics.candidate_snapshot_writer import normalize_candidate_row
+from app.analytics.candidate_snapshot_writer import (
+    SNAPSHOT_COLUMNS,
+    normalize_candidate_row,
+)
 from app.analytics.quote_attribution import build_quote_attribution
 from app.options.live_options_chain import _extract_quote_fields
 from app.options.option_metrics import classify_quote_freshness
@@ -42,6 +45,27 @@ def test_quote_provenance_survives_snapshot_and_lifecycle_mapping():
         assert record["option_quote_age_seconds"] == 30
         assert record["option_quote_allowed_age_seconds"] == 1800
         assert record["option_quote_freshness_reason"] == "AGE_WITHIN_ALLOWED_AGE"
+
+
+def test_entry_optimizer_fields_survive_snapshot_normalization():
+    snapshot = normalize_candidate_row({
+        "Symbol": "NVDA",
+        "Entry Priority Adjustment": 35,
+        "Expected Remaining Trend": 86,
+        "Projected Entry Grade": "A",
+        "Ranking Score": 93.5,
+    }, scan_id="scan-1")
+
+    assert snapshot["entry_priority_adjustment"] == 35
+    assert snapshot["expected_remaining_trend"] == 86
+    assert snapshot["projected_entry_grade"] == "A"
+    assert snapshot["ranking_score"] == 93.5
+    assert {
+        "entry_priority_adjustment",
+        "expected_remaining_trend",
+        "projected_entry_grade",
+        "ranking_score",
+    }.issubset(SNAPSHOT_COLUMNS)
 
 
 def test_quote_freshness_reports_current_time_age_threshold_and_reason():

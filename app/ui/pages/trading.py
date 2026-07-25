@@ -83,11 +83,21 @@ def _render_open_trades(state):
         st.caption("No active V1 scanner-managed trades.")
         return
 
+    intraday_count = sum(
+        str(trade.get("holding_profile") or "INTRADAY").upper() == "INTRADAY"
+        for trade in trades
+    )
+    multiday_count = len(trades) - intraday_count
+    intraday_column, multiday_column = st.columns(2)
+    intraday_column.metric("Intraday", intraday_count)
+    multiday_column.metric("Multi-day", multiday_count)
+
     columns = st.columns(min(3, len(trades)))
     for column, trade in zip(columns, trades):
         with column:
             st.markdown(f"### {trade.get('symbol')}")
             st.metric("R Progress", trade.get("r_progress") or "-")
+            st.caption(f"Holding: {trade.get('holding_profile') or 'INTRADAY'}")
             st.caption(f"Trend: {trade.get('trend_health') or '-'}")
             st.caption(f"Action: {_action_label(trade.get('action'))}")
 

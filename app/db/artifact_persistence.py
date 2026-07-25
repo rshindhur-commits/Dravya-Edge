@@ -4,6 +4,7 @@ from app.db.candidate_snapshot_repository import CandidateSnapshotRepository
 from app.db.decision_waterfall_repository import DecisionWaterfallRepository
 from app.db.persistence import record_gate_decisions, record_scanner_run_finish
 from app.db.rule_evaluation_repository import RuleEvaluationRepository
+from app.db.scanner_snapshot_repository import ScannerSnapshotRepository
 from app.analytics.decision_waterfall import (
     build_decision_waterfall,
     waterfall_rule_records,
@@ -12,7 +13,7 @@ from app.db.trade_fact_repository import TradeFactRepository
 from app.gates.rule_evaluation import build_rule_evaluations
 
 
-def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output_file=None):
+def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output_file=None, scan_timestamp=None, regression_market_snapshots=None):
     """Best-effort DB promotion of already-written scanner artifacts.
 
     This function must be invoked only by a RuntimeScheduler job.
@@ -50,6 +51,20 @@ def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output
             "rule_evaluations": len(rule_evaluations),
             "decision_waterfall_rules": len(waterfall_records),
         },
+    )
+
+
+def persist_regression_snapshot(records, trading_day, scan_id, health_payload, scan_timestamp=None, regression_market_snapshots=None):
+    if not (health_payload or {}).get("scan_completed_successfully"):
+        return {"enabled": False, "reason": "SCAN_INCOMPLETE"}
+    return ScannerSnapshotRepository().batch_insert(
+        trading_day=trading_day,
+        scan_id=scan_id,
+        scan_timestamp=scan_timestamp or (health_payload or {}).get("timestamp"),
+        scanner_version=(health_payload or {}).get("scanner_version"),
+        data_version=(records[0].get("Data Version") if records else None),
+        records=records,
+        market_snapshots=regression_market_snapshots,
     )
 
 

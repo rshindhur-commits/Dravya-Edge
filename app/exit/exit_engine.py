@@ -3,6 +3,8 @@ from datetime import time
 import pandas as pd
 
 from app.analytics.exit_waterfall import build_exit_waterfall
+from app.exit.exit_confidence import evaluate_exit_confidence
+from app.exit.trend_health_engine import evaluate_live_trend_health
 from app.utils.runtime_logging import debug_print
 
 
@@ -240,6 +242,22 @@ def evaluate_exit(
         stop_loss=stop_loss,
         is_short=is_short
     )
+    direction = "PUT" if is_short else "CALL"
+    trend_health = evaluate_live_trend_health(latest, direction)
+    mfe_r = _calculate_rr_progress(
+        lowest_price if is_short else highest_price,
+        entry_price,
+        stop_loss,
+        is_short,
+    )
+    exit_confidence = evaluate_exit_confidence(
+        latest,
+        trend_health,
+        rr_progress,
+        mfe_r,
+        bars_in_trade,
+        is_short,
+    )
 
     updated_stop = stop_loss
     trailing_stop = stop_loss
@@ -431,6 +449,20 @@ def evaluate_exit(
         exit_reason = "Hold"
         adjustment_reason = "Early weak exit guarded; trend intact"
 
+    selected_exit = _select_primary_exit(exit_reasons) if exit_signal else None
+    first_ema_break = (
+        selected_exit is not None
+        and selected_exit.get("code") == "EMA"
+        and len(exit_reasons) == 1
+        and not bool((trade_state or {}).get("v1_ema_grace_pending"))
+    )
+    grace_zone_active = first_ema_break and exit_confidence["grace_zone_eligible"]
+    if grace_zone_active:
+        exit_signal = False
+        exit_reason = "Hold"
+        trade_action = "HOLD"
+        adjustment_reason = "EMA grace zone active; awaiting one-bar confirmation"
+
     if exit_signal:
 
         trade_action = "EXIT"
@@ -495,5 +527,9 @@ def evaluate_exit(
         "bars_in_trade": int(bars_in_trade),
         "partial_profit_taken": partial_profit_taken,
         "trade_action": trade_action,
-        "adjustment_reason": adjustment_reason
+        "adjustment_reason": adjustment_reason,
+        "trend_health_score": trend_health["score"],
+        "exit_confidence_score": exit_confidence["exit_confidence_score"],
+        "grace_zone_active": grace_zone_active,
+        "v1_ema_grace_pending": grace_zone_active,
     }

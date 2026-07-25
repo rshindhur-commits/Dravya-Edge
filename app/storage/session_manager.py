@@ -130,6 +130,19 @@ def finalize_daily_report(trading_day=None):
     manifest["finalized"] = True
     manifest["finalized_at"] = now_et().strftime("%Y-%m-%d %H:%M:%S")
 
+    try:
+
+        from app.regression import freeze_baseline
+
+        baseline_path = freeze_baseline(trading_day)
+        if baseline_path:
+
+            manifest["regression_baseline"] = str(baseline_path)
+
+    except Exception as exc:
+
+        print(f"[REGRESSION BASELINE WARNING] {exc}")
+
     return save_session_manifest(manifest)
 
 

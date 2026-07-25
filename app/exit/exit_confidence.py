@@ -90,7 +90,7 @@ def evaluate_exit_confidence(latest, health, current_r, mfe_r, bars_in_trade, is
         "soft_confirmations": soft_confirmations,
         "soft_confirmation_count": len(soft_confirmations),
         "grace_zone_eligible": (
-            score >= 80
+            score >= 60
             and (_number(current_r) > 0 or _number(mfe_r) >= 1)
             and len(soft_confirmations) == 1
             and not bool(health.get("trend_failure_confirmed"))

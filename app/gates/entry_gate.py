@@ -310,7 +310,7 @@ def has_active_symbol_trade(state: dict, symbol: str) -> bool:
 
     return any(
         trade.get("symbol") == symbol
-        and trade.get("status") == "OPEN"
+        and trade.get("status") in {"OPEN", "PAUSED"}
         for trade in (state or {}).values()
     )
 
@@ -321,7 +321,7 @@ def active_symbol_trade(state: dict, symbol: str):
 
         if (
             trade.get("symbol") == symbol
-            and trade.get("status") == "OPEN"
+            and trade.get("status") in {"OPEN", "PAUSED"}
         ):
 
             return key, trade
