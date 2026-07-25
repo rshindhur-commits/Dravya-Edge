@@ -1,6 +1,7 @@
 import pandas as pd
 
 from app.state import suggested_trade_manager
+from app.state.holding_policy import HoldingProfile, derive_holding_profile
 from app.state.suggested_trade_manager import _base_status, _row_get, suggestion_id_from_row
 
 
@@ -13,6 +14,7 @@ def test_duplicate_dataframe_columns_are_normalized_to_scalars():
     assert _row_get(row, "Symbol") == "NVDA"
     assert suggestion_id_from_row(row) == "NVDA|CALL|EMA_PULLBACK|NVDA 24AUG26 180C"
     assert _base_status(row, is_new=True) == "NEW_CALL"
+    assert derive_holding_profile(row) is HoldingProfile.INTRADAY
 
 
 def test_promotion_reconciles_expired_suggestion(monkeypatch):

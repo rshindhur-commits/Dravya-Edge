@@ -46,7 +46,7 @@ def holding_policy(value: Any) -> TradeHoldingPolicy:
 
 
 def derive_holding_profile(candidate: dict[str, Any] | None) -> HoldingProfile:
-    candidate = candidate or {}
+    candidate = {} if candidate is None else candidate
     explicit = (
         candidate.get("holding_profile")
         or candidate.get("Holding Profile")
