@@ -1,8 +1,138 @@
 {
-  "generated_at_utc": "2026-07-25T02:32:11.568752+00:00",
-  "performance_rows": 60,
-  "metrics_rows": 125,
+  "generated_at_utc": "2026-07-25T03:57:48.365223+00:00",
+  "performance_rows": 73,
+  "metrics_rows": 148,
   "recent_timings": [
+    {
+      "observed_at_utc": "2026-07-25T03:57:48.359429+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.933,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:47.389136+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 4.0149,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:43.340865+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.978,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:42.328653+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.9005,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:41.393748+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.8698,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:40.490681+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.9134,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:39.539705+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 4.1438,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:35.355751+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.8938,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:34.428355+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.8787,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:33.516999+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.9416,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:32.502842+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.9407,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:31.517796+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 1.3658,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:48:05.285309+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.0,
+      "metadata": "{}"
+    },
     {
       "observed_at_utc": "2026-07-25T02:32:11.555309+00:00",
       "trading_day": NaN,
@@ -122,139 +252,262 @@
       "page": NaN,
       "seconds": 0.966,
       "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:47.331884+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.9897,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:46.290971+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 1.0212,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:56:45.218541+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.0,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:56:12.346182+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.0,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:55:40.514186+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.0,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:55:19.845494+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.0,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:54:54.823866+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.0,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:41:53.725346+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.0,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:40:57.324986+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.0,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:35.939894+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.8554,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:35.052707+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.8707,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:34.143061+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.9611,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:33.135665+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 1.1865,
-      "metadata": "{}"
     }
   ],
   "recent_jobs": [
+    {
+      "observed_at_utc": "2026-07-25T03:57:47.629423+00:00",
+      "scan_id": NaN,
+      "job_id": "ad5b0fd6-c6f1-42e3-9c92-205a9c4e91fe",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0413,
+      "queue_runtime": 0.1612,
+      "total_runtime": 0.2024,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:47.466678+00:00",
+      "scan_id": NaN,
+      "job_id": "1f45d920-fdbd-4cc8-b63a-4ed60beeb0c2",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0012,
+      "queue_runtime": 0.0439,
+      "total_runtime": 0.0452,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:43.583349+00:00",
+      "scan_id": NaN,
+      "job_id": "018b6e5c-e0fa-4acf-873a-aedfa5e3cc19",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0429,
+      "queue_runtime": 0.1659,
+      "total_runtime": 0.2088,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:43.415929+00:00",
+      "scan_id": NaN,
+      "job_id": "2bb08beb-24a5-4193-9ff6-d9f4b6b4f7a9",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0019,
+      "queue_runtime": 0.0445,
+      "total_runtime": 0.0465,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:42.572328+00:00",
+      "scan_id": NaN,
+      "job_id": "4ad74de2-f25b-4846-913a-081a03498a02",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0447,
+      "queue_runtime": 0.1645,
+      "total_runtime": 0.2091,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:42.406447+00:00",
+      "scan_id": NaN,
+      "job_id": "4206c4a1-7797-4bb0-bc6f-ec1447474291",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0006,
+      "queue_runtime": 0.0461,
+      "total_runtime": 0.0468,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:41.633116+00:00",
+      "scan_id": NaN,
+      "job_id": "58c0c459-f336-4a04-812c-54dda4f536f3",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0436,
+      "queue_runtime": 0.1616,
+      "total_runtime": 0.2051,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:41.469487+00:00",
+      "scan_id": NaN,
+      "job_id": "5c27cf9d-e6c6-4562-9728-fa5543f0d1d2",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0006,
+      "queue_runtime": 0.0444,
+      "total_runtime": 0.045,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:40.729479+00:00",
+      "scan_id": NaN,
+      "job_id": "04af700e-4b8a-4736-a47c-9292162db442",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0451,
+      "queue_runtime": 0.1598,
+      "total_runtime": 0.2049,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:40.567855+00:00",
+      "scan_id": NaN,
+      "job_id": "da15a4a0-6e80-472f-9760-e03f22143e70",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0009,
+      "queue_runtime": 0.0486,
+      "total_runtime": 0.0494,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:39.791326+00:00",
+      "scan_id": NaN,
+      "job_id": "58b70099-b4e6-4587-8005-c6177310bbd4",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0496,
+      "queue_runtime": 0.1641,
+      "total_runtime": 0.2138,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:39.625647+00:00",
+      "scan_id": NaN,
+      "job_id": "b05685dc-793e-456e-a6d5-a4c971bd4c43",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0056,
+      "queue_runtime": 0.0461,
+      "total_runtime": 0.0517,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:35.595887+00:00",
+      "scan_id": NaN,
+      "job_id": "902700cc-0818-4451-b796-f6f05410cf3b",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0398,
+      "queue_runtime": 0.1595,
+      "total_runtime": 0.1993,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:35.434248+00:00",
+      "scan_id": NaN,
+      "job_id": "a9311788-0db2-466a-8398-73e87fac4947",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0015,
+      "queue_runtime": 0.0442,
+      "total_runtime": 0.0457,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:34.664422+00:00",
+      "scan_id": NaN,
+      "job_id": "7847cf63-1496-479a-98a7-e94230fd4ff2",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.043,
+      "queue_runtime": 0.1595,
+      "total_runtime": 0.2025,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:34.503569+00:00",
+      "scan_id": NaN,
+      "job_id": "5fa89a29-b161-4901-a2ad-19703c429212",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.001,
+      "queue_runtime": 0.0455,
+      "total_runtime": 0.0464,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:33.757738+00:00",
+      "scan_id": NaN,
+      "job_id": "09a97cde-040b-42b5-9979-c2ed68d1118e",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0417,
+      "queue_runtime": 0.1661,
+      "total_runtime": 0.2077,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:33.590015+00:00",
+      "scan_id": NaN,
+      "job_id": "d5f699d3-4b57-49d6-a5b7-d42889e59ccc",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0007,
+      "queue_runtime": 0.046,
+      "total_runtime": 0.0468,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:32.745389+00:00",
+      "scan_id": NaN,
+      "job_id": "1cc74212-f235-4cf7-b487-b1cecba40057",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0115,
+      "queue_runtime": 0.1583,
+      "total_runtime": 0.1697,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:32.585557+00:00",
+      "scan_id": NaN,
+      "job_id": "a539c99e-c2c3-4b2f-acf3-cad9fb207c3b",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0008,
+      "queue_runtime": 0.0463,
+      "total_runtime": 0.0472,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:32.184113+00:00",
+      "scan_id": NaN,
+      "job_id": "5c7325e8-e86a-4087-9ccd-0c6be49100c9",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.4617,
+      "queue_runtime": 0.1598,
+      "total_runtime": 0.6215,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:32.022656+00:00",
+      "scan_id": NaN,
+      "job_id": "538762d5-a696-44b8-8eb9-44ff1f57ed6e",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.4172,
+      "queue_runtime": 0.0504,
+      "total_runtime": 0.4675,
+      "status": "COMPLETED"
+    },
+    {
+      "observed_at_utc": "2026-07-25T03:57:31.970754+00:00",
+      "scan_id": NaN,
+      "job_id": "78e71722-4c76-404a-a627-4ed8f82aee98",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.002,
+      "queue_runtime": 1.817,
+      "total_runtime": 1.819,
+      "status": "COMPLETED"
+    },
     {
       "observed_at_utc": "2026-07-24T23:58:54.319399+00:00",
       "scan_id": NaN,
@@ -276,259 +529,6 @@
       "queue_runtime": 0.1699,
       "total_runtime": 0.2137,
       "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:50.283316+00:00",
-      "scan_id": NaN,
-      "job_id": "6c4e3d0b-8473-4a4e-9b38-86d1aed937c5",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0007,
-      "queue_runtime": 0.0459,
-      "total_runtime": 0.0466,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:49.527825+00:00",
-      "scan_id": NaN,
-      "job_id": "8f1bcd0d-784f-408e-9290-60d76ba1a0f5",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0429,
-      "queue_runtime": 0.1682,
-      "total_runtime": 0.2111,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:49.358029+00:00",
-      "scan_id": NaN,
-      "job_id": "0a7545f4-67ee-4752-b753-1c876eccdf8b",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0011,
-      "queue_runtime": 0.0462,
-      "total_runtime": 0.0473,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:48.613399+00:00",
-      "scan_id": NaN,
-      "job_id": "cb2c6b89-667d-4c8a-9db9-5a7cb87f3aff",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0415,
-      "queue_runtime": 0.1812,
-      "total_runtime": 0.2227,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:48.430635+00:00",
-      "scan_id": NaN,
-      "job_id": "1cf661df-aa40-4dec-92d9-e67161ac44e2",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0006,
-      "queue_runtime": 0.0458,
-      "total_runtime": 0.0463,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:47.584766+00:00",
-      "scan_id": NaN,
-      "job_id": "233f00be-75d3-40fb-a7f5-affca94a8e45",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.023,
-      "queue_runtime": 0.1711,
-      "total_runtime": 0.1941,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:47.412422+00:00",
-      "scan_id": NaN,
-      "job_id": "c0743d23-cbad-4ed6-a8fb-cf0743576ab9",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0006,
-      "queue_runtime": 0.0507,
-      "total_runtime": 0.0513,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:46.602923+00:00",
-      "scan_id": NaN,
-      "job_id": "3c75c557-6fec-482b-9b32-2f7bcf44b171",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0927,
-      "queue_runtime": 0.168,
-      "total_runtime": 0.2607,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:46.433873+00:00",
-      "scan_id": NaN,
-      "job_id": "65ac7849-5ac3-42fc-8f71-4e87d1c4f372",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.001,
-      "queue_runtime": 0.0975,
-      "total_runtime": 0.0985,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:58:46.093098+00:00",
-      "scan_id": NaN,
-      "job_id": "4924388b-98ce-4255-ad2b-0f0e42c813f3",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0011,
-      "queue_runtime": 0.8213,
-      "total_runtime": 0.8224,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:36.026574+00:00",
-      "scan_id": NaN,
-      "job_id": "0d8da703-9902-4054-8e98-7e220d28d085",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0021,
-      "queue_runtime": 0.047,
-      "total_runtime": 0.0491,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:35.294092+00:00",
-      "scan_id": NaN,
-      "job_id": "ea1da883-8d57-428a-ac8a-913da7213cf6",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0474,
-      "queue_runtime": 0.1617,
-      "total_runtime": 0.2092,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:35.130876+00:00",
-      "scan_id": NaN,
-      "job_id": "b1af9191-18be-426f-86be-8b07c3ad00a9",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0012,
-      "queue_runtime": 0.0487,
-      "total_runtime": 0.0499,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:34.392316+00:00",
-      "scan_id": NaN,
-      "job_id": "f79dc394-2d93-4c97-9dc5-c814ec2e492a",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0463,
-      "queue_runtime": 0.1639,
-      "total_runtime": 0.2102,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:34.227078+00:00",
-      "scan_id": NaN,
-      "job_id": "03c8cfb6-08c5-4583-bb3f-858d08beda7b",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0008,
-      "queue_runtime": 0.0486,
-      "total_runtime": 0.0494,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:33.393152+00:00",
-      "scan_id": NaN,
-      "job_id": "1c369f58-c37b-4d51-a382-e439fef0dfe6",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0403,
-      "queue_runtime": 0.1706,
-      "total_runtime": 0.2109,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:33.221159+00:00",
-      "scan_id": NaN,
-      "job_id": "40c5a4e6-24aa-4b8b-bae9-a70aee173fd9",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0007,
-      "queue_runtime": 0.0512,
-      "total_runtime": 0.0519,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:21:32.804865+00:00",
-      "scan_id": NaN,
-      "job_id": "80257d32-857b-44dc-8ec7-73b3a6b8427b",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0011,
-      "queue_runtime": 0.8536,
-      "total_runtime": 0.8547,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:13:29.860377+00:00",
-      "scan_id": NaN,
-      "job_id": "1cca5431-bb1f-4e21-abcf-6f54f12f772d",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.001,
-      "queue_runtime": 0.0447,
-      "total_runtime": 0.0457,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:13:29.016753+00:00",
-      "scan_id": NaN,
-      "job_id": "971e513c-51a6-40f3-9e88-10188e6efaf8",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.05,
-      "queue_runtime": 0.1829,
-      "total_runtime": 0.233,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:13:28.832467+00:00",
-      "scan_id": NaN,
-      "job_id": "769c6a63-d112-4878-9057-12900bc7db72",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0011,
-      "queue_runtime": 0.0518,
-      "total_runtime": 0.0529,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:13:28.184181+00:00",
-      "scan_id": NaN,
-      "job_id": "e973f8bd-0900-4d51-87c4-6a74294d1a0e",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.1415,
-      "queue_runtime": 0.1553,
-      "total_runtime": 0.2968,
-      "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-24T23:13:28.027561+00:00",
-      "scan_id": NaN,
-      "job_id": "87a67cac-4a82-4088-a748-c14275dfb5ad",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.1002,
-      "queue_runtime": 0.0435,
-      "total_runtime": 0.1437,
-      "status": "COMPLETED"
     }
   ],
   "average_seconds_by_stage": [
@@ -536,7 +536,7 @@
       "category": "telegram",
       "stage": "send_telegram_alert",
       "page": NaN,
-      "average_seconds": 0.351
+      "average_seconds": 0.532
     }
   ],
   "average_runtime_by_job": [
@@ -550,7 +550,7 @@
     },
     {
       "job_name": "insert",
-      "average_runtime": 0.3195
+      "average_runtime": 0.2947
     }
   ]
 }

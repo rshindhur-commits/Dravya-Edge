@@ -60,6 +60,39 @@ def restore_open_multiday_positions(trading_day=None):
     return restored
 
 
+def restore_carried_intraday_positions(trading_day=None):
+    trading_day = trading_day or get_trading_day()
+    current_session_id = get_session_id(trading_day)
+    state = load_paper_trades()
+    restored = []
+
+    for trade_key, trade in state.items():
+        if str(trade.get("status")).upper() != "OPEN":
+            continue
+        if not holding_policy(trade.get("holding_profile")).force_eod_exit:
+            continue
+        opened = _opened_date(trade)
+        if opened is None or str(opened) >= trading_day:
+            continue
+        if trade.get("carried_intraday_session_id") == current_session_id:
+            continue
+        refresh_trade_lifecycle_fields(trade, trading_day)
+        trade["session_id_current"] = current_session_id
+        trade["overnight_transition"] = False
+        trade["overnight_intraday_carry"] = True
+        trade["carried_intraday_session_id"] = current_session_id
+        trade["overnight_carry_warning"] = (
+            "Intraday trade carried overnight because Auto Close Intraday Trades was disabled."
+        )
+        state[trade_key] = trade
+        restored.append(trade)
+
+    if restored:
+        save_paper_trades(state)
+
+    return restored
+
+
 def archive_prior_session_candidates(trading_day=None):
     trading_day = trading_day or get_trading_day()
     state = load_suggestions()
@@ -94,6 +127,7 @@ def initialize_session_lifecycle(trading_day=None, restore_multiday_positions=Tr
             if restore_multiday_positions
             else []
         ),
+        "carried_intraday_positions": restore_carried_intraday_positions(trading_day),
         "archived_candidates": archive_prior_session_candidates(trading_day),
     }
 

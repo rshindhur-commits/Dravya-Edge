@@ -2,6 +2,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 from app.alerts.telegram_alerts import (
+    _exit_reason_label,
     build_multiday_position_continue_message,
     build_paper_trade_update_message,
     build_trade_cancelled_alert_message,
@@ -18,6 +19,7 @@ from app.state.paper_trade_manager import (
 from app.state.trade_session_lifecycle import (
     archive_prior_session_candidates,
     initialize_session_lifecycle,
+    restore_carried_intraday_positions,
     restore_open_multiday_positions,
 )
 
@@ -165,6 +167,31 @@ def test_restore_marks_open_multiday_trade_for_continuation():
     save_state.assert_called_once_with(state)
 
 
+def test_carried_intraday_trade_stays_intraday_with_operational_warning():
+    state = {
+        "intraday": {
+            "trade_key": "intraday",
+            "symbol": "NFLX",
+            "status": "OPEN",
+            "holding_profile": "INTRADAY",
+            "opened_at": "2026-07-23 14:30:00",
+        }
+    }
+    with patch(
+        "app.state.trade_session_lifecycle.load_paper_trades", return_value=state
+    ), patch(
+        "app.state.trade_session_lifecycle.save_paper_trades"
+    ) as save_state:
+        restored = restore_carried_intraday_positions("2026-07-24")
+
+    assert [trade["trade_key"] for trade in restored] == ["intraday"]
+    assert state["intraday"]["holding_profile"] == "INTRADAY"
+    assert state["intraday"]["overnight_transition"] is False
+    assert state["intraday"]["overnight_intraday_carry"] is True
+    assert "Auto Close Intraday Trades was disabled" in state["intraday"]["overnight_carry_warning"]
+    save_state.assert_called_once_with(state)
+
+
 def test_restore_toggle_skips_multiday_restore_but_still_archives_candidates():
     with patch(
         "app.state.trade_session_lifecycle.restore_open_multiday_positions"
@@ -177,7 +204,11 @@ def test_restore_toggle_skips_multiday_restore_but_still_archives_candidates():
             restore_multiday_positions=False,
         )
 
-    assert result == {"restored_positions": [], "archived_candidates": ["stale-candidate"]}
+    assert result == {
+        "restored_positions": [],
+        "carried_intraday_positions": [],
+        "archived_candidates": ["stale-candidate"],
+    }
     restore.assert_not_called()
 
 
@@ -289,10 +320,20 @@ def test_close_and_cancelled_messages_include_subscriber_closure_details():
     )
 
     assert "TRADE CLOSED" in close
-    assert "🛑 Trade Thesis Invalidated" in close
+    assert "🟥 Stop Loss" in close
     assert "Risk Managed: According to Plan" in close
     assert "Holding Time: 3h 12m" in close
     assert "Jul 24, 2026 · 12:42 ET" in close
     assert "TRADE CANCELLED" in cancelled
     assert "No action taken." in cancelled
     assert "Jul 24, 2026 · 11:00 ET" in cancelled
+
+
+def test_closed_trade_exit_categories_are_consistent():
+    assert _exit_reason_label("TARGET_HIT") == "🟩 Target Hit"
+    assert _exit_reason_label("STOP_HIT") == "🟥 Stop Loss"
+    assert _exit_reason_label("EMA20_BREAK") == "🟨 EMA Exit"
+    assert _exit_reason_label("VWAP_LOSS") == "🟦 VWAP Exit"
+    assert _exit_reason_label("END_OF_DAY") == "🟪 Time Exit"
+    assert _exit_reason_label("FAILED_BREAKOUT") == "⚠️ Failed Breakout"
+    assert _exit_reason_label("Manual paper exit") == "📈 Manual Exit"
