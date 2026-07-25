@@ -3910,8 +3910,7 @@ def _auto_refresh_defaults():
             saved_auto_settings.get(
                 "restore_multiday_positions",
                 True
-            ),
-            True
+            )
         )
 
     if "auto_paper_profit_r" not in st.session_state:
