@@ -262,9 +262,15 @@ def run_auto_paper_exits(df, controls):
 
     try:
 
-        initialize_session_lifecycle(
+        session_lifecycle = initialize_session_lifecycle(
             restore_multiday_positions=controls.get("restore_multiday_positions", True),
         )
+        for carried_trade in session_lifecycle.get("carried_intraday_positions", []):
+            print(
+                "[INTRADAY OVERNIGHT CARRY] "
+                f"{carried_trade.get('symbol')}: "
+                f"{carried_trade.get('overnight_carry_warning')}"
+            )
         paper_trades = load_paper_trades()
 
     except Exception:

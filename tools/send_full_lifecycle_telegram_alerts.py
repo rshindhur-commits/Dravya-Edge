@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import sys
 from pathlib import Path
 
@@ -27,13 +28,13 @@ trade = {
     'option_entry_mid': 3.25,
     'option_mid': 3.25,
     'option_contracts': 1,
-    'trade_key': 'TEST-SPCX-LIFECYCLE-002',
-    'opened_at': '2026-07-24 11:15:00',
+    'trade_key': 'TEST-SPCX-LIFECYCLE-003',
+    'opened_at': '2026-07-24 13:15:00',
     'holding_profile': 'MULTIDAY',
     'days_held': 2,
     'overnight_count': 1,
     'overnight_transition': True,
-    'session_id_current': 'paper_validation_2026-07-24_lifecycle_test',
+    'session_id_current': 'paper_validation_2026-07-24_lifecycle_test_003',
 }
 scanner_context = {
     'Action Status': 'ENTER_PAPER',
@@ -91,24 +92,40 @@ print(maybe_send_trade_exit_alert(
     mfe_r=2.1,
 ))
 
-print('\n--- SEND TRADE CLOSED ---')
-print(maybe_send_trade_exit_alert(
-    'SPCX',
-    trade,
-    exit_reason='TARGET_HIT',
-    current_price=335.0,
-    option_current_mid=5.90,
-    pnl_pct=81.5,
-    r_multiple=2.0,
-    outcome='WIN',
-    event_type='EXIT',
-    mfe_r=2.8,
-))
+closed_categories = [
+    ('TARGET_HIT', 335.0, 5.90, 81.5, 2.0, 'WIN'),
+    ('STOP_HIT', 319.0, 2.45, -24.6, -1.0, 'LOSS'),
+    ('EMA_EXIT', 329.0, 4.00, 23.1, 0.67, 'WIN'),
+    ('VWAP_EXIT', 326.0, 3.45, 6.2, 0.17, 'WIN'),
+    ('TIME_EXIT', 327.0, 3.60, 10.8, 0.33, 'WIN'),
+    ('FAILED_BREAKOUT', 321.0, 2.75, -15.4, -0.67, 'LOSS'),
+    ('MANUAL_EXIT', 331.0, 4.50, 38.5, 1.0, 'WIN'),
+]
+
+for index, (reason, price, option_mid, pnl_pct, r_multiple, outcome) in enumerate(closed_categories, start=1):
+    exit_trade = deepcopy(trade)
+    exit_trade['trade_key'] = f"TEST-SPCX-CLOSED-CATEGORY-{index:02d}"
+    exit_trade['option_ticker'] = f"SPCX 24AUG26 {325 + index}C"
+    exit_trade['opened_at'] = f"2026-07-24 13:{15 + index:02d}:00"
+    exit_trade['exit_alert_sent'] = False
+    print(f'\n--- SEND TRADE CLOSED: {reason} ---')
+    print(maybe_send_trade_exit_alert(
+        'SPCX',
+        exit_trade,
+        exit_reason=reason,
+        current_price=price,
+        option_current_mid=option_mid,
+        pnl_pct=pnl_pct,
+        r_multiple=r_multiple,
+        outcome=outcome,
+        event_type='EXIT',
+        mfe_r=max(abs(r_multiple), 1.0),
+    ))
 
 print('\n--- SEND TRADE CANCELLED ---')
 print(maybe_send_trade_cancelled_alert(
     {
-        'suggestion_id': 'TEST-SPCX-CANCELLED-002',
+        'suggestion_id': 'TEST-SPCX-CANCELLED-003',
         'symbol': 'SPCX',
         'direction': 'PUT',
         'option_ticker': 'SPCX 24AUG26 320P',

@@ -97,7 +97,19 @@ Paper-trade state retains `trade_state`, `holding_profile`, `opened_at`, `closed
 
 The Day 2 subscriber message is `POSITION CONTINUES`, not `NEW TRADE`; it identifies when the trade opened, current $R$, trend health, and the hold action. The Trading page shows separate Intraday and Multi-day counts for open trades.
 
-`Auto Exit` controls normal stop, target, live-exit, and profit-threshold rules. `Auto Close Intraday Trades` is an independent final EOD policy step: when enabled, it closes only trades whose **current** profile is `INTRADAY`, even when normal Auto Exit is disabled. Multi-day positions remain open unless a normal exit rule fires. `Restore Multi-day Positions` defaults to on and controls next-session restoration without changing candidate archival.
+The Paper Automation sidebar names its three lifecycle phases explicitly:
+
+| Control | When it acts | Behavior |
+| --- | --- | --- |
+| `Auto Exit (During Market Hours)` | During the session | Evaluates normal stop, target, live-exit, invalidation, and profit-threshold rules. |
+| `Force Close Intraday at Market Close` | At market close | Closes only trades whose current profile is `INTRADAY`, even when Auto Exit is disabled. |
+| `Restore Multi-day Positions Next Session` | Next market session | Restores eligible multi-day positions without changing candidate archival. |
+
+Multi-day positions remain open unless a normal exit rule fires.
+
+Disabling `Auto Close Intraday Trades` does **not** promote an `INTRADAY` trade to `MULTIDAY`. If such a trade remains open overnight, the next session restores it as `INTRADAY`, refreshes its holding duration, and records the warning: `Intraday trade carried overnight because Auto Close Intraday Trades was disabled.` It does not receive a `POSITION CONTINUES` alert or become eligible for multi-day restoration rules.
+
+`TRADE CLOSED` remains one subscriber message type, but its `Reason` line uses a standardized category when applicable: `🟥 Stop Loss`, `🟩 Target Hit`, `🟨 EMA Exit`, `🟦 VWAP Exit`, `🟪 Time Exit`, `⚠️ Failed Breakout`, or `📈 Manual Exit`. Other engine exits retain a concise generic trend, market, or profit-lock category.
 
 Holding profile is frozen when a trade opens. It may change only through the paper-trade manager's `MANUAL_OVERRIDE` or future `BROKER_SYNC` source; scanner, exit engine, Telegram, and ranking code do not promote or demote it. `PAUSED` and `RESUMED` are operational trade states for data/provider outages, halts, or controlled runtime restarts. A paused trade blocks additional entries for that symbol and does not receive automated management until resumed.
 

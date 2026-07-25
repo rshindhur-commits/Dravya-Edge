@@ -3959,15 +3959,15 @@ def _render_auto_paper_controls():
         key="auto_paper_direction"
     )
     auto_exit_enabled = st.sidebar.toggle(
-        "Auto Exit",
+        "Auto Exit (During Market Hours)",
         key="auto_paper_exit_enabled"
     )
     eod_close_enabled = st.sidebar.toggle(
-        "Auto Close Intraday Trades",
+        "Force Close Intraday at Market Close",
         key="auto_paper_eod_close_enabled"
     )
     restore_multiday_positions = st.sidebar.toggle(
-        "Restore Multi-day Positions",
+        "Restore Multi-day Positions Next Session",
         key="restore_multiday_positions"
     )
 

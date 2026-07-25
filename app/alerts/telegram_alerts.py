@@ -1338,15 +1338,31 @@ def _exit_reason_label(exit_reason):
     normalized = str(exit_reason or "").upper()
     if "TARGET" in normalized:
 
-        return "🎯 Target Hit"
+        return "🟩 Target Hit"
 
     if "STOP" in normalized:
 
-        return "🛑 Trade Thesis Invalidated"
+        return "🟥 Stop Loss"
+
+    if "FAILED BREAKOUT" in normalized or "FAILED_BREAKOUT" in normalized:
+
+        return "⚠️ Failed Breakout"
+
+    if "EMA" in normalized:
+
+        return "🟨 EMA Exit"
+
+    if "VWAP" in normalized:
+
+        return "🟦 VWAP Exit"
 
     if "TIME" in normalized or "END_OF_DAY" in normalized:
 
-        return "⏰ Time Exit"
+        return "🟪 Time Exit"
+
+    if "MANUAL" in normalized:
+
+        return "📈 Manual Exit"
 
     if "PROFIT" in normalized:
 
@@ -1356,7 +1372,7 @@ def _exit_reason_label(exit_reason):
 
         return "⚠ Market Weakness"
 
-    if any(token in normalized for token in ("TREND", "MOMENTUM", "VWAP", "EMA", "BREAKDOWN")):
+    if any(token in normalized for token in ("TREND", "MOMENTUM", "BREAKDOWN")):
 
         return "📉 Trend Failure"
 

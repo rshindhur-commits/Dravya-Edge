@@ -59,3 +59,16 @@ observed_at_utc,trading_day,scan_id,category,stage,page,seconds,metadata
 2026-07-25T02:07:26.424144+00:00,,,telegram,send_telegram_alert,,0.0,{}
 2026-07-25T02:11:05.882585+00:00,,,telegram,send_telegram_alert,,0.0,{}
 2026-07-25T02:32:11.555309+00:00,,,telegram,send_telegram_alert,,0.0,{}
+2026-07-25T03:48:05.285309+00:00,,,telegram,send_telegram_alert,,0.0,{}
+2026-07-25T03:57:31.517796+00:00,,,telegram,send_telegram_alert,,1.3658,{}
+2026-07-25T03:57:32.502842+00:00,,,telegram,send_telegram_alert,,0.9407,{}
+2026-07-25T03:57:33.516999+00:00,,,telegram,send_telegram_alert,,0.9416,{}
+2026-07-25T03:57:34.428355+00:00,,,telegram,send_telegram_alert,,0.8787,{}
+2026-07-25T03:57:35.355751+00:00,,,telegram,send_telegram_alert,,0.8938,{}
+2026-07-25T03:57:39.539705+00:00,,,telegram,send_telegram_alert,,4.1438,{}
+2026-07-25T03:57:40.490681+00:00,,,telegram,send_telegram_alert,,0.9134,{}
+2026-07-25T03:57:41.393748+00:00,,,telegram,send_telegram_alert,,0.8698,{}
+2026-07-25T03:57:42.328653+00:00,,,telegram,send_telegram_alert,,0.9005,{}
+2026-07-25T03:57:43.340865+00:00,,,telegram,send_telegram_alert,,0.978,{}
+2026-07-25T03:57:47.389136+00:00,,,telegram,send_telegram_alert,,4.0149,{}
+2026-07-25T03:57:48.359429+00:00,,,telegram,send_telegram_alert,,0.933,{}
