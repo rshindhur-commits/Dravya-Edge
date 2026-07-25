@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from app.gates import price_geometry_error
 from app.state.holding_policy import derive_holding_profile
 from app.storage.signal_lifecycle_store import record_signal_expiry_transition
@@ -113,7 +115,18 @@ def _safe_float(value, default=None):
         return default
 
 
+def _normalize_row(row):
+
+    if isinstance(row, pd.Series) and row.index.has_duplicates:
+
+        return row[~row.index.duplicated(keep="last")]
+
+    return row
+
+
 def _row_get(row, *names, default=None):
+
+    row = _normalize_row(row)
 
     for name in names:
 
@@ -134,6 +147,8 @@ def _row_get(row, *names, default=None):
 
 def suggestion_id_from_row(row):
 
+    row = _normalize_row(row)
+
     symbol = str(row.get("Symbol") or "UNKNOWN")
     direction = str(row.get("Candidate Direction") or "NONE")
     setup_type = str(row.get("Entry") or "NO_ENTRY")
@@ -148,6 +163,8 @@ def suggestion_id_from_row(row):
 
 
 def _base_status(row, is_new):
+
+    row = _normalize_row(row)
 
     direction = str(row.get("Candidate Direction") or "")
 
@@ -172,6 +189,7 @@ def _base_status(row, is_new):
 
 def upsert_suggestion_from_scan(row):
 
+    row = _normalize_row(row)
     state = load_suggestions()
     suggestion_id = suggestion_id_from_row(row)
     now = _now_str()

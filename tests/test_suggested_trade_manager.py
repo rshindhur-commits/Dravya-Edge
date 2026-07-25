@@ -1,4 +1,18 @@
+import pandas as pd
+
 from app.state import suggested_trade_manager
+from app.state.suggested_trade_manager import _base_status, _row_get, suggestion_id_from_row
+
+
+def test_duplicate_dataframe_columns_are_normalized_to_scalars():
+    row = pd.Series(
+        ["NVDA", "NVDA", "CALL", "EMA_PULLBACK", "NVDA 24AUG26 180C"],
+        index=["Symbol", "Symbol", "Candidate Direction", "Entry", "Option Ticker"],
+    )
+
+    assert _row_get(row, "Symbol") == "NVDA"
+    assert suggestion_id_from_row(row) == "NVDA|CALL|EMA_PULLBACK|NVDA 24AUG26 180C"
+    assert _base_status(row, is_new=True) == "NEW_CALL"
 
 
 def test_promotion_reconciles_expired_suggestion(monkeypatch):
