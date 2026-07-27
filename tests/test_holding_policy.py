@@ -35,6 +35,18 @@ def test_derives_multiday_profile_from_candidate_quality_and_expiration():
     assert profile is HoldingProfile.MULTIDAY
 
 
+def test_derives_multiday_profile_from_15m_score_when_setup_percent_is_missing():
+    profile = derive_holding_profile({
+        "Expiration Bucket": "PREFERRED_14_30",
+        "Setup %": None,
+        "15m Score": 85,
+        "Candidate RR": 2.0,
+        "Option Quality Score": 80,
+    })
+
+    assert profile is HoldingProfile.MULTIDAY
+
+
 def test_defaults_to_intraday_profile():
     assert derive_holding_profile({}) is HoldingProfile.INTRADAY
 

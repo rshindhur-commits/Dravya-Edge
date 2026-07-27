@@ -17,6 +17,35 @@ def test_duplicate_dataframe_columns_are_normalized_to_scalars():
     assert derive_holding_profile(row) is HoldingProfile.INTRADAY
 
 
+def test_suggestion_uses_15m_score_when_setup_percent_is_missing(monkeypatch):
+    state = {}
+    saved_states = []
+    monkeypatch.setattr(suggested_trade_manager, "load_suggestions", lambda: state)
+    monkeypatch.setattr(suggested_trade_manager, "save_suggestions", saved_states.append)
+    row = pd.Series({
+        "Symbol": "MSFT",
+        "Candidate Direction": "CALL",
+        "Entry": "EMA_PULLBACK",
+        "Option Ticker": "MSFT260821C00400000",
+        "Price": 100,
+        "Candidate Entry Price": 100,
+        "Candidate Stop Price": 98,
+        "Candidate Target Price": 104,
+        "Expiration Bucket": "PREFERRED_14_30",
+        "Setup %": None,
+        "15m Score": 85,
+        "Candidate RR": 2.0,
+        "Option Quality Score": 80,
+    })
+
+    suggestion = suggested_trade_manager.upsert_suggestion_from_scan(row)
+
+    assert suggestion["holding_profile"] == HoldingProfile.MULTIDAY.value
+    assert suggestion["original_setup_percent"] == 85
+    assert suggestion["current_setup_percent"] == 85
+    assert saved_states == [state]
+
+
 def test_promotion_reconciles_expired_suggestion(monkeypatch):
     state = {
         "NVDA|CALL|EMA_PULLBACK|NVDA260821C00150000": {

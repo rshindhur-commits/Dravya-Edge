@@ -58,7 +58,11 @@ def derive_holding_profile(candidate: dict[str, Any] | None) -> HoldingProfile:
 
     expected_hold = str(candidate.get("Expected Hold") or "").upper()
     expiration_bucket = str(candidate.get("Expiration Bucket") or "").upper()
-    setup_score = _number(candidate.get("Setup %"))
+    setup_score = _number(
+        candidate.get("Setup %")
+        if candidate.get("Setup %") is not None
+        else candidate.get("15m Score")
+    )
     rr = _number(candidate.get("Candidate RR") or candidate.get("RR"))
     option_quality = _number(candidate.get("Option Quality Score"))
 

@@ -86,7 +86,7 @@ Each scan refreshes `data/daily/YYYY-MM-DD/candidate_evidence.parquet` when Parq
 
 ## Session-Aware Trade Lifecycle
 
-Each candidate and paper trade has a `holding_profile`: `INTRADAY` or `MULTIDAY`. The profile is explicit when supplied by a candidate; otherwise the system derives it before the shared decision adapter runs from expected-hold intent or the eligible multi-day contract/setup profile.
+Each candidate and paper trade has a `holding_profile`: `INTRADAY` or `MULTIDAY`. The profile is explicit when supplied by a candidate; otherwise the system derives it before the shared decision adapter runs from expected-hold intent or the eligible multi-day contract/setup profile. For the quality threshold, it uses `Setup %` and falls back to the scanner's `15m Score` when `Setup %` is absent.
 
 `app/state/holding_policy.py` is the single source of session behavior:
 

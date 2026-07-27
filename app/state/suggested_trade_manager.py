@@ -196,12 +196,18 @@ def upsert_suggestion_from_scan(row):
     existing = state.get(suggestion_id, {})
     is_new = not bool(existing)
     existing_status = str(existing.get("status") or "").strip().upper()
+    current_setup = _safe_float(
+        row.get("Setup %")
+        if row.get("Setup %") is not None
+        else row.get("15m Score"),
+        0
+    ) or 0
 
     if existing_status in PAPER_PROMOTED_STATUSES:
 
         existing["last_seen_at"] = now
         existing["current_price"] = row.get("Price")
-        existing["current_setup_percent"] = row.get("Setup %")
+        existing["current_setup_percent"] = current_setup
         existing["current_rr"] = _row_get(row, "RR", "Candidate RR", "Risk Reward")
         existing["current_action_status"] = row.get("Action Status")
         existing["option_quote_freshness"] = row.get("Option Quote Freshness")
@@ -216,7 +222,6 @@ def upsert_suggestion_from_scan(row):
         _safe_float(row.get("Candidate Entry Price"))
     )
     current_price = _safe_float(row.get("Price"))
-    current_setup = _safe_float(row.get("Setup %"), 0) or 0
     current_rr = _safe_float(
         _row_get(row, "RR", "Candidate RR", "Risk Reward"),
         0
@@ -275,13 +280,13 @@ def upsert_suggestion_from_scan(row):
         "times_seen": int(existing.get("times_seen", 0)) + 1,
         "original_setup_percent": existing.get(
             "original_setup_percent",
-            row.get("Setup %")
+            current_setup
         ),
         "original_rr": existing.get(
             "original_rr",
             _row_get(row, "RR", "Candidate RR", "Risk Reward")
         ),
-        "current_setup_percent": row.get("Setup %"),
+        "current_setup_percent": current_setup,
         "current_rr": _row_get(row, "RR", "Candidate RR", "Risk Reward"),
         "current_action_status": row.get("Action Status"),
         "current_price": row.get("Price"),
