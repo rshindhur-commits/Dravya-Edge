@@ -7,6 +7,7 @@ from app.alerts.telegram_alerts import (
     TelegramDeliveryError,
     _send_telegram_alert_direct,
     build_paper_entry_alert_message,
+    build_scanner_entry_alert_message,
     calculate_entry_alert_score,
     _entry_alert_policy,
     maybe_send_paper_trade_update_alert,
@@ -239,11 +240,34 @@ class TelegramAlertPolicyTests(unittest.TestCase):
         self.assertIn("OPTION", message)
         self.assertIn("EMA Pullback", message)
         self.assertIn("Contract: 700C", message)
+        self.assertIn("Expiry: 2026-08-21", message)
         self.assertIn("Premium: $2.35", message)
+        self.assertIn("Contract Cost: $235.00", message)
         self.assertIn("RR: 2R", message)
         self.assertIn("ET", message)
         self.assertIn("🟢 Open", message)
         self.assertNotIn("ENTER_PAPER", message)
+
+    def test_scanner_entry_message_includes_option_expiry(self):
+
+        message = build_scanner_entry_alert_message(
+            "NFLX",
+            "BULLISH",
+            "ENTER_PAPER",
+            {"entry_type": "EMA_PULLBACK"},
+            {"risk_reward": 2.0},
+            {
+                "ticker": "O:NFLX260821C00700000",
+                "type": "CALL",
+                "expiration": "2026-08-21",
+                "contract_cost": 235,
+            },
+            700,
+            "Confirm entry",
+        )
+
+        self.assertIn("Expiry: 2026-08-21", message)
+        self.assertIn("Contract Cost: $235", message)
 
     def test_trade_update_requires_material_change(self):
 
@@ -262,6 +286,9 @@ class TelegramAlertPolicyTests(unittest.TestCase):
         ), patch(
             "app.alerts.telegram_alerts._last_trade_lifecycle_metadata",
             return_value={"last_r_multiple": 0.0, "last_trend_health": "STRONG"},
+        ), patch(
+            "app.alerts.telegram_alerts._subscriber_entry_metadata",
+            return_value={"message_type": "PAPER_ENTRY"},
         ), patch(
             "app.alerts.telegram_alerts.send_telegram_alert"
         ) as send_alert, patch(
