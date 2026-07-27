@@ -644,9 +644,14 @@ def build_validation_state_payload(
     from app.analytics.v2_learning_writer import summarize_learning_dataset
     from app.analytics.candidate_evidence import load_candidate_evidence
     from app.analytics.candidate_intelligence import build_candidate_intelligence
+    from app.analytics.rank_outcome_calibration import load_rank_outcome_calibration
+    from app.analytics.rule_attribution import build_rule_outcome_attribution
+    candidate_evidence = load_candidate_evidence(report_date)
     candidate_intelligence = build_candidate_intelligence(
-        load_candidate_evidence(report_date)
+        candidate_evidence
     )
+    rank_outcomes = load_rank_outcome_calibration(report_date)
+    rule_attribution = build_rule_outcome_attribution(candidate_evidence)
     delay_attribution = build_delay_attribution(report_date)
     trend_summary = summarize_trend_capture(trend_capture)
     paper = _paper_summary(paper_events)
@@ -724,6 +729,8 @@ def build_validation_state_payload(
             "outcome_matrix": _json_records(candidate_intelligence["outcome_matrix"]),
             "missed_winner_breakdown": _json_records(candidate_intelligence["missed_winner_breakdown"]),
         },
+        "rank_outcome_calibration": _json_records(rank_outcomes),
+        "rule_outcome_attribution": _json_records(rule_attribution),
         "telegram_quality": {
             "misses": int(candidate_outcomes.get("telegram_miss", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,
             "false_alerts": int(candidate_outcomes.get("false_alert", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,

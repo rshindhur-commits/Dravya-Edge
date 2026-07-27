@@ -3253,6 +3253,28 @@ def _render_download_exports():
         container=tools
     )
 
+    try:
+        from app.analytics.daily_review_export import build_daily_review_export
+
+        review_archive, review_manifest = build_daily_review_export(report_date)
+        available_artifacts = sum(
+            1 for item in review_manifest["artifacts"].values()
+            if item["available"]
+        )
+        tools.download_button(
+            label="Daily Review Export",
+            data=review_archive,
+            file_name=f"review_{report_date}.zip",
+            mime="application/zip",
+            key=f"download_daily_review_{report_date}",
+            help=(
+                "Packages the selected day's analytics and audit artifacts. "
+                f"{available_artifacts} artifacts currently contain rows."
+            ),
+        )
+    except Exception as exc:
+        tools.caption(f"Daily Review Export unavailable: {exc}")
+
     advanced_tools = tools.expander("Advanced files", expanded=False)
 
     with advanced_tools:

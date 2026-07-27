@@ -78,7 +78,9 @@ Migrations `app/db/migrations/013_scanner_regression.sql`, `014_regression_symbo
 
 ## Candidate Evidence Model
 
-`app/analytics/candidate_evidence.py` materializes one daily row per stable candidate identity: `trading_day + symbol + direction + setup`. It consolidates repeated scan observations with suggestion status, paper-trade status, replay outcome, target/stop-first flags, winner/missed-winner labels, option quality, trend health, trend capture, Trade Efficiency Score (TES), quote freshness, and engineering root cause.
+`app/analytics/candidate_evidence.py` materializes one daily row per stable candidate identity: `trading_day + symbol + direction + setup`. It consolidates repeated scan observations with suggestion status, paper-trade status, replay outcome, target/stop-first flags, winner/missed-winner labels, option quality, trend health, trend capture, Trade Efficiency Score (TES), quote freshness, and engineering root cause. Every finalized scan writes the local `candidate_evidence.csv` and `candidate_evidence_status.json`; the status records expected and written rows, repeated source observations collapsed into stable candidate identities, and database rows persisted. Postgres promotion is optional and its explicit status is recorded as `DISABLED`, `PERSISTED`, or `FAILED` rather than inferred from the local artifact.
+
+Validation also builds a read-only rank-outcome calibration from trade timeline snapshots joined by immutable `trade_id`. It groups completed trades into rank buckets (`1`, `2-3`, `4-5`, `6+`) and reports win rate, average final $R$, Trend Capture, and MFE. Decision Waterfalls retain all failed rules and expose the first three trading blockers separately from `Telegram`, `Paper`, `Review`, lifecycle, and replay operational blockers. Rule-outcome attribution is a matched-cohort association report and is not presented as causal expected-$R$ attribution.
 
 Each scan refreshes `data/daily/YYYY-MM-DD/candidate_evidence.parquet` when Parquet support is available and always writes `candidate_evidence.csv`. The same records upsert into Postgres table `candidate_evidence` through migrations `004_candidate_evidence.sql` and `006_candidate_intelligence_dimensions.sql`, with core analysis fields as columns and the full record in `payload` JSONB.
 
@@ -170,6 +172,24 @@ Recent calibration bugfixes deliberately avoid strategy changes:
 Exit decisions use `app/exit/exit_engine.py::evaluate_exit()` as the live single source of truth. `app/trade_manager.py` is legacy and retained only for historical reference. Exit precedence is explicit: hard stop, hard target, EMA, VWAP, MACD, failed breakout, time exit, then near-close exit. The exit engine now returns `exit_reasons`, `exit_diagnostics`, `primary_exit`, `secondary_exits`, and `ignored_exit_signals` so daily review can see every triggered exit condition even when a higher-priority exit wins.
 
 ## Daily Validation Report
+
+### Daily Review Export
+
+**Tools: Downloads** includes **Daily Review Export**, which downloads `review_YYYY-MM-DD.zip` for the selected validation date. The ZIP always contains the standard review CSV names plus `manifest.json`, which reports whether each source had rows:
+
+- `analytics_summary.csv`
+- `daily_engine_summary.csv`
+- `candidate_snapshot.csv`
+- `candidate_evidence.csv`
+- `candidate_outcome.csv`
+- `decision_waterfall.csv`
+- `gate_decisions.csv`
+- `rule_evaluation.csv`
+- `paper_trades.csv`
+- `trade.csv`
+- `exit_quality_metrics.csv`
+
+Use this one-day export for post-market review. Weekly review should query the prior five trading days from the database to identify emerging patterns, while monthly review should examine the prior 20 trading days before approving strategy or threshold changes. The export's rule-attribution fields remain observational; they are not causal expected-$R$ claims.
 
 Daily validation uses a session model:
 

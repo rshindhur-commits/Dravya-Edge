@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 @dataclass(frozen=True)
 class ExitSnapshot:
     trade_id: str
+    final_r: object
     exit_time: object
     exit_price: object
     primary_exit: object
@@ -42,7 +43,7 @@ def create_exit_snapshot(trade, trend_row):
     except Exception:
         pass
     return ExitSnapshot(
-        trade_id=trade.get("trade_id") or trade.get("trade_key"), exit_time=trade.get("closed_at_et") or trade.get("closed_at"),
+        trade_id=trade.get("trade_id") or trade.get("trade_key"), final_r=trade.get("r_multiple"), exit_time=trade.get("closed_at_et") or trade.get("closed_at"),
         exit_price=exit_price, primary_exit=row.get("Primary Exit") or trade.get("exit_reason"), secondary_exit=row.get("Secondary Exits"),
         ignored_exits=row.get("Ignored Exit Signals"), trend_capture=row.get("Trend Capture %"), tes=row.get("Trade Efficiency Score"),
         mfe=row.get("MFE") or row.get("Maximum Favorable Excursion"), mae=row.get("MAE") or row.get("Maximum Adverse Excursion"),

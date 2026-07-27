@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.gates.rule_evaluation import build_rule_evaluations
+from app.gates.rule_evaluation import build_rule_evaluations, rule_domain
 
 
 STAGE_ORDER = [
@@ -66,7 +66,7 @@ def _selected_setup(diagnostics, row):
     return {}
 
 
-def _rule(name, actual, required, passed, source, priority):
+def _rule(name, actual, required, passed, source, priority, domain="TRADING"):
 
     return {
         "rule": name,
@@ -75,6 +75,7 @@ def _rule(name, actual, required, passed, source, priority):
         "passed": bool(passed),
         "source": source,
         "priority": priority,
+        "domain": domain,
     }
 
 
@@ -192,6 +193,7 @@ def build_decision_waterfall(candidate, scan_id=None):
             evaluation.passed,
             "RuleEvaluation",
             evaluation.priority,
+            rule_domain(evaluation.rule_group),
         ))
 
     action = (
@@ -211,18 +213,21 @@ def build_decision_waterfall(candidate, scan_id=None):
         _summarize_stage(stage_map[stage])
         for stage in STAGE_ORDER
     ]
-    first_blocker = next(
-        (
-            {
-                "stage": stage["stage"],
-                **rule,
-            }
-            for stage in stages
-            for rule in stage["rules"]
-            if not rule["passed"]
-        ),
-        None,
-    )
+    all_blockers = [
+        {"stage": stage["stage"], **rule}
+        for stage in stages
+        for rule in stage["rules"]
+        if not rule["passed"]
+    ]
+    blockers = [
+        blocker for blocker in all_blockers
+        if blocker.get("domain") == "TRADING"
+    ]
+    operational_blockers = [
+        blocker for blocker in all_blockers
+        if blocker.get("domain") == "OPERATIONAL"
+    ]
+    first_blocker = blockers[0] if blockers else None
 
     return {
         "symbol": candidate.get("Symbol") or candidate.get("symbol"),
@@ -240,6 +245,11 @@ def build_decision_waterfall(candidate, scan_id=None):
             else None
         ),
         "first_blocker": first_blocker,
+        "primary_blocker": first_blocker,
+        "secondary_blocker": blockers[1] if len(blockers) > 1 else None,
+        "tertiary_blocker": blockers[2] if len(blockers) > 2 else None,
+        "blockers": blockers,
+        "operational_blockers": operational_blockers,
         "stages": stages,
     }
 

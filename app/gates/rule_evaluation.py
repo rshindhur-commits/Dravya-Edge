@@ -5,6 +5,13 @@ from dataclasses import asdict, dataclass
 from app.gates.entry_gate import EntryGateConfig, build_entry_gate_rule_evaluations
 
 
+OPERATIONAL_RULE_GROUPS = {"TELEGRAM", "PAPER", "REVIEW", "TRADE LIFECYCLE", "REPLAY"}
+
+
+def rule_domain(rule_group):
+    return "OPERATIONAL" if str(rule_group or "").upper() in OPERATIONAL_RULE_GROUPS else "TRADING"
+
+
 @dataclass(frozen=True)
 class RuleEvaluation:
     scan_id: str
