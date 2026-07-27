@@ -1,6 +1,12 @@
+from pathlib import Path
+from unittest.mock import patch
+
 import pandas as pd
 
-from app.analytics.candidate_evidence import build_candidate_evidence_from_frames
+from app.analytics.candidate_evidence import (
+    build_candidate_evidence_from_frames,
+    write_candidate_evidence,
+)
 
 
 def test_candidate_evidence_collapses_scans_and_joins_outcomes():
@@ -51,3 +57,95 @@ def test_candidate_evidence_collapses_scans_and_joins_outcomes():
     assert row["suggestion_status"] == "PROMOTED_TO_PAPER"
     assert row["trend_capture"] == 72
     assert row["tes"] == 88
+
+
+def test_writer_uses_finalized_candidates_without_rereading_snapshots(tmp_path):
+    daily_dir = tmp_path / "2026-07-27"
+
+    def fake_daily_path(_trading_day, filename):
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        return daily_dir / filename
+
+    candidates = pd.DataFrame([
+        {
+            "Symbol": "NVDA",
+            "Candidate Direction": "PUT",
+            "Entry": "VWAP_REJECTION",
+            "Data Timestamp ET": "2026-07-27 10:00:00",
+            "Action Status": "BLOCKED",
+        },
+        {
+            "Symbol": "AAPL",
+            "Candidate Direction": "CALL",
+            "Entry": "EMA_PULLBACK",
+            "Data Timestamp ET": "2026-07-27 10:00:00",
+            "Action Status": "REVIEW_TV_CHART",
+        },
+    ])
+
+    with patch(
+        "app.analytics.candidate_evidence.daily_path",
+        side_effect=fake_daily_path,
+    ), patch(
+        "app.analytics.candidate_evidence.db_writes_enabled",
+        return_value=False,
+    ), patch(
+        "app.db.candidate_evidence_repository.CandidateEvidenceRepository.batch_upsert",
+    ) as batch_upsert:
+        result = write_candidate_evidence(
+            "2026-07-27",
+            candidate_snapshots=candidates,
+        )
+
+    assert result["rows"] == 2
+    assert Path(result["path"]).exists()
+    assert Path(result["status_path"]).exists()
+    assert result["status"]["database_status"] == "DISABLED"
+    assert result["status"]["database_rows"] == 0
+    assert result["status"]["rows_expected"] == 2
+    assert result["status"]["rows_written"] == 2
+    assert result["status"]["duplicates_removed"] == 0
+    assert result["status"]["db_rows_persisted"] == 0
+    batch_upsert.assert_not_called()
+
+
+def test_writer_records_failed_database_promotion(tmp_path):
+    daily_dir = tmp_path / "2026-07-28"
+
+    def fake_daily_path(_trading_day, filename):
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        return daily_dir / filename
+
+    candidates = pd.DataFrame([
+        {
+            "Symbol": "AAPL",
+            "Candidate Direction": "CALL",
+            "Entry": "EMA_PULLBACK",
+            "Data Timestamp ET": "2026-07-28 10:00:00",
+            "Action Status": "REVIEW_TV_CHART",
+        },
+    ])
+
+    with patch(
+        "app.analytics.candidate_evidence.daily_path",
+        side_effect=fake_daily_path,
+    ), patch(
+        "app.analytics.candidate_evidence.db_writes_enabled",
+        return_value=True,
+    ), patch(
+        "app.db.candidate_evidence_repository.CandidateEvidenceRepository.batch_upsert",
+        return_value=0,
+    ):
+        result = write_candidate_evidence(
+            "2026-07-28",
+            candidate_snapshots=candidates,
+        )
+
+    assert result["rows"] == 1
+    assert Path(result["path"]).exists()
+    assert Path(result["status_path"]).exists()
+    assert result["status"]["database_status"] == "FAILED"
+    assert result["status"]["database_rows"] == 0
+    assert result["status"]["rows_expected"] == 1
+    assert result["status"]["rows_written"] == 1
+    assert result["status"]["db_rows_persisted"] == 0

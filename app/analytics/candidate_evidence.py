@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
 from app.analytics.loss_attribution import build_loss_attribution
+from app.db.persistence import db_writes_enabled
 from app.storage.daily_paths import daily_path
 from app.utils.json_store import load_json_file
 
@@ -20,7 +22,7 @@ EVIDENCE_COLUMNS = [
     "option_quality", "trend_health", "regime", "top_candidate", "quote_freshness", "rule_evaluation",
     "decision", "suggestion_status", "paper_trade_status", "entered",
     "replay_outcome", "target_first", "stop_first", "winner", "missed_winner",
-    "trend_capture", "tes", "engineering_root_cause", "evidence_updated_at",
+    "final_r", "trend_capture", "mfe", "tes", "engineering_root_cause", "evidence_updated_at",
 ]
 
 
@@ -225,7 +227,9 @@ def build_candidate_evidence_from_frames(
             "stop_first": stop_first,
             "winner": winner,
             "missed_winner": winner and not entered,
+            "final_r": _value(paper, "r_multiple", "R Multiple"),
             "trend_capture": _value(trend, "Trend Capture %"),
+            "mfe": _value(trend, "MFE", "Maximum Favorable Excursion"),
             "tes": _value(trend, "Trade Efficiency Score"),
             "engineering_root_cause": _value(root, "root_cause", "blocked_reason"),
             "evidence_updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -244,13 +248,13 @@ def load_candidate_evidence(trading_day):
     return _read_csv(daily_path(trading_day, "candidate_evidence.csv"))
 
 
-def build_candidate_evidence(trading_day):
+def build_candidate_evidence(trading_day, candidate_snapshots=None):
     suggestions = load_json_file(str(daily_path(trading_day, "suggested_trade_state.json")), {})
     if not suggestions:
         suggestions = load_json_file("app/state/suggested_trade_state.json", {})
     return build_candidate_evidence_from_frames(
         trading_day,
-        _read_snapshot(trading_day),
+        candidate_snapshots if candidate_snapshots is not None else _read_snapshot(trading_day),
         suggestions=suggestions,
         paper_events=_read_csv(daily_path(trading_day, "paper_trade_events.csv")),
         trend_capture=_read_csv(daily_path(trading_day, "trend_capture_analysis.csv")),
@@ -258,19 +262,48 @@ def build_candidate_evidence(trading_day):
     )
 
 
-def write_candidate_evidence(trading_day):
-    evidence = build_candidate_evidence(trading_day)
-    if evidence.empty:
-        return None
+def write_candidate_evidence(trading_day, candidate_snapshots=None):
+    evidence = build_candidate_evidence(trading_day, candidate_snapshots=candidate_snapshots)
+    source_rows = int(len(candidate_snapshots)) if candidate_snapshots is not None else None
     csv_path = daily_path(trading_day, "candidate_evidence.csv")
     parquet_path = daily_path(trading_day, "candidate_evidence.parquet")
     evidence.to_csv(csv_path, index=False)
     path = csv_path
-    try:
-        evidence.to_parquet(parquet_path, index=False)
-        path = parquet_path
-    except Exception:
-        pass
-    from app.db.candidate_evidence_repository import CandidateEvidenceRepository
-    CandidateEvidenceRepository().batch_upsert(evidence.to_dict("records"))
-    return {"path": str(path), "rows": len(evidence)}
+    if not evidence.empty:
+        try:
+            evidence.to_parquet(parquet_path, index=False)
+            path = parquet_path
+        except Exception:
+            pass
+
+    db_rows = 0
+    db_enabled = db_writes_enabled()
+    db_status = "PERSISTED" if db_enabled else "DISABLED"
+    if db_enabled and not evidence.empty:
+        try:
+            from app.db.candidate_evidence_repository import CandidateEvidenceRepository
+            db_rows = int(CandidateEvidenceRepository().batch_upsert(evidence.to_dict("records")) or 0)
+            db_status = "PERSISTED" if db_rows == len(evidence) else "FAILED"
+        except Exception:
+            db_rows = 0
+            db_status = "FAILED"
+
+    status = {
+        "trading_day": trading_day,
+        "source_rows": source_rows,
+        "evidence_rows": int(len(evidence)),
+        "rows_expected": source_rows,
+        "rows_written": int(len(evidence)),
+        "duplicates_removed": (
+            max(0, source_rows - len(evidence))
+            if source_rows is not None
+            else None
+        ),
+        "local_path": str(path),
+        "database_rows": int(db_rows),
+        "db_rows_persisted": int(db_rows),
+        "database_status": db_status,
+    }
+    status_path = daily_path(trading_day, "candidate_evidence_status.json")
+    status_path.write_text(json.dumps(status, indent=2, default=str), encoding="utf-8")
+    return {"path": str(path), "rows": len(evidence), "status": status, "status_path": str(status_path)}

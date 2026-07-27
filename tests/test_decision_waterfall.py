@@ -109,6 +109,37 @@ class DecisionWaterfallTests(unittest.TestCase):
         self.assertTrue(comparison["actions_disagree"])
         self.assertEqual(comparison["first_disagreement"], "Entry")
 
+    def test_separates_operational_blockers_from_ordered_trading_blockers(self):
+
+        result = build_decision_waterfall({
+            "Symbol": "NVDA",
+            "Final Signal": "BULLISH",
+            "Entry": "EMA_PULLBACK",
+            "Action Status": "WAIT",
+            "Setup %": 82,
+            "Candidate RR": 1.4,
+            "Option Quality Score": 75,
+            "Option Spread %": 4,
+            "Option Quote Freshness": "LIVE_QUOTE",
+            "Affordable": True,
+            "Telegram Eligibility": "NOT_SENT",
+            "Paper Trade Opened": False,
+            "Real Trade Readiness": "NOT_READY",
+        })
+
+        self.assertEqual(result["primary_blocker"]["rule"], "RR")
+        self.assertEqual(result["first_blocker"], result["primary_blocker"])
+        self.assertTrue(result["blockers"])
+        self.assertTrue(result["operational_blockers"])
+        self.assertTrue(all(
+            blocker["domain"] == "TRADING"
+            for blocker in result["blockers"]
+        ))
+        self.assertTrue(all(
+            blocker["domain"] == "OPERATIONAL"
+            for blocker in result["operational_blockers"]
+        ))
+
 
 if __name__ == "__main__":
 

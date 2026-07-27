@@ -3192,14 +3192,18 @@ def _persist_scan_outputs(
 
             from app.analytics.candidate_evidence import write_candidate_evidence
 
-            evidence_result = write_candidate_evidence(trading_day)
+            evidence_result = write_candidate_evidence(
+                trading_day,
+                candidate_snapshots=df_results,
+            )
 
         if evidence_result:
 
             print(
                 "[CANDIDATE EVIDENCE] "
                 f"saved {evidence_result['rows']} rows to "
-                f"{evidence_result['path']}"
+                f"{evidence_result['path']} "
+                f"db={evidence_result['status']['database_status']}"
             )
 
     except Exception as exc:
