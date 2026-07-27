@@ -697,6 +697,10 @@ def _paper_entry_alert_key(trade, scanner_context=None):
 
     trade = trade or {}
     scanner_context = scanner_context or {}
+    lifecycle_id = _trade_lifecycle_id(trade)
+    if lifecycle_id:
+        return "|".join(["PAPER_ENTRY", lifecycle_id])
+
     symbol = trade.get("symbol") or scanner_context.get("Symbol")
     direction = trade.get("direction") or scanner_context.get("Candidate Direction")
     option_ticker = (
@@ -719,13 +723,7 @@ def _paper_entry_alert_key(trade, scanner_context=None):
 
 def _trade_open_alert_key(trade):
 
-    return "_".join([
-        str(trade.get("symbol")),
-        str(trade.get("direction")),
-        str(trade.get("option_ticker") or "NO_CONTRACT"),
-        "TRADE_OPEN",
-        str(trade.get("opened_at") or "NO_OPEN_TIME"),
-    ])
+    return "|".join(["TRADE_OPEN", _trade_lifecycle_id(trade)])
 
 
 def _review_alert_key(symbol, entry_type):
@@ -747,11 +745,41 @@ def _state_key_for_alert(trade):
     ])
 
 
+def _trade_lifecycle_id(trade):
+
+    trade = trade or {}
+    return str(
+        trade.get("trade_id")
+        or trade.get("trade_key")
+        or _state_key_for_alert(trade)
+    )
+
+
+def _subscriber_entry_metadata(trade):
+
+    lifecycle_id = _trade_lifecycle_id(trade)
+    latest = None
+    for metadata in _load_alert_state().get("sent", {}).values():
+        if metadata.get("message_type") not in {"PAPER_ENTRY", "TRADE_OPEN"}:
+            continue
+        recorded_id = str(
+            metadata.get("lifecycle_id")
+            or metadata.get("trade_id")
+            or metadata.get("trade_key")
+            or ""
+        )
+        if recorded_id != lifecycle_id:
+            continue
+        if latest is None or metadata.get("sent_at", "") > latest.get("sent_at", ""):
+            latest = metadata
+    return latest or {}
+
+
 def _trade_update_alert_key(trade, r_multiple, trend_health):
 
     return "|".join([
         "UPDATE",
-        str(trade.get("trade_key") or _state_key_for_alert(trade)),
+        _trade_lifecycle_id(trade),
         str(round(_float_value(r_multiple), 2)),
         str(trend_health or "UNKNOWN")
     ])
@@ -769,17 +797,9 @@ def _scanner_entry_alert_key(symbol, option_ticker, action_status, bar_timestamp
 
 def _exit_alert_key(symbol, option_ticker, trade, exit_reason, event_type):
 
-    opened_at = (
-        trade.get("opened_at")
-        or trade.get("trade_key")
-        or "NO_OPEN_TIME"
-    )
-
     return "|".join([
         str(event_type or "EXIT"),
-        str(symbol),
-        str(option_ticker or "NO_CONTRACT"),
-        str(opened_at),
+        _trade_lifecycle_id(trade),
         str(exit_reason or "NO_REASON")
     ])
 
@@ -1314,6 +1334,9 @@ def _holding_time_label(opened_at, event_timestamp=None):
     delta = end - start
     minutes = int(delta.total_seconds() // 60)
 
+    if minutes < 0:
+        return None
+
     if minutes < 60:
 
         return f"Holding Time: {minutes} min"
@@ -1496,6 +1519,36 @@ def _option_cost(scanner_context, option_mid):
     return premium * 100 if premium is not None else None
 
 
+def _option_lifecycle_lines(trade, scanner_context=None):
+
+    trade = trade or {}
+    scanner_context = scanner_context or trade.get("scanner_context") or {}
+    direction = trade.get("direction") or scanner_context.get("Candidate Direction")
+    contract_type = "P" if str(direction or "").upper() in {"PUT", "SHORT"} else "C"
+    option_strike = trade.get("option_strike") or scanner_context.get("Option Strike")
+    option_ticker = trade.get("option_ticker") or scanner_context.get("Option Ticker")
+    contract = (
+        f"{_fmt(option_strike)}{contract_type}"
+        if option_strike is not None
+        else _fmt(option_ticker)
+    )
+    expiration = trade.get("option_expiration") or scanner_context.get("Option Expiration")
+    option_mid = (
+        trade.get("option_entry_mid")
+        or trade.get("option_mid")
+        or scanner_context.get("Option Mid Price")
+        or scanner_context.get("Option Midpoint")
+    )
+    option_cost = _option_cost(scanner_context, option_mid)
+
+    return [
+        "<b>OPTION</b>",
+        f"Contract: {contract}",
+        f"Expiry: {_fmt(expiration)}",
+        f"Contract Cost: {_money(option_cost)}",
+    ]
+
+
 def _entry_reasons(scanner_context, setup):
 
     setup_label = str(setup).replace("_", " ").title()
@@ -1548,6 +1601,7 @@ def build_scanner_entry_alert_message(
         f"Setup: {_fmt(entry_setup.get('entry_type'))}",
         f"RR: {_fmt(risk_setup.get('risk_reward'))}",
         f"Contract: {option_ticker}",
+        f"Expiry: {_fmt(option_contract.get('expiration'))}",
         f"Contract Cost: ${cost}",
         f"Risk At Stop: ${risk_at_stop}",
         f"Affordability: {affordability}",
@@ -1578,12 +1632,8 @@ def build_paper_entry_alert_message(trade, scanner_context, reason=None):
         scanner_context.get("Expected Remaining Trend")
         or scanner_context.get("V2 Trend Health Score")
     )
-    option_strike = scanner_context.get("Option Strike") or "-"
-    expiration = scanner_context.get("Option Expiration") or "-"
-    option_cost = _option_cost(scanner_context, option_mid)
     reasons = _entry_reasons(scanner_context, setup)
     checklist = _reason_checklist(reasons)
-    contract_type = "P" if str(direction or "").upper() in {"PUT", "SHORT"} else "C"
     quality_grade = _trade_quality_grade(
         trade_quality,
         scanner_context.get("Projected Entry Grade")
@@ -1613,8 +1663,7 @@ def build_paper_entry_alert_message(trade, scanner_context, reason=None):
         _fmt(str(setup or "Confirmed setup").replace("_", " ").title().replace("Ema", "EMA").replace("Vwap", "VWAP")),
         f"{_score_stars(confidence)} {confidence_line}" if confidence_line else None,
         "",
-        "<b>OPTION</b>",
-        f"Contract: {_fmt(option_strike)}{contract_type}",
+        *_option_lifecycle_lines(trade, scanner_context),
         f"Premium: {_money(option_mid)}",
         "",
         _trade_status_line(ENTRY_EVENT_TYPE),
@@ -1660,10 +1709,16 @@ def _trend_health_rank(status):
 
 def _last_trade_lifecycle_metadata(trade):
 
-    trade_key = trade.get("trade_key") or _state_key_for_alert(trade)
+    lifecycle_id = _trade_lifecycle_id(trade)
     latest = None
     for metadata in _load_alert_state().get("sent", {}).values():
-        if metadata.get("trade_key") != trade_key:
+        recorded_id = str(
+            metadata.get("lifecycle_id")
+            or metadata.get("trade_id")
+            or metadata.get("trade_key")
+            or ""
+        )
+        if recorded_id != lifecycle_id:
             continue
         if metadata.get("message_type") not in {
             "PAPER_ENTRY",
@@ -1719,6 +1774,8 @@ def build_paper_trade_update_message(
             "Runner: Still Open",
             f"Stop: {partial_stop}" if partial_stop else None,
             "",
+            *_option_lifecycle_lines(trade),
+            "",
             _trade_status_line(event_type),
         ]
         return "\n".join([line for line in lines if line])
@@ -1734,6 +1791,8 @@ def build_paper_trade_update_message(
         f"Reason: {reason_line}",
         "Action: Continue Holding",
         f"Trend: {_fmt(trend_health)}" if trend_health else None,
+        "",
+        *_option_lifecycle_lines(trade),
         "",
         _trade_status_line(event_type),
     ]
@@ -1763,6 +1822,8 @@ def build_multiday_position_continue_message(trade, current_price, trend_health,
         f"Holding: Day {days_held}",
         f"Trend: {_fmt(trend_health or 'UNKNOWN')}",
         "Action: Continue Holding",
+        "",
+        *_option_lifecycle_lines(trade),
         "",
         "Trade Status: 🟢 Open",
     ])
@@ -1805,7 +1866,9 @@ def maybe_send_multiday_position_continue_alert(trade, current_price, scanner_co
         "event_type": "POSITION_CONTINUES",
         "message_type": "POSITION_CONTINUES",
         "candidate_key": trade.get("trade_key") or alert_key,
+        "trade_id": trade.get("trade_id"),
         "trade_key": trade.get("trade_key") or _state_key_for_alert(trade),
+        "lifecycle_id": _trade_lifecycle_id(trade),
         "closed": False,
     }
 
@@ -1989,6 +2052,10 @@ def maybe_send_paper_trade_update_alert(
 
         return {"sent": False, "reason": "TRADE_NOT_OPEN"}
 
+    if not _subscriber_entry_metadata(trade):
+
+        return {"sent": False, "reason": "SUBSCRIBER_NEW_TRADE_NOT_SENT"}
+
     r_multiple = _trade_r_multiple(trade, current_price)
     if r_multiple is None:
 
@@ -2136,6 +2203,8 @@ def build_trade_exit_alert_message(
             "Position: Partial closed",
             "Runner: Still Open",
             "",
+            *_option_lifecycle_lines(trade),
+            "",
             status_line,
         ] if line])
 
@@ -2148,6 +2217,8 @@ def build_trade_exit_alert_message(
         result_label,
         f"{_fmt(r_multiple)}R",
         f"Option P/L: {_signed_money(option_pnl)}",
+        "",
+        *_option_lifecycle_lines(trade),
         "",
         f"Reason: {_exit_reason_label(exit_reason)}",
         "",
@@ -2219,6 +2290,13 @@ def maybe_send_trade_exit_alert(
         return {
             "sent": False,
             "reason": guard_reason
+        }
+
+    if not _subscriber_entry_metadata(trade):
+
+        return {
+            "sent": False,
+            "reason": "SUBSCRIBER_NEW_TRADE_NOT_SENT"
         }
 
     trade_symbol = trade.get("symbol") or symbol
@@ -2335,7 +2413,9 @@ def maybe_send_trade_exit_alert(
         "message_type": "TRADE_EXIT",
         "decision": "EXIT_ELIGIBLE",
         "candidate_key": trade.get("trade_key") or alert_key,
-        "trade_id": trade.get("trade_key"),
+        "trade_id": trade.get("trade_id"),
+        "trade_key": trade.get("trade_key") or _state_key_for_alert(trade),
+        "lifecycle_id": _trade_lifecycle_id(trade),
         "exit_reason": exit_reason,
         "outcome": outcome,
         "current_price": current_price,

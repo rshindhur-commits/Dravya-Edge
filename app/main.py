@@ -2761,6 +2761,7 @@ def _dispatch_telegram_entry_alerts(df_results, scan_id=None):
         option_contract = {
             "ticker": row.get("Option Ticker"),
             "type": row.get("Candidate Direction"),
+            "expiration": row.get("Option Expiration"),
             "contract_cost": row.get("Option Contract Cost"),
             "risk_at_stop": row.get("Option Risk At Stop"),
             "affordability_status": row.get("Affordability Status"),

@@ -267,6 +267,9 @@ def test_trade_update_and_partial_profit_follow_the_subscriber_contract():
         "direction": "CALL",
         "entry_price": 100,
         "stop_loss": 98,
+        "option_strike": 700,
+        "option_expiration": "2026-08-21",
+        "option_mid": 2.35,
     }
     update = build_paper_trade_update_message(
         trade,
@@ -289,6 +292,9 @@ def test_trade_update_and_partial_profit_follow_the_subscriber_contract():
     assert "Current: 0.6R" in update
     assert "Risk: Reduced" in update
     assert "Stop: $98.00 → $99.00" in update
+    assert "Contract: 700C" in update
+    assert "Expiry: 2026-08-21" in update
+    assert "Contract Cost: $235.00" in update
     assert "Jul 24, 2026 · 10:24 ET" in update
     assert "PARTIAL PROFIT" in partial
     assert "Runner: Still Open" in partial
@@ -304,6 +310,8 @@ def test_close_and_cancelled_messages_include_subscriber_closure_details():
             "entry_price": 100,
             "option_entry_mid": 2.0,
             "option_contracts": 1,
+            "option_strike": 700,
+            "option_expiration": "2026-08-21",
             "opened_at": "2026-07-24 09:30:00",
         },
         "STOP_HIT",
@@ -323,6 +331,9 @@ def test_close_and_cancelled_messages_include_subscriber_closure_details():
     assert "🟥 Stop Loss" in close
     assert "Risk Managed: According to Plan" in close
     assert "Holding Time: 3h 12m" in close
+    assert "Contract: 700C" in close
+    assert "Expiry: 2026-08-21" in close
+    assert "Contract Cost: $200.00" in close
     assert "Jul 24, 2026 · 12:42 ET" in close
     assert "TRADE CANCELLED" in cancelled
     assert "No action taken." in cancelled
