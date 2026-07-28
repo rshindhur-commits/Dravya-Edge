@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo \"---exit code $?---\")",
+      "Bash(git add *)",
+      "Bash(.venv/Scripts/python.exe -m unittest discover tests)"
+    ]
+  }
+}

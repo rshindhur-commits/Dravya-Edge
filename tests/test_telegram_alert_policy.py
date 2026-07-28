@@ -9,9 +9,9 @@ from app.alerts.telegram_alerts import (
     build_paper_entry_alert_message,
     build_scanner_entry_alert_message,
     calculate_entry_alert_score,
+    classify_scanner_entry_alert,
     _entry_alert_policy,
     maybe_send_paper_trade_update_alert,
-    maybe_send_scanner_entry_alert,
 )
 from app.gates import EntryGateConfig, evaluate_entry_gate
 
@@ -49,38 +49,15 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             "Bad Request: can't parse entities",
         )
 
-    def _scanner_alert_kwargs(self):
+    def _scanner_alert_decision_kwargs(self):
 
         return {
-            "symbol": "SPCX",
-            "final_signal": "BULLISH",
             "action_decision": {
                 "action_status": "REVIEW_TV_CHART"
             },
             "entry_setup": {
                 "entry_type": "EMA_PULLBACK"
             },
-            "risk_setup": {
-                "risk_reward": 4.17
-            },
-            "option_contract": {
-                "ticker": "SPCX250718C00050000",
-                "option_quality_score": 100,
-                "spread_pct": 2.44,
-                "quote_freshness": "LIVE_QUOTE",
-                "affordable": True,
-            },
-            "latest_price": 50,
-            "bar_timestamp": "2026-07-17 10:00:00 EDT",
-            "next_condition": "Confirm live chart",
-            "top_candidate": "BULLISH_TOP_1",
-            "option_quote_freshness": "LIVE_QUOTE",
-            "option_quality_score": 100,
-            "option_spread_pct": 2.44,
-            "setup_score": 90,
-            "alignment_score": 5,
-            "rs_rank_score": 2,
-            "relative_volume": 2,
         }
 
     def test_scanner_review_alert_is_suppressed_by_lifecycle_contract(self):
@@ -94,39 +71,13 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_MIN_ENTRY_ALERT_SCORE": "0",
             },
             clear=False,
-        ), patch(
-            "app.alerts.telegram_alerts._entry_alert_time_bucket",
-            return_value="MORNING"
-        ), patch(
-            "app.alerts.telegram_alerts._load_alert_state",
-            return_value={}
-        ), patch(
-            "app.alerts.telegram_alerts._entry_alerts_today",
-            return_value=0
-        ), patch(
-            "app.alerts.telegram_alerts._active_entry_alerts",
-            return_value=[]
-        ), patch(
-            "app.alerts.telegram_alerts._entry_alerts_in_bucket",
-            return_value=0
-        ), patch(
-            "app.alerts.telegram_alerts._recent_matching_entry_alert",
-            return_value=False
-        ), patch(
-            "app.alerts.telegram_alerts._recent_closed_symbol_alert",
-            return_value=False
-        ), patch(
-            "app.alerts.telegram_alerts.alert_was_sent",
-            return_value=False
-        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
+        ):
 
-            result = maybe_send_scanner_entry_alert(
-                **self._scanner_alert_kwargs()
+            reason = classify_scanner_entry_alert(
+                **self._scanner_alert_decision_kwargs()
             )
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
-        send_alert.assert_not_called()
+        self.assertEqual(reason, "REVIEW_ALERT_SUPPRESSED")
 
     def test_scanner_review_alert_remains_suppressed_despite_score_setting(self):
 
@@ -138,15 +89,13 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_MIN_ENTRY_ALERT_SCORE": "100",
             },
             clear=False,
-        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
+        ):
 
-            result = maybe_send_scanner_entry_alert(
-                **self._scanner_alert_kwargs()
+            reason = classify_scanner_entry_alert(
+                **self._scanner_alert_decision_kwargs()
             )
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
-        send_alert.assert_not_called()
+        self.assertEqual(reason, "REVIEW_ALERT_SUPPRESSED")
 
     def test_scanner_review_alert_is_suppressed_under_real_review_policy(self):
 
@@ -158,49 +107,43 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
             },
             clear=False,
-        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
+        ):
 
-            result = maybe_send_scanner_entry_alert(
-                **self._scanner_alert_kwargs()
+            reason = classify_scanner_entry_alert(
+                **self._scanner_alert_decision_kwargs()
             )
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
-        send_alert.assert_not_called()
+        self.assertEqual(reason, "REVIEW_ALERT_SUPPRESSED")
 
     def test_scanner_entry_waits_for_confirmed_trade_open(self):
 
-        kwargs = self._scanner_alert_kwargs()
+        kwargs = self._scanner_alert_decision_kwargs()
         kwargs["action_decision"] = {"action_status": "ENTER_PAPER"}
 
         with patch.dict(
             "os.environ",
             {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1"},
             clear=False,
-        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
+        ):
 
-            result = maybe_send_scanner_entry_alert(**kwargs)
+            reason = classify_scanner_entry_alert(**kwargs)
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "ENTRY_AWAITING_TRADE_OPEN")
-        send_alert.assert_not_called()
+        self.assertEqual(reason, "ENTRY_AWAITING_TRADE_OPEN")
 
     def test_active_trade_scanner_alert_is_suppressed(self):
 
-        kwargs = self._scanner_alert_kwargs()
+        kwargs = self._scanner_alert_decision_kwargs()
         kwargs["entry_setup"] = {"entry_type": "ACTIVE_TRADE"}
 
         with patch.dict(
             "os.environ",
             {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1"},
             clear=False,
-        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
+        ):
 
-            result = maybe_send_scanner_entry_alert(**kwargs)
+            reason = classify_scanner_entry_alert(**kwargs)
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "ACTIVE_TRADE_SUPPRESSED")
-        send_alert.assert_not_called()
+        self.assertEqual(reason, "ACTIVE_TRADE_SUPPRESSED")
 
     def test_confirmed_trade_message_uses_subscriber_facing_language(self):
 
@@ -324,38 +267,16 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             },
             clear=False,
         ), patch(
-            "app.alerts.telegram_alerts._entry_alert_time_bucket",
-            return_value="MORNING"
-        ), patch(
-            "app.alerts.telegram_alerts._load_alert_state",
-            return_value={}
-        ), patch(
-            "app.alerts.telegram_alerts._entry_alerts_today",
-            return_value=0
-        ), patch(
-            "app.alerts.telegram_alerts._active_entry_alerts",
-            return_value=[]
-        ), patch(
-            "app.alerts.telegram_alerts._entry_alerts_in_bucket",
-            return_value=0
-        ), patch(
-            "app.alerts.telegram_alerts._recent_matching_entry_alert",
-            return_value=False
-        ), patch(
-            "app.alerts.telegram_alerts._recent_closed_symbol_alert",
-            return_value=False
-        ), patch(
             "app.runtime.telegram_dispatcher.get_runtime_scheduler"
         ) as scheduler_factory, patch(
             "app.alerts.telegram_alerts.mark_alert_sent"
         ) as mark_sent:
 
-            result = maybe_send_scanner_entry_alert(
-                **self._scanner_alert_kwargs()
+            reason = classify_scanner_entry_alert(
+                **self._scanner_alert_decision_kwargs()
             )
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
+        self.assertEqual(reason, "REVIEW_ALERT_SUPPRESSED")
         scheduler_factory.assert_not_called()
         mark_sent.assert_not_called()
 

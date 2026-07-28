@@ -144,8 +144,7 @@ from app.analytics.replay_engine import (
     replay_trade_projection
 )
 from app.alerts.telegram_alerts import (
-    calculate_entry_alert_score,
-    maybe_send_scanner_entry_alert,
+    classify_scanner_entry_alert,
     maybe_send_trade_open_alert,
     maybe_send_paper_trade_update_alert,
     maybe_send_trade_exit_alert
@@ -2674,29 +2673,12 @@ def _row_float(row, column, default=0):
         return default
 
 
-def _telegram_setup_score(row):
-
-    for column in [
-        "ENTRY_GATE_SETUP",
-        "Setup %",
-        "setup_percent",
-        "15m Score"
-    ]:
-
-        value = _row_float(
-            row,
-            column,
-            None
-        )
-
-        if value is not None:
-
-            return value
-
-    return 0
-
-
 def _dispatch_telegram_entry_alerts(df_results, scan_id=None):
+    """Label every scanner row with why it is not itself a subscriber message.
+
+    Scanner rows never send. NEW TRADE is published when a trade actually
+    opens; this pass only records the audit reason on each row.
+    """
 
     summary = {
         "enter_paper_count": 0,
@@ -2736,132 +2718,49 @@ def _dispatch_telegram_entry_alerts(df_results, scan_id=None):
 
         action_status = str(row.get("Action Status") or "").upper()
         entry_type = str(row.get("Entry") or "").upper()
+
         if entry_type in {"ACTIVE_TRADE", "PAPER_TRADE", "OPEN_TRADE"}:
 
             reason = "ACTIVE_TRADE_SUPPRESSED"
+            stage = "LIFECYCLE_FILTER"
 
         elif action_status != "REVIEW_TV_CHART":
 
             reason = "NOT_LIFECYCLE_EVENT"
+            stage = "LIFECYCLE_FILTER"
 
         else:
 
-            reason = None
-
-        if reason:
-
-            df_results.at[index, "Telegram Eligibility"] = reason
-            df_results.at[index, "Telegram Block Reason"] = reason
-            df_results.at[index, "Telegram Sent"] = False
-            df_results.at[index, "Telegram Stage"] = "LIFECYCLE_FILTER"
-            summary["blocked_count"] += 1
-            summary["reasons"][reason] = summary["reasons"].get(reason, 0) + 1
-            continue
-
-        option_contract = {
-            "ticker": row.get("Option Ticker"),
-            "type": row.get("Candidate Direction"),
-            "expiration": row.get("Option Expiration"),
-            "contract_cost": row.get("Option Contract Cost"),
-            "risk_at_stop": row.get("Option Risk At Stop"),
-            "affordability_status": row.get("Affordability Status"),
-            "affordable": row.get("Affordable"),
-            "spread_pct": row.get("Option Spread %"),
-            "option_quality_score": row.get("Option Quality Score"),
-            "quote_freshness": row.get("Option Quote Freshness")
-        }
-
-        try:
-
-            telegram_result = maybe_send_scanner_entry_alert(
-                symbol=row.get("Symbol"),
-                final_signal=row.get("Final Signal"),
+            reason = classify_scanner_entry_alert(
                 action_decision={
                     "action_status": row.get("Action Status")
                 },
                 entry_setup={
                     "entry_type": row.get("Entry")
-                },
-                risk_setup={
-                    "risk_reward": row.get("Risk Reward")
-                },
-                option_contract=option_contract,
-                latest_price=row.get("Price"),
-                bar_timestamp=(
-                    row.get("Data Timestamp ET")
-                    or row.get("Current ET")
-                ),
-                next_condition=row.get("Next Condition"),
-                top_candidate=row.get("Top Candidate"),
-                option_quote_freshness=row.get("Option Quote Freshness"),
-                option_quality_score=row.get("Option Quality Score"),
-                option_spread_pct=row.get("Option Spread %"),
-                event_blocked=_row_bool(row.get("Event Blocked")),
-                regime_blocked=_row_bool(row.get("Regime Blocked")),
-                setup_score=_telegram_setup_score(row),
-                alignment_score=row.get("Alignment Score"),
-                rs_rank_score=row.get("RS Rank Score"),
-                relative_volume=row.get("Relative Volume"),
-                scan_id=scan_id
+                }
             )
+            stage = "ENTRY_EVALUATION"
+            summary["attempted_count"] += 1
             debug_print(
-                f"[TELEGRAM ENTRY ALERT] {row.get('Symbol')} "
-                f"sent={telegram_result.get('sent')} "
-                f"reason={telegram_result.get('reason')}"
+                f"[TELEGRAM ENTRY ALERT] {row.get('Symbol')} reason={reason}"
             )
-            reason = telegram_result.get("reason") or "UNKNOWN"
-            sent = bool(telegram_result.get("sent"))
-            df_results.at[index, "Telegram Eligibility"] = reason
-            df_results.at[index, "Telegram Block Reason"] = (
-                None
-                if sent
-                else reason
-            )
-            df_results.at[index, "Telegram Sent"] = sent
-            df_results.at[index, "Telegram Alert Score"] = None
-            df_results.at[index, "Telegram Error Type"] = None
-            df_results.at[index, "Telegram Error Reason"] = None
-            df_results.at[index, "Telegram Stage"] = "ENTRY_EVALUATION"
-            summary["attempted_count"] += 1
-            summary["sent_count"] += int(sent)
-            summary["blocked_count"] += int(not sent)
-            summary["reasons"][reason] = summary["reasons"].get(reason, 0) + 1
-            summary["alerts"].append({
-                "symbol": row.get("Symbol"),
-                "action_status": row.get("Action Status"),
-                "sent": sent,
-                "reason": reason,
-                "option_ticker": row.get("Option Ticker")
-            })
 
-        except Exception as e:
-
-            error_type = type(e).__name__.upper()
-            error_reason = f"TELEGRAM_ERROR_{error_type}"
-
-            print(
-                f"[TELEGRAM ENTRY ALERT ERROR] "
-                f"{row.get('Symbol')}: {e}"
-            )
-            summary["attempted_count"] += 1
-            summary["blocked_count"] += 1
-            summary["error_count"] += 1
-            summary["reasons"][error_reason] = summary["reasons"].get(error_reason, 0) + 1
-            df_results.at[index, "Telegram Eligibility"] = "ERROR"
-            df_results.at[index, "Telegram Block Reason"] = error_reason
-            df_results.at[index, "Telegram Sent"] = False
-            df_results.at[index, "Telegram Alert Score"] = None
-            df_results.at[index, "Telegram Error Type"] = error_type
-            df_results.at[index, "Telegram Error Reason"] = error_reason
-            df_results.at[index, "Telegram Stage"] = "ENTRY_DISPATCH"
-            summary["alerts"].append({
-                "symbol": row.get("Symbol"),
-                "action_status": row.get("Action Status"),
-                "sent": False,
-                "reason": error_reason,
-                "option_ticker": row.get("Option Ticker"),
-                "error_type": error_type
-            })
+        df_results.at[index, "Telegram Eligibility"] = reason
+        df_results.at[index, "Telegram Block Reason"] = reason
+        df_results.at[index, "Telegram Sent"] = False
+        df_results.at[index, "Telegram Alert Score"] = None
+        df_results.at[index, "Telegram Error Type"] = None
+        df_results.at[index, "Telegram Error Reason"] = None
+        df_results.at[index, "Telegram Stage"] = stage
+        summary["blocked_count"] += 1
+        summary["reasons"][reason] = summary["reasons"].get(reason, 0) + 1
+        summary["alerts"].append({
+            "symbol": row.get("Symbol"),
+            "action_status": row.get("Action Status"),
+            "sent": False,
+            "reason": reason,
+            "option_ticker": row.get("Option Ticker")
+        })
 
     return summary
 

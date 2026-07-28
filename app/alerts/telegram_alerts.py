@@ -22,7 +22,6 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 ALERT_STATE_FILE = ROOT_DIR / "app" / "state" / "telegram_alert_state.json"
 MAX_SENT_ALERTS = 1000
 ENTRY_EVENT_TYPE = "ENTRY"
-REVIEW_EVENT_TYPE = "REVIEW"
 UPDATE_EVENT_TYPE = "UPDATE"
 
 
@@ -724,16 +723,6 @@ def _paper_entry_alert_key(trade, scanner_context=None):
 def _trade_open_alert_key(trade):
 
     return "|".join(["TRADE_OPEN", _trade_lifecycle_id(trade)])
-
-
-def _review_alert_key(symbol, entry_type):
-
-    return "_".join([
-        str(symbol),
-        str(entry_type or "NO_SETUP"),
-        "REVIEW",
-        str(_today_key())
-    ])
 
 
 def _state_key_for_alert(trade):
@@ -1672,17 +1661,6 @@ def build_paper_entry_alert_message(trade, scanner_context, reason=None):
     return "\n".join([line for line in lines if line])
 
 
-def build_review_alert_message(symbol, entry_type, next_condition):
-
-    return "\n".join([
-        "⚪ <b>WATCHLIST REVIEW</b>",
-        f"Ticker: {_fmt(symbol)}",
-        f"Setup: {_fmt(entry_type)}",
-        f"Required confirmation: {_fmt(next_condition)}",
-        "Status: Waiting for entry readiness. No action yet."
-    ])
-
-
 def _trade_r_multiple(trade, current_price):
 
     entry = _float_value(trade.get("entry_price"), None)
@@ -2439,101 +2417,35 @@ def maybe_send_trade_exit_alert(
 
 
 @_telegram_attempt_logger("SCANNER_ENTRY")
-def maybe_send_scanner_entry_alert(
-    symbol,
-    final_signal,
-    action_decision,
-    entry_setup,
-    risk_setup,
-    option_contract,
-    latest_price,
-    bar_timestamp,
-    next_condition,
-    top_candidate=None,
-    market_session=None,
-    option_quote_freshness=None,
-    option_quality_score=None,
-    option_spread_pct=None,
-    event_blocked=False,
-    regime_blocked=False,
-    setup_score=0,
-    alignment_score=0,
-    rs_rank_score=0,
-    relative_volume=0,
-    scan_id=None
-):
+def classify_scanner_entry_alert(action_decision, entry_setup):
+    """Classify why a scanner row is not itself a subscriber message.
+
+    Scanner actions are not part of the six-message subscriber contract: a
+    NEW TRADE message is published when a trade actually opens, not when the
+    scanner proposes one. This returns the audit reason recorded on the
+    scanner row; it never sends.
+    """
 
     if not telegram_entry_alerts_enabled():
 
-        return {
-            "sent": False,
-            "reason": "TELEGRAM_ENTRY_ALERTS_DISABLED"
-        }
+        return "TELEGRAM_ENTRY_ALERTS_DISABLED"
 
     action_status = action_decision.get("action_status")
     entry_type = str(entry_setup.get("entry_type") or "").upper()
+
     if entry_type in {"ACTIVE_TRADE", "PAPER_TRADE", "OPEN_TRADE"}:
 
-        return {"sent": False, "reason": "ACTIVE_TRADE_SUPPRESSED"}
+        return "ACTIVE_TRADE_SUPPRESSED"
 
     if action_status in {"ENTER", "ENTER_PAPER"}:
 
-        return {"sent": False, "reason": "ENTRY_AWAITING_TRADE_OPEN"}
+        return "ENTRY_AWAITING_TRADE_OPEN"
 
     if action_status == "REVIEW_TV_CHART":
 
-        return {"sent": False, "reason": "REVIEW_ALERT_SUPPRESSED"}
+        return "REVIEW_ALERT_SUPPRESSED"
 
-    if action_status != "REVIEW_TV_CHART":
-
-        return {
-            "sent": False,
-            "reason": "ACTION_NOT_ALERTABLE"
-        }
-
-    option_contract = option_contract or {}
-
-    option_ticker = option_contract.get("ticker") or "NO_CONTRACT"
-    alert_key = _review_alert_key(symbol, entry_type)
-
-    if alert_was_sent(alert_key):
-
-        return {
-            "sent": False,
-            "reason": "DUPLICATE_ALERT",
-            "alert_key": alert_key
-        }
-
-    message = build_review_alert_message(
-        symbol,
-        entry_type,
-        next_condition
-    )
-
-    metadata = {
-        "symbol": symbol,
-        "direction": option_contract.get("type"),
-        "option_ticker": option_ticker,
-        "event_type": REVIEW_EVENT_TYPE,
-        "message_type": "REVIEW",
-        "decision": action_status,
-        "candidate_key": alert_key,
-        "action_status": action_status,
-        "final_signal": final_signal,
-        "setup_key": "_".join([str(symbol), entry_type]),
-        "closed": False
-    }
-    send_result = send_telegram_alert(
-        message,
-        after_success=lambda _result: mark_alert_sent(alert_key, metadata),
-        scan_id=scan_id,
-        dispatch_metadata={
-            "alert_key": alert_key,
-            "metadata": metadata,
-        }
-    )
-
-    return _queued_send_result(send_result, alert_key)
+    return "ACTION_NOT_ALERTABLE"
 
 
 @_telegram_attempt_logger("TRADE_OPEN")

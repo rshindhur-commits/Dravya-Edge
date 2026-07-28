@@ -219,7 +219,9 @@ class TrendCaptureTests(unittest.TestCase):
 
             result = _append_trend_capture_for_closed_trade(trade)
 
-        self.assertEqual(result, "trend_capture_analysis.csv")
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["Trend Capture %"], 60)
+        self.assertEqual(result["Exit Verdict"], "NEEDS_REVIEW")
         append_snapshot.assert_called_once()
         append_trend_capture.assert_called_once()
         self.assertEqual(

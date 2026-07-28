@@ -103,7 +103,7 @@ class ScannerDiagnosticsTests(unittest.TestCase):
             {
                 "Symbol": "NVDA",
                 "Final Signal": "HIGH CONVICTION BULLISH",
-                "Action Status": "ENTER_PAPER",
+                "Action Status": "REVIEW_TV_CHART",
                 "Entry": "BREAKOUT_LONG",
                 "Risk Reward": 2.4,
                 "Option Ticker": "NVDA_CALL",
@@ -123,7 +123,7 @@ class ScannerDiagnosticsTests(unittest.TestCase):
             {
                 "Symbol": "AAPL",
                 "Final Signal": "BULLISH",
-                "Action Status": "WAIT",
+                "Action Status": "ENTER_PAPER",
                 "Entry": "NO_ENTRY",
                 "Risk Reward": 0,
                 "Option Ticker": None,
@@ -139,40 +139,38 @@ class ScannerDiagnosticsTests(unittest.TestCase):
         ])
 
         with patch(
-            "app.main.maybe_send_scanner_entry_alert",
-            side_effect=[
-                {"sent": True, "reason": "SENT"},
-                {"sent": False, "reason": "NOT_ACTIONABLE_STATUS"},
-            ],
-        ) as send_alert:
+            "app.main.classify_scanner_entry_alert",
+            return_value="REVIEW_ALERT_SUPPRESSED",
+        ) as classify:
 
             summary = _dispatch_telegram_entry_alerts(df_results)
 
         self.assertEqual(summary["enter_paper_count"], 1)
-        self.assertEqual(summary["attempted_count"], 2)
-        self.assertEqual(summary["sent_count"], 1)
-        self.assertEqual(summary["blocked_count"], 1)
-        self.assertEqual(summary["reasons"]["SENT"], 1)
-        self.assertEqual(summary["reasons"]["NOT_ACTIONABLE_STATUS"], 1)
-        nvda_call = next(
-            call
-            for call in send_alert.call_args_list
-            if call.kwargs["symbol"] == "NVDA"
+        self.assertEqual(summary["attempted_count"], 1)
+        self.assertEqual(summary["sent_count"], 0)
+        self.assertEqual(summary["blocked_count"], 2)
+        self.assertEqual(summary["reasons"]["REVIEW_ALERT_SUPPRESSED"], 1)
+        self.assertEqual(summary["reasons"]["NOT_LIFECYCLE_EVENT"], 1)
+        classify.assert_called_once_with(
+            action_decision={"action_status": "REVIEW_TV_CHART"},
+            entry_setup={"entry_type": "BREAKOUT_LONG"}
         )
         self.assertEqual(
-            nvda_call.kwargs["setup_score"],
-            87
+            df_results.loc[0, "Telegram Eligibility"],
+            "REVIEW_ALERT_SUPPRESSED"
         )
-        self.assertEqual(df_results.loc[0, "Telegram Eligibility"], "SENT")
-        self.assertIsNone(df_results.loc[0, "Telegram Block Reason"])
-        self.assertTrue(df_results.loc[0, "Telegram Sent"])
+        self.assertEqual(
+            df_results.loc[0, "Telegram Block Reason"],
+            "REVIEW_ALERT_SUPPRESSED"
+        )
+        self.assertFalse(df_results.loc[0, "Telegram Sent"])
         self.assertEqual(
             df_results.loc[1, "Telegram Eligibility"],
-            "NOT_ACTIONABLE_STATUS"
+            "NOT_LIFECYCLE_EVENT"
         )
         self.assertEqual(
             df_results.loc[1, "Telegram Block Reason"],
-            "NOT_ACTIONABLE_STATUS"
+            "NOT_LIFECYCLE_EVENT"
         )
         self.assertFalse(df_results.loc[1, "Telegram Sent"])
 
