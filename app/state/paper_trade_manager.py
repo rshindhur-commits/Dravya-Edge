@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
-import csv
+import os
 from zoneinfo import ZoneInfo
 
 from app.utils.json_store import (
@@ -21,10 +21,16 @@ from app.storage.session_manager import (
     get_trading_day
 )
 from app.config.settings import get_int_env
+from app.versioning.strategy_version import UNVERSIONED
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-PAPER_TRADE_STATE_FILE = str(
+
+# S2.2/S2.4: overridable so a headless caller can run in shadow mode --
+# writing to a separate file instead of the dashboard's live state -- during
+# the S2.4 parallel-run comparison. Unset in normal operation; both paths use
+# the same file. See docs/specs/S2.1-headless-extraction-plan.md §7.
+PAPER_TRADE_STATE_FILE = os.getenv("PAPER_TRADE_STATE_FILE_OVERRIDE") or str(
     ROOT_DIR / "app" / "state" / "paper_trade_state.json"
 )
 ET_TZ = ZoneInfo("America/New_York")
@@ -62,7 +68,8 @@ PAPER_TRADE_EVENT_COLUMNS = [
     "exit_price",
     "status",
     "r_multiple",
-    "exit_reason"
+    "exit_reason",
+    "strategy_version"
 ]
 
 
@@ -189,25 +196,13 @@ def _append_paper_trade_event(trade, event_type, exit_price=None):
             "exit_price": exit_price if exit_price is not None else trade.get("close_price"),
             "status": trade.get("status"),
             "r_multiple": trade.get("r_multiple"),
-            "exit_reason": trade.get("exit_reason")
+            "exit_reason": trade.get("exit_reason"),
+            "strategy_version": trade.get("strategy_version") or UNVERSIONED
         }
-        write_header = (
-            not event_path.exists()
-            or event_path.stat().st_size == 0
-        )
 
-        with event_path.open("a", newline="", encoding="utf-8") as file:
+        from app.utils.csv_append import append_row
 
-            writer = csv.DictWriter(
-                file,
-                fieldnames=PAPER_TRADE_EVENT_COLUMNS
-            )
-
-            if write_header:
-
-                writer.writeheader()
-
-            writer.writerow(event)
+        append_row(event_path, event, PAPER_TRADE_EVENT_COLUMNS)
 
     except Exception as exc:
 
@@ -799,10 +794,17 @@ def open_paper_trade(
     opened_dt = _now_et()
     opened_at = _timestamp_for_key(opened_dt)
 
+    from app.versioning.strategy_version import compute_strategy_version
+
     trade = {
         "trade_id": str(uuid4()),
         "symbol": symbol,
         "status": "OPEN",
+        # S2.5: fingerprint of V1 decision logic + config at the moment this
+        # trade opened. Frozen at open, like risk geometry -- never
+        # recomputed at close, so it always reflects the code that actually
+        # decided this trade, not whatever is running when it closes.
+        "strategy_version": compute_strategy_version(),
         "trade_state": "OPEN",
         "direction": direction,
         "holding_profile": derive_holding_profile(scanner_context or {}).value,

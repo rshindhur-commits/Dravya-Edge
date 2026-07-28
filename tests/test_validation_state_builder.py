@@ -10,6 +10,7 @@ from app.ui.cache.validation_state_builder import (
     build_validation_state_payload,
     write_validation_state,
 )
+from app.versioning.strategy_version import UNVERSIONED, compute_strategy_version
 
 
 class ValidationStateBuilderTests(unittest.TestCase):
@@ -58,6 +59,8 @@ class ValidationStateBuilderTests(unittest.TestCase):
                     "Setup": "EMA_PULLBACK",
                     "Market Regime": "TRENDING_BULL",
                     "Exit Reason": "EMA",
+                    "Trading Day": "2026-07-18",
+                    "Strategy Version": compute_strategy_version(),
                 }
             ]),
             generated_at="2026-07-18T10:00:00Z",
@@ -101,6 +104,8 @@ class ValidationStateBuilderTests(unittest.TestCase):
 
     def test_strategy_confidence_requires_sample_and_time_evidence(self):
 
+        current_version = compute_strategy_version()
+
         with tempfile.TemporaryDirectory() as temp_dir:
 
             root = Path(temp_dir)
@@ -110,7 +115,11 @@ class ValidationStateBuilderTests(unittest.TestCase):
                 directory = root / f"2026-07-{day:02d}"
                 directory.mkdir()
                 pd.DataFrame([
-                    {"Trend Capture %": 60}
+                    {
+                        "Trend Capture %": 60,
+                        "Trading Day": f"2026-07-{day:02d}",
+                        "Strategy Version": current_version,
+                    }
                     for _ in range(4)
                 ]).to_csv(directory / "trend_capture_analysis.csv", index=False)
 
@@ -125,6 +134,66 @@ class ValidationStateBuilderTests(unittest.TestCase):
         self.assertEqual(confidence["completed_trades"], 80)
         self.assertEqual(confidence["confidence_pct"], 92)
         self.assertTrue(confidence["rule_change_allowed"])
+        self.assertEqual(confidence["strategy_version"], current_version)
+
+    def test_evidence_from_a_different_strategy_version_does_not_count(self):
+
+        # S2.5 / EXECUTION_PLAN.md Phase 2 backfill rule: evidence collected
+        # under a different (or unversioned/legacy) strategy_version must not
+        # inflate confidence for the version running today.
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            root = Path(temp_dir)
+
+            for day in range(1, 21):
+
+                directory = root / f"2026-07-{day:02d}"
+                directory.mkdir()
+                pd.DataFrame([
+                    {
+                        "Trend Capture %": 60,
+                        "Trading Day": f"2026-07-{day:02d}",
+                        "Strategy Version": "some-other-version",
+                    }
+                    for _ in range(4)
+                ]).to_csv(directory / "trend_capture_analysis.csv", index=False)
+
+            with patch("app.ui.cache.validation_state_builder.DAILY_DIR", root):
+
+                confidence = _strategy_confidence(
+                    "2026-07-20",
+                    pd.DataFrame(),
+                )
+
+        self.assertEqual(confidence["evidence_days"], 0)
+        self.assertEqual(confidence["completed_trades"], 0)
+        self.assertFalse(confidence["rule_change_allowed"])
+        self.assertEqual(confidence["level"], "INSUFFICIENT_EVIDENCE")
+        self.assertIn("some-other-version", confidence["by_version"])
+        self.assertEqual(confidence["by_version"]["some-other-version"]["completed_trades"], 80)
+
+    def test_legacy_rows_with_no_strategy_version_column_are_unversioned(self):
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            root = Path(temp_dir)
+            directory = root / "2026-07-01"
+            directory.mkdir()
+
+            # No "Strategy Version" column at all -- simulates a CSV written
+            # before this stamp existed.
+            pd.DataFrame([
+                {"Trend Capture %": 60, "Trading Day": "2026-07-01"}
+                for _ in range(4)
+            ]).to_csv(directory / "trend_capture_analysis.csv", index=False)
+
+            with patch("app.ui.cache.validation_state_builder.DAILY_DIR", root):
+
+                confidence = _strategy_confidence("2026-07-01", pd.DataFrame())
+
+        self.assertIn(UNVERSIONED, confidence["by_version"])
+        self.assertEqual(confidence["by_version"][UNVERSIONED]["completed_trades"], 4)
+        self.assertEqual(confidence["completed_trades"], 0)
 
     def test_write_validation_state_writes_live_and_daily_json(self):
 

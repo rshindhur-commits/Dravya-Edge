@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from app.analytics.trade_efficiency.recommendations import (
 )
 from app.analytics.trade_efficiency.trend_continuation import analyze_post_exit_trend
 from app.storage.daily_paths import daily_path
+from app.versioning.strategy_version import UNVERSIONED
 
 
 TREND_CAPTURE_COLUMNS = [
@@ -97,6 +97,7 @@ TREND_CAPTURE_COLUMNS = [
     "Best Profit",
     "Delay Recommendation",
     "Trade Efficiency Score",
+    "Strategy Version",
 ]
 
 
@@ -540,6 +541,10 @@ def build_trend_capture_row(trade, trend_capture, snapshot=None):
         "MAE": trend_capture.get("mae"),
         "Exit Trigger": primary_exit,
         "Engineering Recommendation": None,
+        # S2.5 backfill rule: a trade opened before this stamp existed has
+        # no strategy_version on it -- resolve to the sentinel here, at the
+        # evidence boundary, not a bare None (EXECUTION_PLAN.md Phase 2).
+        "Strategy Version": trade.get("strategy_version") or UNVERSIONED,
     }
     row["Trade Efficiency Score"] = calculate_trade_efficiency_score(
         pd.DataFrame([row])
@@ -557,35 +562,14 @@ def build_trend_capture_row(trade, trend_capture, snapshot=None):
 
 def append_trend_capture_row(trading_day, row):
 
+    from app.utils.csv_append import append_row
+
     path = daily_path(
         trading_day,
         "trend_capture_analysis.csv"
     )
-    path.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-    write_header = not path.exists() or path.stat().st_size == 0
 
-    with path.open("a", newline="", encoding="utf-8") as handle:
-
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=TREND_CAPTURE_COLUMNS
-        )
-
-        if write_header:
-
-            writer.writeheader()
-
-        writer.writerow(
-            {
-                column: row.get(column)
-                for column in TREND_CAPTURE_COLUMNS
-            }
-        )
-
-    return path
+    return append_row(path, row, TREND_CAPTURE_COLUMNS)
 
 
 def summarize_trend_capture(df):

@@ -1,0 +1,58 @@
+name: CI
+
+# First CI pipeline for this repo (docs/OPERATIONS.md §11 previously noted
+# there was none). Two jobs:
+#   1. test    -- the pytest suite (I5: 284 is the floor, this run enforces it
+#                 stays green; the specific count is not asserted here so the
+#                 floor can rise without editing this file).
+#   2. strategy-version-gate -- S2.5: converts the validation freeze from
+#      documentation discipline into an actual build failure. See
+#      docs/specs/S2.5-strategy-version-gate.md and
+#      tools/check_strategy_version_approved.py.
+#
+# POLYGON_API_KEY is a placeholder, not a secret: app/indicators/
+# technical_indicators.py constructs a polygon.RESTClient at import time,
+# which raises if the env var is absent -- it is never dereferenced for a
+# real network call during the test suite (verified: all 361 tests pass with
+# this placeholder and no other env configured, no .env file present).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      POLYGON_API_KEY: ci-placeholder-not-a-real-key
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        run: python -m pytest tests -q
+
+  strategy-version-gate:
+    runs-on: ubuntu-latest
+    env:
+      POLYGON_API_KEY: ci-placeholder-not-a-real-key
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check strategy_version is approved (I1 gate)
+        run: python tools/check_strategy_version_approved.py

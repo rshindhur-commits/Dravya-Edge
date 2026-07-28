@@ -1284,6 +1284,49 @@ def _load_scanner_output():
     return df
 
 
+def _dispatch_trading_page_automation(df, auto_paper_controls):
+
+    # S2.3: extracted verbatim from the Trading-page render body so the parity
+    # harness (tests/test_headless_parity.py) can call the dashboard's actual
+    # trigger directly instead of driving a full Streamlit session. No
+    # behavior change -- same exits-then-entries order, same st.rerun()-after-
+    # close short-circuit (S2.1 §4.1) that app/runtime/headless_paper.py::
+    # run_cycle deliberately replicates.
+
+    from app.runtime.paper_automation import (
+        run_auto_paper_entries,
+        run_auto_paper_exits
+    )
+
+    auto_closed = run_auto_paper_exits(
+        df,
+        auto_paper_controls
+    )
+
+    if auto_closed:
+
+        st.success(
+            "Auto-closed paper trades: "
+            + ", ".join(auto_closed)
+        )
+        st.rerun()
+
+    auto_opened = run_auto_paper_entries(
+        df,
+        auto_paper_controls
+    )
+
+    if auto_opened:
+
+        st.success(
+            "Auto-opened paper trades: "
+            + ", ".join(auto_opened)
+        )
+        st.rerun()
+
+    return {"closed": auto_closed, "opened": auto_opened}
+
+
 def _load_dashboard_state(df=None):
 
     cached = _load_cached_state("dashboard_state.json", profile="trading")
@@ -2904,14 +2947,6 @@ def _load_auto_paper_decision_log():
     )
 
 
-def _load_auto_paper_settings():
-
-    return load_json_file(
-        str(AUTO_PAPER_SETTINGS_FILE),
-        {}
-    )
-
-
 def _save_auto_paper_settings(settings_data):
 
     save_json_file(
@@ -3881,7 +3916,14 @@ def _release_scanner_lock():
 
 def _auto_refresh_defaults():
 
-    saved_auto_settings = _load_auto_paper_settings()
+    # S2.2: defaults resolve through the shared resolver so the dashboard and
+    # the headless caller (app/runtime/headless_paper.py) can never disagree
+    # about a fallback value. See
+    # docs/specs/S2.1-headless-extraction-plan.md §3.1 and
+    # app/runtime/auto_paper_controls.py.
+    from app.runtime.auto_paper_controls import resolve_auto_paper_controls
+
+    resolved = resolve_auto_paper_controls()
 
     if "auto_refresh_enabled" not in st.session_state:
 
@@ -3901,82 +3943,39 @@ def _auto_refresh_defaults():
 
     if "auto_paper_enabled" not in st.session_state:
 
-        st.session_state["auto_paper_enabled"] = bool(
-            saved_auto_settings.get(
-                "auto_paper_enabled",
-                _env_bool("AUTO_PAPER_ENABLED", True)
-            )
-        )
+        st.session_state["auto_paper_enabled"] = resolved["auto_paper_enabled"]
 
     if "auto_paper_max_daily" not in st.session_state:
 
-        st.session_state["auto_paper_max_daily"] = int(
-            saved_auto_settings.get(
-                "auto_paper_max_daily",
-                3
-            )
-        )
+        st.session_state["auto_paper_max_daily"] = resolved["max_daily"]
 
     if "auto_paper_min_setup" not in st.session_state:
 
-        st.session_state["auto_paper_min_setup"] = int(
-            saved_auto_settings.get(
-                "auto_paper_min_setup",
-                70
-            )
-        )
+        st.session_state["auto_paper_min_setup"] = int(resolved["min_setup"])
 
     if "auto_paper_min_rr" not in st.session_state:
 
-        st.session_state["auto_paper_min_rr"] = float(
-            saved_auto_settings.get(
-                "auto_paper_min_rr",
-                DEFAULT_AUTO_PAPER_MIN_RR
-            )
-        )
+        st.session_state["auto_paper_min_rr"] = resolved["min_rr"]
 
     if "auto_paper_direction" not in st.session_state:
 
-        st.session_state["auto_paper_direction"] = saved_auto_settings.get(
-            "auto_paper_direction",
-            "Both"
-        )
+        st.session_state["auto_paper_direction"] = resolved["direction"]
 
     if "auto_paper_exit_enabled" not in st.session_state:
 
-        st.session_state["auto_paper_exit_enabled"] = bool(
-            saved_auto_settings.get(
-                "auto_paper_exit_enabled",
-                True
-            )
-        )
+        st.session_state["auto_paper_exit_enabled"] = resolved["auto_exit_enabled"]
 
     if "auto_paper_eod_close_enabled" not in st.session_state:
 
-        st.session_state["auto_paper_eod_close_enabled"] = _boolish(
-            saved_auto_settings.get(
-                "auto_paper_eod_close_enabled",
-                False
-            )
-        )
+        st.session_state["auto_paper_eod_close_enabled"] = resolved["eod_close_enabled"]
 
     if "restore_multiday_positions" not in st.session_state:
 
-        st.session_state["restore_multiday_positions"] = _boolish(
-            saved_auto_settings.get(
-                "restore_multiday_positions",
-                True
-            )
-        )
+        st.session_state["restore_multiday_positions"] = resolved["restore_multiday_positions"]
 
     if "auto_paper_profit_r" not in st.session_state:
 
-        st.session_state["auto_paper_profit_r"] = float(
-            saved_auto_settings.get(
-                "auto_paper_profit_r",
-                1.0
-            )
-        )
+        st.session_state["auto_paper_profit_r"] = resolved["profit_r"]
 
 
 
@@ -9391,36 +9390,7 @@ def main():
         latest_scanner_run = latest_time.iloc[0]
         st.caption(f"Last scanner run: {latest_scanner_run}")
 
-    from app.runtime.paper_automation import (
-        run_auto_paper_entries,
-        run_auto_paper_exits
-    )
-
-    auto_closed = run_auto_paper_exits(
-        df,
-        auto_paper_controls
-    )
-
-    if auto_closed:
-
-        st.success(
-            "Auto-closed paper trades: "
-            + ", ".join(auto_closed)
-        )
-        st.rerun()
-
-    auto_opened = run_auto_paper_entries(
-        df,
-        auto_paper_controls
-    )
-
-    if auto_opened:
-
-        st.success(
-            "Auto-opened paper trades: "
-            + ", ".join(auto_opened)
-        )
-        st.rerun()
+    _dispatch_trading_page_automation(df, auto_paper_controls)
 
     dashboard_state = _load_dashboard_state(df)
 

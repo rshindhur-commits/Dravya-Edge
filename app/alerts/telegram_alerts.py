@@ -16,6 +16,7 @@ from app.gates import (
 from app.runtime import measure_runtime
 from app.runtime.telegram_dispatcher import dispatch_telegram_message
 from app.utils.json_store import load_json_file, save_json_file
+from app.versioning.strategy_version import UNVERSIONED
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -46,6 +47,17 @@ class TelegramDeliveryError(RuntimeError):
         super().__init__(
             f"Telegram API error {status_code}: {description}"
         )
+
+
+def _alert_strategy_version(trade):
+
+    # S2.5: the trade's own frozen-at-open stamp, not a fresh computation --
+    # an alert about a trade must report the version that decided *that*
+    # trade, not whatever code is running when the alert happens to fire.
+    # UNVERSIONED for trades opened before this stamp existed (backfill rule,
+    # EXECUTION_PLAN.md Phase 2), never a bare None.
+
+    return (trade or {}).get("strategy_version") or UNVERSIONED
 
 
 def _bool_value(value, default=False):
@@ -1992,7 +2004,8 @@ def maybe_send_paper_entry_alert(
             str(direction),
             str(trade.get("entry_type"))
         ]),
-        "closed": False
+        "closed": False,
+        "strategy_version": _alert_strategy_version(trade)
     }
     send_result = send_telegram_alert(
         message,
@@ -2402,6 +2415,7 @@ def maybe_send_trade_exit_alert(
         "scanner_row_symbol": scanner_row_symbol,
         "mfe_r": mfe_r,
         "trend_capture_pct": trend_capture_pct,
+        "strategy_version": _alert_strategy_version(trade),
     }
     send_result = send_telegram_alert(
         message,

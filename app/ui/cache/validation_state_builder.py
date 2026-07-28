@@ -11,6 +11,7 @@ from app.analytics.trend_capture import summarize_trend_capture
 from app.runtime.scan_generation import atomic_write_json, metadata_from_generation
 from app.storage.daily_paths import DAILY_DIR, daily_path, live_path
 from app.ui.dashboard_state import build_today_performance_summary
+from app.versioning.strategy_version import UNVERSIONED, compute_strategy_version
 
 
 def _read_csv(path: Path):
@@ -177,11 +178,56 @@ def _strategy_confidence(report_date, trend_capture):
             "level": "INSUFFICIENT_EVIDENCE",
             "rule_change_allowed": False,
             "message": "No completed trades. Do not change rules.",
+            "strategy_version": compute_strategy_version(),
+            "by_version": {},
         }
 
     evidence = pd.concat(frames, ignore_index=True, sort=False)
-    evidence_days = int(len(frames))
-    completed_trades = int(len(evidence))
+
+    # S2.5: counters are segmented by strategy_version so a V1 logic change
+    # cannot silently inherit evidence collected under different decision
+    # logic. Rows recorded before this stamp existed have no "Strategy
+    # Version" column at all (pre-S2.5 CSVs) -- treat those identically to
+    # the UNVERSIONED sentinel used everywhere else, per the
+    # EXECUTION_PLAN.md Phase 2 backfill note.
+    if "Strategy Version" not in evidence.columns:
+
+        evidence["Strategy Version"] = UNVERSIONED
+
+    evidence["Strategy Version"] = evidence["Strategy Version"].fillna(UNVERSIONED)
+
+    current_version = compute_strategy_version()
+    by_version = {}
+
+    for version, group in evidence.groupby("Strategy Version"):
+
+        version_days = int(group["Trading Day"].nunique()) if "Trading Day" in group.columns else int(len(frames))
+        version_trades = int(len(group))
+        by_version[str(version)] = {
+            "evidence_days": version_days,
+            "completed_trades": version_trades,
+        }
+
+    current_slice = by_version.get(current_version, {"evidence_days": 0, "completed_trades": 0})
+    evidence_days = current_slice["evidence_days"]
+    completed_trades = current_slice["completed_trades"]
+
+    if evidence_days == 0 and completed_trades == 0:
+
+        return {
+            "evidence_days": 0,
+            "completed_trades": 0,
+            "confidence_pct": 0,
+            "level": "INSUFFICIENT_EVIDENCE",
+            "rule_change_allowed": False,
+            "message": (
+                "No completed trades under the current strategy_version "
+                f"({current_version}). Do not change rules."
+            ),
+            "strategy_version": current_version,
+            "by_version": by_version,
+        }
+
     day_component = min(35, 2 + max(0, evidence_days - 1) * 33 / 19)
     trade_component = min(42, completed_trades)
     confidence_pct = min(95, round(15 + day_component + trade_component))
@@ -198,6 +244,8 @@ def _strategy_confidence(report_date, trend_capture):
             if rule_change_allowed
             else "Evidence is still observational. DO NOT CHANGE RULE."
         ),
+        "strategy_version": current_version,
+        "by_version": by_version,
     }
 
 

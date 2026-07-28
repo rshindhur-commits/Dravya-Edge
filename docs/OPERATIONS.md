@@ -17,7 +17,7 @@ python -m app.main
 # Dashboard
 streamlit run app/dashboard.py
 
-# Tests — 284 tests, all passing
+# Tests — 367 tests, all passing
 .venv/Scripts/python.exe -m pytest tests -q
 
 # One focused test file
@@ -26,7 +26,7 @@ streamlit run app/dashboard.py
 
 ⚠️ **Do not use `unittest discover`.** 20 of the 63 test files use bare
 `def test_*` functions rather than `unittest.TestCase`, and `unittest discover`
-cannot collect those — it reports 227 of 284 tests and exits green, hiding the
+cannot collect those — it reports 310 of 367 tests and exits green, hiding the
 rest. This is how a stale assertion in `test_telegram_exit_price_selection.py`
 survived a message-format change undetected. pytest collects both styles, so the
 42 `TestCase` files keep working unchanged.
@@ -238,6 +238,29 @@ contract at close, otherwise `BS_ESTIMATE`. A `None` value is never a zero —
 Measured results on the archive are in
 [`specs/S1.5-divergence-report.md`](specs/S1.5-divergence-report.md).
 
+## 7b. Strategy version and the I1 gate
+
+`app/versioning/strategy_version.py::compute_strategy_version()` fingerprints
+V1 decision logic (`momentum_strategy.py`, `entry_engine.py`, `risk_manager.py`,
+`exit_engine.py`, `entry_gate.py`, plus `SCANNER_ENTRY_GATE_CONFIG`) and is
+stamped onto every paper trade at open, frozen for that trade's lifetime.
+Full design: [`specs/S2.5-strategy-version-gate.md`](specs/S2.5-strategy-version-gate.md).
+
+**If CI fails on `strategy-version-gate`:** you changed one of the 5 files (or
+the scanner entry gate config). Run `python tools/check_strategy_version_approved.py`
+locally to see the new hash, decide whether the change was intentional, and:
+
+- **Intentional V1 change** — add an entry to
+  `app/versioning/approved_strategy_versions.json` with the new hash, today's
+  date, and why (PR link, reviewer). Commit it in the same PR.
+- **Not intentional** — the diff touched V1 decision logic without meaning to.
+  Revert it or move it behind a flag (I1/I6).
+
+Evidence counters (`_strategy_confidence` in `validation_state_builder.py`)
+are segmented by this version — evidence from a different `strategy_version`
+does not count toward the current version's confidence or
+`rule_change_allowed`. Legacy rows with no stamp read as `v0-unversioned`.
+
 ## 8. Troubleshooting
 
 | Symptom | Likely cause | Check |
@@ -298,8 +321,10 @@ state, and candidate snapshots via the sidebar downloads.
 - **No risk kill-switch.**
 - **No async market-stream processing** — everything is REST poll + cache.
 - **Backtesting is stock-underlying only**; no historical option-quote replay.
-- **No CI.** There is no `.github/workflows`. Any plan step that says "fails CI"
-  needs a pipeline stood up first.
+- **Minimal CI only, since S2.5.** `.github/workflows/ci.yml` runs the pytest
+  suite and the `strategy_version` approval gate (§7b) on push/PR. It does not
+  lint, type-check, or deploy — a plan step that says "fails CI" for anything
+  outside those two checks still needs a pipeline stood up.
 - `_run_scanner_impl` is ~3,300 lines in one function; `dashboard.py` is 9,431
   lines. Both are known refactor targets.
 

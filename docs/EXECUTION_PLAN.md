@@ -25,11 +25,11 @@ Put these verbatim in `CLAUDE.md`. They are the quality guarantee.
 
 | # | Invariant |
 |---|---|
-| I1 | **No V1 entry / exit / risk logic changes** in Phases 0–6. Everything before Phase 7 is measurement. Any diff touching `momentum_strategy`, `entry_engine`, `risk_manager`, or `exit_engine` decision logic is out of scope and must be refused. |
+| I1 | **No V1 entry / exit / risk logic changes** in Phases 0–6. Everything before Phase 7 is measurement. Any diff touching `momentum_strategy`, `entry_engine`, `risk_manager`, `exit_engine`, or `entry_gate` decision logic is out of scope and must be refused. CI-enforced since S2.5 via `strategy_version` (see [S2.5 spec](specs/S2.5-strategy-version-gate.md)). |
 | I2 | **Dual-compute before replace.** Every new number is emitted *alongside* the old one, reconciled on archived data, and only then promoted. Nothing is swapped in place. |
 | I3 | **Characterization tests first.** Pin current behaviour before refactoring it. |
 | I4 | **`REAL_TRADING_ENABLED=false`** for the entire program. No exceptions, no temporary flips. |
-| I5 | **Test count only rises.** 284 is the floor, measured with **pytest** (`unittest discover` silently misses 57 tests — see [OPERATIONS.md §1](OPERATIONS.md#1-commands)). Full suite green before any merge. |
+| I5 | **Test count only rises.** 367 is the floor, measured with **pytest** (`unittest discover` silently misses 57 tests — see [OPERATIONS.md §1](OPERATIONS.md#1-commands)). Full suite green before any merge. CI-enforced since S2.5 (`.github/workflows/ci.yml`). |
 | I6 | **Behaviour changes ship dark.** Anything that could alter trade selection lands behind a flag, defaulted off, logging the counterfactual. |
 
 ---

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-
 import pandas as pd
 
 from app.storage.daily_paths import daily_path
@@ -46,6 +44,7 @@ TRADE_EXIT_SNAPSHOT_COLUMNS = [
     "pnl_option_est",
     "cost_total",
     "pnl_source",
+    "strategy_version",
 ]
 
 
@@ -155,54 +154,11 @@ def build_trade_snapshot(
 
 def append_trade_exit_snapshot(trading_day, snapshot):
 
+    from app.utils.csv_append import append_row
+
     path = daily_path(
         trading_day,
         "trade_exit_snapshots.csv"
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not path.exists() or path.stat().st_size == 0
-    columns = TRADE_EXIT_SNAPSHOT_COLUMNS
 
-    if not write_header:
-
-        columns = _existing_header(path) or TRADE_EXIT_SNAPSHOT_COLUMNS
-
-    with path.open("a", newline="", encoding="utf-8") as handle:
-
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=columns
-        )
-
-        if write_header:
-
-            writer.writeheader()
-
-        writer.writerow({
-            column: snapshot.get(column)
-            for column in columns
-        })
-
-    return path
-
-
-def _existing_header(path):
-
-    """Append against the file's own header.
-
-    A day file written before a column was added keeps its original header;
-    writing today's wider row into it would misalign every value. Falling back
-    to the file's header drops the new columns for that day instead.
-    """
-
-    try:
-
-        with path.open("r", newline="", encoding="utf-8") as handle:
-
-            header = next(csv.reader(handle), None)
-
-        return header or None
-
-    except Exception:
-
-        return None
+    return append_row(path, snapshot, TRADE_EXIT_SNAPSHOT_COLUMNS)

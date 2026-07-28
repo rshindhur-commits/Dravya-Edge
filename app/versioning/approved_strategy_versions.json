@@ -1,0 +1,9 @@
+{
+  "approved": [
+    {
+      "strategy_version": "30566aefd474",
+      "approved_at": "2026-07-28",
+      "note": "Baseline at S2.5 (docs/specs/S2.5-strategy-version-gate.md) -- first version this gate tracks. Not a claim that this is validated V1 logic, only that it is the known, reviewed starting point."
+    }
+  ]
+}

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from app.versioning.strategy_version import UNVERSIONED
+
 
 @dataclass(frozen=True)
 class ExitSnapshot:
@@ -37,6 +39,7 @@ class ExitSnapshot:
     pnl_option_est: object = None
     cost_total: object = None
     pnl_source: object = None
+    strategy_version: object = None
 
     def to_record(self): return asdict(self)
 
@@ -64,4 +67,9 @@ def create_exit_snapshot(trade, trend_row):
         option_exit_quote_source=trade.get("option_exit_quote_source"),
         r_multiple_net=trade.get("r_multiple_net"), pnl_option_est=trade.get("pnl_option_est"),
         cost_total=trade.get("cost_total"), pnl_source=trade.get("pnl_source"),
+        # S2.5 backfill rule (EXECUTION_PLAN.md Phase 2): a trade opened
+        # before this stamp existed has no strategy_version on it. Resolve to
+        # the sentinel here, at the evidence boundary, rather than writing a
+        # bare None that every downstream counter would have to special-case.
+        strategy_version=trade.get("strategy_version") or UNVERSIONED,
     )

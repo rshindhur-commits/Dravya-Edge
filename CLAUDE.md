@@ -26,7 +26,7 @@ in [ARCHITECTURE.md §7](docs/ARCHITECTURE.md#7-corrections-vs-legacy-docs).
 ```powershell
 python -m app.main                                   # scanner (module form required)
 streamlit run app/dashboard.py                       # dashboard
-.venv/Scripts/python.exe -m pytest tests -q           # 284 tests, all passing
+.venv/Scripts/python.exe -m pytest tests -q           # 367 tests, all passing
 ```
 
 `test_background_queue.py` intentionally prints `RuntimeError: expected test
@@ -34,7 +34,7 @@ failure` — that is the isolation test working, not a failure.
 
 **Use pytest, not `unittest discover`.** 20 of 63 test files use bare
 `def test_*` functions, which `unittest discover` cannot collect — it silently
-runs 227 of 284 tests. pytest collects both styles.
+runs 310 of 367 tests. pytest collects both styles.
 
 ## The one thing to internalize first
 
@@ -67,11 +67,11 @@ session until the program completes.
 
 | # | Invariant |
 |---|---|
-| I1 | **No V1 entry / exit / risk logic changes** in Phases 0–6. Everything before Phase 7 is measurement. Any diff touching `momentum_strategy`, `entry_engine`, `risk_manager`, or `exit_engine` decision logic is out of scope and must be refused. |
+| I1 | **No V1 entry / exit / risk logic changes** in Phases 0–6. Everything before Phase 7 is measurement. Any diff touching `momentum_strategy`, `entry_engine`, `risk_manager`, `exit_engine`, or `entry_gate` decision logic is out of scope and must be refused. Since S2.5 this is CI-enforced, not just a review rule — see [`docs/specs/S2.5-strategy-version-gate.md`](docs/specs/S2.5-strategy-version-gate.md). |
 | I2 | **Dual-compute before replace.** Every new number is emitted *alongside* the old one, reconciled on archived data, and only then promoted. Nothing is swapped in place. |
 | I3 | **Characterization tests first.** Pin current behaviour before refactoring it. |
 | I4 | **`REAL_TRADING_ENABLED=false`** for the entire program. No exceptions, no temporary flips. |
-| I5 | **Test count only rises.** 284 is the floor (pytest). Full suite green before any merge. |
+| I5 | **Test count only rises.** 367 is the floor (pytest). Full suite green before any merge. |
 | I6 | **Behaviour changes ship dark.** Anything that could alter trade selection lands behind a flag, defaulted off, logging the counterfactual. |
 
 One note on the above: `REAL_TRADING_ENABLED` is absent from the live `.env`;
