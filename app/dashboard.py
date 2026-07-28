@@ -2334,6 +2334,39 @@ def _real_review_scan_count(row):
     return scan_count
 
 
+_LINEAR_PNL_WARNED = False
+
+
+def _warn_linear_pnl_deprecated():
+
+    """DEPRECATED: realized $ = risk_at_stop x R x contracts.
+
+    `risk_at_stop` is `premium x OPTION_STOP_LOSS_PCT`, i.e. a flat 20%-of-premium
+    loss at the stop regardless of delta, DTE or IV. S1.5 measured the real figure
+    at a 8.72% median across the archive (range 4.84-15.84), so this map overstates
+    stop-out cost by roughly 2.3x and ignores transaction cost entirely.
+
+    Superseded by `app/economics/option_pnl.py::r_multiple_net` and the
+    `pnl_option_est` / `cost_total` fields written at close. Retained because it is
+    the only path that produces a realized figure for REAL-mode trades, which the
+    cost model does not yet cover. Warns once per process; do not extend it.
+    """
+
+    global _LINEAR_PNL_WARNED
+
+    if _LINEAR_PNL_WARNED:
+
+        return
+
+    _LINEAR_PNL_WARNED = True
+
+    print(
+        "[DEPRECATED] linear risk_at_stop x R P&L used in "
+        "_daily_realized_real_pnl(); superseded by app/economics/option_pnl.py "
+        "(see docs/specs/S1.5-divergence-report.md)"
+    )
+
+
 def _daily_realized_real_pnl():
 
     try:
@@ -2385,6 +2418,7 @@ def _daily_realized_real_pnl():
 
             if risk_at_stop is not None and r_multiple is not None:
 
+                _warn_linear_pnl_deprecated()
                 realized = risk_at_stop * r_multiple * contracts
 
         if realized is not None:

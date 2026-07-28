@@ -17,3 +17,9 @@
 {"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.14, "refresh_time": "2026-07-28T03:26:17.620058+00:00"}
 {"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.1, "refresh_time": "2026-07-28T03:32:40.015976+00:00"}
 {"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.14, "refresh_time": "2026-07-28T03:34:26.152057+00:00"}
+{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.14, "refresh_time": "2026-07-28T03:51:54.913769+00:00"}
+{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.18, "refresh_time": "2026-07-28T04:00:40.443735+00:00"}
+{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.1, "refresh_time": "2026-07-28T04:05:08.563484+00:00"}
+{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.11, "refresh_time": "2026-07-28T04:05:55.221787+00:00"}
+{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.11, "refresh_time": "2026-07-28T04:06:29.946940+00:00"}
+{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.11, "refresh_time": "2026-07-28T04:11:42.403238+00:00"}

@@ -203,6 +203,41 @@ mirrors the same workflow, including a Freeze Baseline action.
 The baseline is frozen per day and immutable — regressions compare against that
 fixed day, never against yesterday's code.
 
+## 7a. Trade economics (net-of-cost P&L)
+
+`app/economics/` computes option-denominated, net-of-cost P&L alongside the
+legacy underlying-denominated numbers. **On by default since S1.6.**
+
+| Setting | Default | Effect |
+|---|---|---|
+| `COST_MODEL_ENABLED` | **`true`** | Emits the net-of-cost fields at trade close. Set `false` to disable entirely |
+| `COST_COMMISSION_PER_CONTRACT` | 0.65 | ⚠️ **Unconfirmed placeholder** — set to your broker's actual rate |
+| `COST_ENTRY_FILL_AGGRESSION` / `COST_EXIT_FILL_AGGRESSION` | 1.0 | 0.0 = mid fill, 1.0 = full spread cross |
+| `COST_STOP_EXIT_SPREAD_MULTIPLIER` | 1.0 | Spread widening on stop exits. **Disabled by default** — unmeasured, and raising it moves net R counterintuitively |
+| `COST_TICK_SIZE` | 0 (infer) | 0 infers $0.01 under $3.00, $0.05 above |
+
+Fields written on the trade and into `trade_exit_snapshots.csv`:
+`r_multiple_net`, `r_multiple_gross`, `pnl_option_est`, `pnl_underlying_est`,
+`cost_total`, `premium_at_stop_est`, `implied_stop_loss_pct`, `pnl_source`,
+`pnl_confidence`.
+
+Three rules when reading these:
+
+1. **`r_multiple_net` and `r_multiple` are different units** and must never
+   share an axis. Net R's denominator includes friction, so a loser can read
+   *less* negative under net R.
+2. **Dollars are the primary unit; R is secondary and always labelled.**
+3. **Never publish a net-R figure without its aggression band.** Fill aggression
+   cannot be measured without broker fills, so it is a permanent assumption —
+   report the 0.0 and 1.0 bounds together.
+
+`pnl_source` is `ACTUAL_QUOTE` when the scanner row held a quote for the same
+contract at close, otherwise `BS_ESTIMATE`. A `None` value is never a zero —
+`pnl_status`/`pnl_reason` explain every omission.
+
+Measured results on the archive are in
+[`specs/S1.5-divergence-report.md`](specs/S1.5-divergence-report.md).
+
 ## 8. Troubleshooting
 
 | Symptom | Likely cause | Check |

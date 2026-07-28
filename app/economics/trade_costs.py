@@ -31,7 +31,7 @@ class CostModel:
     sec_fee_rate_on_sell_proceeds: float = 0.0000278
     entry_fill_aggression: float = 1.0
     exit_fill_aggression: float = 1.0
-    stop_exit_spread_multiplier: float = 1.5
+    stop_exit_spread_multiplier: float = 1.0
     tick_size: float = 0.0
     contract_multiplier: int = CONTRACT_MULTIPLIER
 
@@ -68,10 +68,21 @@ def get_cost_model():
         sec_fee_rate_on_sell_proceeds=_env_float("COST_SEC_FEE_RATE", 0.0000278),
         entry_fill_aggression=_env_float("COST_ENTRY_FILL_AGGRESSION", 1.0),
         exit_fill_aggression=_env_float("COST_EXIT_FILL_AGGRESSION", 1.0),
-        stop_exit_spread_multiplier=_env_float("COST_STOP_EXIT_SPREAD_MULTIPLIER", 1.5),
+        stop_exit_spread_multiplier=_env_float("COST_STOP_EXIT_SPREAD_MULTIPLIER", 1.0),
         tick_size=_env_float("COST_TICK_SIZE", 0.0),
         contract_multiplier=int(_env_float("COST_CONTRACT_MULTIPLIER", CONTRACT_MULTIPLIER)),
     )
+
+
+def cost_model_enabled():
+
+    return str(os.getenv("COST_MODEL_ENABLED", "true")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on"
+    }
 
 
 def worst_status(*statuses):

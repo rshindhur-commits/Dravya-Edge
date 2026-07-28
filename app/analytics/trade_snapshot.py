@@ -38,6 +38,14 @@ TRADE_EXIT_SNAPSHOT_COLUMNS = [
     "trend_health_state",
     "exit_reason",
     "bars_held",
+    "option_ticker",
+    "option_entry_mid",
+    "option_exit_mid",
+    "option_exit_quote_source",
+    "r_multiple_net",
+    "pnl_option_est",
+    "cost_total",
+    "pnl_source",
 ]
 
 
@@ -153,12 +161,17 @@ def append_trade_exit_snapshot(trading_day, snapshot):
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists() or path.stat().st_size == 0
+    columns = TRADE_EXIT_SNAPSHOT_COLUMNS
+
+    if not write_header:
+
+        columns = _existing_header(path) or TRADE_EXIT_SNAPSHOT_COLUMNS
 
     with path.open("a", newline="", encoding="utf-8") as handle:
 
         writer = csv.DictWriter(
             handle,
-            fieldnames=TRADE_EXIT_SNAPSHOT_COLUMNS
+            fieldnames=columns
         )
 
         if write_header:
@@ -167,7 +180,29 @@ def append_trade_exit_snapshot(trading_day, snapshot):
 
         writer.writerow({
             column: snapshot.get(column)
-            for column in TRADE_EXIT_SNAPSHOT_COLUMNS
+            for column in columns
         })
 
     return path
+
+
+def _existing_header(path):
+
+    """Append against the file's own header.
+
+    A day file written before a column was added keeps its original header;
+    writing today's wider row into it would misalign every value. Falling back
+    to the file's header drops the new columns for that day instead.
+    """
+
+    try:
+
+        with path.open("r", newline="", encoding="utf-8") as handle:
+
+            header = next(csv.reader(handle), None)
+
+        return header or None
+
+    except Exception:
+
+        return None

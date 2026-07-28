@@ -14,7 +14,10 @@
       "Bash(.venv/Scripts/python.exe -m unittest discover tests -p \"test_holding_policy.py\" -v)",
       "Bash(.venv/Scripts/python.exe -m unittest tests.test_trade_costs tests.test_option_pnl)",
       "Bash(.venv/Scripts/python.exe -m pytest --version)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests -q)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests -q)",
+      "Bash(awk 'NR<=665 && /^def /{d=$0; n=NR} END{}' app/state/paper_trade_manager.py)",
+      "Bash(awk -F: '$1<665')",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_cost_model_wiring.py -q)"
     ]
   }
 }

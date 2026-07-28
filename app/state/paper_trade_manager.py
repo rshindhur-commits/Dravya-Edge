@@ -342,6 +342,157 @@ def _append_trend_capture_for_closed_trade(trade):
         return None
 
 
+def _exit_option_quote(trade, scanner_context):
+
+    """Resolve the exit option quote from the scanner row.
+
+    The scanner re-picks a contract every scan, so the row's quote is only
+    this trade's quote when the tickers agree. On any mismatch return nothing
+    rather than a quote for a contract the trade does not hold.
+    """
+
+    row = scanner_context or {}
+
+    held = str(trade.get("option_ticker") or "").strip().upper()
+    quoted = str(row.get("Option Ticker") or "").strip().upper()
+
+    unavailable = {
+        "mid": None,
+        "bid": None,
+        "ask": None,
+        "source": "UNAVAILABLE",
+    }
+
+    if not held or not quoted or held != quoted:
+
+        return unavailable
+
+    bid = _safe_float(row.get("Option Bid"))
+    ask = _safe_float(row.get("Option Ask"))
+
+    if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
+
+        return unavailable
+
+    return {
+        "mid": (bid + ask) / 2,
+        "bid": bid,
+        "ask": ask,
+        "source": "SCANNER_ROW",
+    }
+
+
+def _cost_model_fields(trade, close_price, exit_reason, exit_quote, closed_dt):
+
+    """Dual-emit net-of-cost, option-denominated P&L alongside the legacy fields.
+
+    Never raises and never alters an existing field. Returns {} when
+    COST_MODEL_ENABLED is off.
+    """
+
+    try:
+
+        from app.economics.trade_costs import cost_model_enabled, get_cost_model
+
+        if not cost_model_enabled():
+
+            return {}
+
+        from app.economics.option_pnl import (
+            option_pnl_estimated,
+            option_pnl_realized
+        )
+
+        model = get_cost_model()
+
+        estimated = option_pnl_estimated(
+            trade,
+            close_price,
+            closed_dt,
+            model,
+            exit_reason
+        )
+
+        if estimated.get("status") == "UNAVAILABLE":
+
+            return {
+                "pnl_source": "UNAVAILABLE",
+                "pnl_confidence": "LOW",
+                "pnl_status": estimated.get("status"),
+                "pnl_reason": estimated.get("reason"),
+            }
+
+        fields = {
+            "r_multiple_gross": estimated.get("r_multiple_gross"),
+            "r_multiple_net": estimated.get("r_multiple_net"),
+            "pnl_option_est": estimated.get("pnl_option_est"),
+            "pnl_underlying_est": estimated.get("pnl_underlying_est"),
+            "cost_total": estimated.get("cost_total"),
+            "cost_spread_component": estimated.get("cost_spread_component"),
+            "cost_commission_component": estimated.get("cost_commission_component"),
+            "premium_at_stop_est": estimated.get("premium_at_stop_est"),
+            "implied_stop_loss_pct": estimated.get("implied_stop_loss_pct"),
+            "entry_iv": estimated.get("entry_iv"),
+            "pnl_source": estimated.get("source"),
+            "pnl_confidence": estimated.get("confidence"),
+            "pnl_status": estimated.get("status"),
+            "pnl_reason": estimated.get("reason"),
+        }
+
+        if exit_quote.get("mid") is None:
+
+            return fields
+
+        realized = option_pnl_realized(
+            {
+                "bid": trade.get("option_bid"),
+                "ask": trade.get("option_ask"),
+            },
+            {
+                "bid": exit_quote.get("bid"),
+                "ask": exit_quote.get("ask"),
+            },
+            trade.get("option_contracts") or 1,
+            model,
+            exit_reason
+        )
+
+        if realized.get("status") == "UNAVAILABLE":
+
+            return fields
+
+        risk_net = estimated.get("risk_dollars_net")
+        risk_gross = estimated.get("risk_dollars_gross")
+
+        # Numerator from the observed quote; the stop premium in the
+        # denominator is always counterfactual and stays modelled.
+        fields.update({
+            "pnl_option_est": realized.get("pnl_option_net"),
+            "r_multiple_net": (
+                realized["pnl_option_net"] / risk_net
+                if risk_net
+                else None
+            ),
+            "r_multiple_gross": (
+                realized["pnl_option_gross"] / risk_gross
+                if risk_gross
+                else None
+            ),
+            "cost_total": realized.get("cost_total"),
+            "cost_spread_component": realized.get("cost_spread_component"),
+            "cost_commission_component": realized.get("cost_commission_component"),
+            "pnl_source": realized.get("source"),
+            "pnl_confidence": "HIGH",
+        })
+
+        return fields
+
+    except Exception as exc:
+
+        print(f"[COST MODEL WARNING] {exc}")
+        return {}
+
+
 def _paper_trade_result(trade, close_price):
 
     entry_price = _safe_float(
@@ -802,6 +953,23 @@ def close_paper_trade(
     trade["r_multiple"] = result["r_multiple"]
     trade["outcome"] = result["outcome"]
 
+    exit_quote = _exit_option_quote(trade, scanner_context)
+
+    trade["option_exit_bid"] = exit_quote["bid"]
+    trade["option_exit_ask"] = exit_quote["ask"]
+    trade["option_current_mid"] = exit_quote["mid"]
+    trade["option_exit_quote_source"] = exit_quote["source"]
+
+    trade.update(
+        _cost_model_fields(
+            trade,
+            close_price,
+            exit_reason,
+            exit_quote,
+            closed_dt
+        )
+    )
+
     if not trade_key:
 
         trade_key = _state_key_for_trade(trade)
@@ -831,7 +999,7 @@ def close_paper_trade(
             trade=trade,
             exit_reason=exit_reason,
             current_price=close_price,
-            option_current_mid=trade.get("option_mid"),
+            option_current_mid=exit_quote["mid"],
             pnl_pct=trade.get("pnl_pct"),
             r_multiple=trade.get("r_multiple"),
             outcome=trade.get("outcome"),

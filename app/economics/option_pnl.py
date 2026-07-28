@@ -584,7 +584,7 @@ def _assemble(trade, exit_spot, exit_time, model=None, exit_reason=None):
 
         return _unavailable_assembly("CROSSED_MARKET")
 
-    contracts = int(_float(_field(trade, "contracts"), 1) or 1)
+    contracts = int(_float(_field(trade, "contracts", "option_contracts"), 1) or 1)
 
     if contracts <= 0:
 
@@ -592,7 +592,7 @@ def _assemble(trade, exit_spot, exit_time, model=None, exit_reason=None):
 
     rate = _float(_field(trade, "risk_free_rate"), DEFAULT_RISK_FREE_RATE)
 
-    opened_at = _field(trade, "opened_at", "entry_time")
+    opened_at = _field(trade, "opened_at_et", "opened_at", "entry_time")
     entry_years = time_to_expiry_years(contract["expiry"], opened_at)
     exit_years = time_to_expiry_years(contract["expiry"], exit_time)
 

@@ -29,6 +29,14 @@ class ExitSnapshot:
     exit_priority_order: object
     best_exit: object
     exit_penalty_pct: object
+    option_ticker: object = None
+    option_entry_mid: object = None
+    option_exit_mid: object = None
+    option_exit_quote_source: object = None
+    r_multiple_net: object = None
+    pnl_option_est: object = None
+    cost_total: object = None
+    pnl_source: object = None
 
     def to_record(self): return asdict(self)
 
@@ -51,4 +59,9 @@ def create_exit_snapshot(trade, trend_row):
         trend_health=row.get("Trend Health State"), bars_held=row.get("Bars Held"), ema=row.get("EMA9 At Exit"), vwap=row.get("VWAP At Exit"),
         macd=row.get("MACD At Exit"), rsi=row.get("RSI At Exit"), reason=trade.get("exit_reason"), exit_priority_order=row.get("Exit Priority Order"),
         best_exit=best_exit, exit_penalty_pct=penalty,
+        option_ticker=trade.get("option_ticker"), option_entry_mid=trade.get("option_mid"),
+        option_exit_mid=trade.get("option_current_mid"),
+        option_exit_quote_source=trade.get("option_exit_quote_source"),
+        r_multiple_net=trade.get("r_multiple_net"), pnl_option_est=trade.get("pnl_option_est"),
+        cost_total=trade.get("cost_total"), pnl_source=trade.get("pnl_source"),
     )

@@ -50,12 +50,18 @@ class TestFillModel(unittest.TestCase):
         self.assertAlmostEqual(costs["spread_component"], 30.0, places=6)
 
     def test_tc_05_stop_multiplier_applies_only_to_stop_exits(self):
-        stopped = round_trip_costs(quote(3.85, 4.00), quote(3.85, 4.00), 1, MODEL, "HARD_STOP")
-        target = round_trip_costs(quote(3.85, 4.00), quote(3.85, 4.00), 1, MODEL, "HARD_TARGET")
+        widening = CostModel(tick_size=0.05, stop_exit_spread_multiplier=1.5)
+        stopped = round_trip_costs(quote(3.85, 4.00), quote(3.85, 4.00), 1, widening, "HARD_STOP")
+        target = round_trip_costs(quote(3.85, 4.00), quote(3.85, 4.00), 1, widening, "HARD_TARGET")
 
         self.assertEqual(stopped["exit_spread_multiplier"], 1.5)
         self.assertEqual(target["exit_spread_multiplier"], 1.0)
         self.assertGreater(stopped["spread_component"], target["spread_component"])
+
+    def test_stop_multiplier_is_disabled_by_default(self):
+        # S1.1 §11-R item 3: unmeasured, and raising it moves net R the
+        # counterintuitive way. Off until there is data.
+        self.assertEqual(CostModel().stop_exit_spread_multiplier, 1.0)
 
     def test_tc_05b_unclassified_exit_reason_degrades_and_does_not_widen(self):
         costs = round_trip_costs(quote(3.85, 4.00), quote(3.85, 4.00), 1, MODEL, None)

@@ -15,7 +15,9 @@ from app.economics.option_pnl import (
 from app.economics.trade_costs import DEGRADED, OK, UNAVAILABLE, CostModel
 
 
-MODEL = CostModel(tick_size=0.05)
+# Pinned to the parameters the S1.2 fixtures were computed under, so a change
+# to CostModel's defaults cannot silently move the recorded numbers.
+MODEL = CostModel(tick_size=0.05, stop_exit_spread_multiplier=1.5)
 
 ENTRY_AT = datetime(2026, 7, 27, 16, 0, tzinfo=MARKET_TZ)
 
