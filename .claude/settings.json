@@ -3,7 +3,18 @@
     "allow": [
       "Bash(echo \"---exit code $?---\")",
       "Bash(git add *)",
-      "Bash(.venv/Scripts/python.exe -m unittest discover tests)"
+      "Bash(.venv/Scripts/python.exe -m unittest discover tests)",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\rshin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Dravya-Trade-Works\\\\89ebffad-3a54-410a-a3f8-9c6c851f4fac\\\\scratchpad\\\\probe_polygon.py\")",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\rshin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Dravya-Trade-Works\\\\89ebffad-3a54-410a-a3f8-9c6c851f4fac\\\\scratchpad\\\\probe_append.py\")",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\rshin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Dravya-Trade-Works\\\\89ebffad-3a54-410a-a3f8-9c6c851f4fac\\\\scratchpad\\\\probe_market_payload.py\")",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\rshin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Dravya-Trade-Works\\\\89ebffad-3a54-410a-a3f8-9c6c851f4fac\\\\scratchpad\\\\fetch_chain.py\")",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\rshin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Dravya-Trade-Works\\\\89ebffad-3a54-410a-a3f8-9c6c851f4fac\\\\scratchpad\\\\fetch_chain2.py\")",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\rshin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Dravya-Trade-Works\\\\89ebffad-3a54-410a-a3f8-9c6c851f4fac\\\\scratchpad\\\\fixtures.py\")",
+      "Bash(.venv/Scripts/python.exe -m unittest discover tests -p \"test_holding_policy.py\" -v)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_trade_costs tests.test_option_pnl)",
+      "Bash(.venv/Scripts/python.exe -m pytest --version)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests -q)"
     ]
   }
 }

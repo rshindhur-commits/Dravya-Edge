@@ -413,7 +413,7 @@ Reconciliation reports `MATCH` for aligned file/database facts, `DB_AUTHORITATIV
 
 Version 1.0 is feature-frozen for strategy behavior. Do not add or loosen V1 entry, exit, risk, or sizing rules until at least 100-200 completed paper trades span 20 or more trading days and multiple market regimes. New ideas must run in shadow mode, accumulate persisted evidence, and move only through the human-controlled promotion workflow.
 
-Validation baseline: `python -m unittest discover tests` currently passes all 134 tests. The intentional background-worker failure printed by `test_background_queue.py` verifies failure isolation and does not fail the suite.
+Validation baseline: `python -m pytest tests -q` currently passes all 284 tests. The intentional background-worker failure printed by `test_background_queue.py` verifies failure isolation and does not fail the suite. Do not use `python -m unittest discover tests` — it cannot collect the 20 test files written as bare `def test_*` functions and silently reports only 227 tests.
 
 ```mermaid
 flowchart TD
@@ -762,7 +762,7 @@ The scanner keeps two option concepts separate:
 - Fallback execution is visible in logs as `[LIQUIDITY FALLBACK] Try ...`, `[LIQUIDITY FALLBACK] ... liquidity failed`, and `[LIQUIDITY FALLBACK] Accepted ...`. Scanner output also includes `Option Liquidity Attempts`, a JSON list of attempted source/ticker/code/reason/spread values for review.
 - Each scan appends long-form liquidity diagnostics to `option_liquidity_attempts.csv` under the trading day's daily data folder. Rows include symbol, selected option ticker, attempt index/source/ticker/code/reason/spread, whether the attempt was liquid, and whether it was accepted.
 - Each scan also writes a candidate funnel line to `candidate_funnel.jsonl` with counts for scanned, directional, entry ready, risk passed, option selected, liquidity passed, affordability passed, `EMA_REJECTION_SHORT`, `ENTER_PAPER`, Telegram attempted, Telegram sent, Telegram blocked, and Telegram block reasons. This is the quick check for whether the bottleneck is setup, options, affordability, or alerts. If `EMA_REJECTION_SHORT` exceeds `EMA_REJECTION_SHORT_WARNING_THRESHOLD` (default `10`), the scanner prints a warning that the recent rejection window may be too wide.
-- The focused fallback validation is `python -m unittest tests.test_option_liquidity_fallback`. Full local validation uses `python -m unittest discover tests`. Run both from the workspace root with the project virtualenv active.
+- The focused fallback validation is `python -m pytest tests/test_option_liquidity_fallback.py`. Full local validation uses `python -m pytest tests -q`. Run both from the workspace root with the project virtualenv active.
 
 In `OPTION_AFFORDABILITY_MODE=HARD`, a high-quality but expensive option is marked `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER` at the scanner action layer. The dashboard still shows the best-quality contract for review, and research visibility can ignore affordability through `SUGGESTIONS_IGNORE_AFFORDABILITY=true` and `PAPER_IGNORE_AFFORDABILITY=true`. Paper entries opened under that override are tagged with `Paper Affordability Override` and original affordability/cost fields. Real-trade readiness remains affordability-gated by default through `REAL_REQUIRE_AFFORDABILITY=true`.
 

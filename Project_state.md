@@ -239,7 +239,7 @@ The Daily Validation Report is the post-market artifact for the Validation page.
 - **Version 1.0 Evidence Freeze:** do not add or loosen V1 strategy behavior until 100-200 completed paper trades span at least 20 trading days and multiple market regimes. New logic must remain shadow-only until persisted evidence supports a human-controlled promotion review.
 - Migration `011_analytics_completion.sql` adds `analytics_summary` for resolved setup, regime/market, and lifecycle/decision aggregates plus `promotion_review` for timestamped human review history. Learning writes repository/Neon state first, then exports the same daily/live JSON payload as a resilient cache; aggregate/review failures cannot alter V1 behavior.
 - `LearningEngineRepository` exposes database-backed daily/lifetime summaries, feature statistics, aggregate statistics, and promotion candidates. Learning, Validation, and Reports prefer available warehouse memory for historical context while retaining file/cache fallback.
-- Final validation baseline: `python -m unittest discover tests` ran 134 tests successfully. The expected background-worker exception in `test_background_queue.py` verifies isolation and does not fail the suite.
+- Final validation baseline: `python -m pytest tests -q` ran 284 tests successfully. The expected background-worker exception in `test_background_queue.py` verifies isolation and does not fail the suite. `unittest discover` is no longer used — it cannot collect bare `def test_*` files and under-reports the suite by 57 tests.
 
 ### Production Entry Diagnostics
 
@@ -323,7 +323,7 @@ The Daily Validation Report is the post-market artifact for the Validation page.
 - Fallback attempts are visible in runtime logs with `[LIQUIDITY FALLBACK] Try ...`, failure, and accepted messages. Scanner rows include `Option Liquidity Attempts` as JSON for the attempted source/ticker/code/reason/spread chain.
 - `app/main.py` appends `option_liquidity_attempts.csv` daily rows for every liquidity attempt, including symbol, selected option ticker, attempt source/ticker/code/reason/spread, liquid flag, and accepted flag.
 - `app/main.py` prints and appends a permanent `candidate_funnel.jsonl` summary with scanned, directional, entry-ready, risk-passed, option-selected, liquidity-passed, affordability-passed, `EMA_REJECTION_SHORT`, `ENTER_PAPER`, Telegram attempted/sent/blocked, and Telegram reasons. `EMA_REJECTION_SHORT_WARNING_THRESHOLD` defaults to `10` and prints a warning if the recent rejection window appears too permissive.
-- Validation commands used for this slice: `python -m unittest tests.test_option_liquidity_fallback` and `python -m unittest discover tests`, run from the workspace root with the project virtualenv active.
+- Validation commands used for this slice: `python -m pytest tests/test_option_liquidity_fallback.py` and `python -m pytest tests -q`, run from the workspace root with the project virtualenv active.
 - `app/main.py` marks high-quality unaffordable setups as `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER`. Cheap contracts that fail the minimum cost/delta affordability rules can surface as `NO_TRADE_LOW_OPTION_QUALITY`.
 - Dashboard suggested-trade lifecycle and paper-validation candidate lists can ignore affordability for research visibility through `SUGGESTIONS_IGNORE_AFFORDABILITY=true` and `PAPER_IGNORE_AFFORDABILITY=true`, while preserving original affordability metadata and keeping real-trade readiness affordability-gated by default.
 

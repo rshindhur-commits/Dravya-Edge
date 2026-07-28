@@ -26,11 +26,15 @@ in [ARCHITECTURE.md §7](docs/ARCHITECTURE.md#7-corrections-vs-legacy-docs).
 ```powershell
 python -m app.main                                   # scanner (module form required)
 streamlit run app/dashboard.py                       # dashboard
-.venv/Scripts/python.exe -m unittest discover tests  # 140 tests, all passing
+.venv/Scripts/python.exe -m pytest tests -q           # 284 tests, all passing
 ```
 
 `test_background_queue.py` intentionally prints `RuntimeError: expected test
 failure` — that is the isolation test working, not a failure.
+
+**Use pytest, not `unittest discover`.** 20 of 63 test files use bare
+`def test_*` functions, which `unittest discover` cannot collect — it silently
+runs 227 of 284 tests. pytest collects both styles.
 
 ## The one thing to internalize first
 
@@ -67,12 +71,11 @@ session until the program completes.
 | I2 | **Dual-compute before replace.** Every new number is emitted *alongside* the old one, reconciled on archived data, and only then promoted. Nothing is swapped in place. |
 | I3 | **Characterization tests first.** Pin current behaviour before refactoring it. |
 | I4 | **`REAL_TRADING_ENABLED=false`** for the entire program. No exceptions, no temporary flips. |
-| I5 | **Test count only rises.** 134 is the floor. Full suite green before any merge. |
+| I5 | **Test count only rises.** 284 is the floor (pytest). Full suite green before any merge. |
 | I6 | **Behaviour changes ship dark.** Anything that could alter trade selection lands behind a flag, defaulted off, logging the counterfactual. |
 
-Two notes on the above: the **I5 floor is stale** — the suite is at **140**, so
-treat 140 as the working floor. And `REAL_TRADING_ENABLED` is absent from the
-live `.env`; I4 currently holds only because the code default is `False`.
+One note on the above: `REAL_TRADING_ENABLED` is absent from the live `.env`;
+I4 currently holds only because the code default is `False`.
 
 ## Architectural invariants
 

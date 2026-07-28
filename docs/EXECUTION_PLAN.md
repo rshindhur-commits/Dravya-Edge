@@ -29,7 +29,7 @@ Put these verbatim in `CLAUDE.md`. They are the quality guarantee.
 | I2 | **Dual-compute before replace.** Every new number is emitted *alongside* the old one, reconciled on archived data, and only then promoted. Nothing is swapped in place. |
 | I3 | **Characterization tests first.** Pin current behaviour before refactoring it. |
 | I4 | **`REAL_TRADING_ENABLED=false`** for the entire program. No exceptions, no temporary flips. |
-| I5 | **Test count only rises.** 134 is the floor. Full suite green before any merge. |
+| I5 | **Test count only rises.** 284 is the floor, measured with **pytest** (`unittest discover` silently misses 57 tests — see [OPERATIONS.md §1](OPERATIONS.md#1-commands)). Full suite green before any merge. |
 | I6 | **Behaviour changes ship dark.** Anything that could alter trade selection lands behind a flag, defaulted off, logging the counterfactual. |
 
 ---

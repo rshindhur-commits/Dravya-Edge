@@ -39,5 +39,6 @@ def test_exit_message_includes_trend_capture_when_available():
     )
 
     assert "TRADE CLOSED" in message
-    assert "WIN: 1.1R" in message
+    assert "✅ WIN" in message
+    assert "1.1R" in message
     assert "Trend Capture: 71.4%" in message

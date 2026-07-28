@@ -17,12 +17,19 @@ python -m app.main
 # Dashboard
 streamlit run app/dashboard.py
 
-# Tests — 140 tests, all passing
-.venv/Scripts/python.exe -m unittest discover tests
+# Tests — 284 tests, all passing
+.venv/Scripts/python.exe -m pytest tests -q
 
-# One focused test
-.venv/Scripts/python.exe -m unittest tests.test_market_session_decisions
+# One focused test file
+.venv/Scripts/python.exe -m pytest tests/test_market_session_decisions.py
 ```
+
+⚠️ **Do not use `unittest discover`.** 20 of the 63 test files use bare
+`def test_*` functions rather than `unittest.TestCase`, and `unittest discover`
+cannot collect those — it reports 227 of 284 tests and exits green, hiding the
+rest. This is how a stale assertion in `test_telegram_exit_price_selection.py`
+survived a message-format change undetected. pytest collects both styles, so the
+42 `TestCase` files keep working unchanged.
 
 The expected `RuntimeError: expected test failure` printed by
 `test_background_queue.py` is intentional — it verifies the background worker
@@ -289,3 +296,71 @@ untracked alerts.
 `paper_trade_state.json` is empty and `data/daily/` holds 5 folders, 4 of them
 near-bare. Real evidence lives on Streamlit Cloud / Neon. Any measurement task
 requiring "a real day's archive" must run there, or export a day down first.
+
+## 13. Storage audit — `candles_5m.csv` and HSR `market_payload` (S0.4, 2026-07-27)
+
+No local `data/daily/*/candles_5m.csv` existed to measure directly (confirmed
+empty per §12 above), so this was measured by driving the exact production code
+path once against the live Polygon feed (`get_polygon_data("QQQ", 5, "minute",
+1)`, then `_append_daily_candles`'s own transform and `_regression_market_snapshot`)
+rather than the archive, and scaling the per-call byte count to a full day via
+the two configured `SCANNER_CADENCE_INTERVALS` (5 min, 15 min).
+
+**Verdict: duplication confirmed on both paths.** Neither file/table trims to
+"what's new since the last scan" — both re-persist the full rolling window every
+scan.
+
+### `candles_5m.csv` (`app/main.py::_append_daily_candles`, called from the main
+scan loop for every symbol every scan)
+
+- `get_polygon_data(symbol, 5, "minute", days_back=1)` returned **193 5-minute
+  bars** just now (spans ~16h — premarket through after-hours, not just the
+  6.5h core session).
+- `_append_daily_candles` opens the file with `mode="a"` and writes **all 193
+  rows every call** — there is no filter for "rows already on disk." Only the
+  newest bar (or two, at 5-min cadence) is actually new information; the other
+  ~192 rows are byte-identical re-writes of rows already appended on the
+  previous scan.
+- Measured row cost: **124.9 bytes/row** (real CSV encoding: symbol, interval,
+  timestamp, OHLCV, trading_day, scan_id) → **~24.1 KB per symbol per scan**.
+- Projected to the 26-symbol watchlist:
+
+  | Cadence | Session assumption | Scans/day | MB/day |
+  |---|---|---|---|
+  | 5 min | market hours only (6.5h) | 78 | **46.6 MB** |
+  | 5 min | full observed feed window (~16h) | ~192 | **~114.8 MB** |
+  | 15 min | market hours only (6.5h) | 26 | **15.5 MB** |
+  | 15 min | full observed feed window (~16h) | ~64 | **~38.3 MB** |
+
+  True unique content is ~193 rows/symbol/day (~24 KB/symbol, **~625 KB total**
+  for the whole watchlist) — i.e. the file grows **75–185×** larger than the
+  information it actually contains, depending on cadence and session length.
+
+### HSR `market_payload` (`app/main.py::_regression_market_snapshot`, persisted by
+`ScannerSnapshotRepository.batch_insert` only when `REGRESSION_SNAPSHOT_ENABLED=true`)
+
+- Same root cause: the payload embeds `bars_5m` (`.tail(200)`), `bars_15m`
+  (`.tail(80)`), `bars_1h` (`.tail(40)`) in full on every scan. Measured against
+  the same live pull: 193/65/17 bars respectively.
+- Measured JSONB size: **33,394 bytes (~32.6 KB) per symbol per scan.**
+- The repository does deduplicate writes — but the SHA-256 it compares is hashed
+  over the **decision payload** (the full scanner output row: price, indicators,
+  gate results), not the market payload. Price moves practically every scan, so
+  in practice this guard almost never suppresses a write; it does not compensate
+  for the bar-window duplication.
+- Projected to the 26-symbol watchlist (recording sessions only — this system is
+  opt-in and meant to be enabled for one archive session at a time, not
+  continuously):
+
+  | Cadence | Session assumption | Scans/day | MB/day |
+  |---|---|---|---|
+  | 5 min | market hours only (6.5h) | 78 | **64.6 MB** |
+  | 5 min | full observed feed window (~16h) | ~192 | **~159.1 MB** |
+  | 15 min | market hours only (6.5h) | 26 | **21.5 MB** |
+  | 15 min | full observed feed window (~16h) | ~64 | **~53.0 MB** |
+
+Neither number above changes any V1 decision logic (I1) — this session only
+measured and wrote the numbers down. Fixing the duplication (append only the
+bar(s) newer than the last write; store `market_payload` as an incremental diff
+or only the newest bar) is a Phase 2 candidate (evidence integrity), not
+in scope here.
