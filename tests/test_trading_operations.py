@@ -1,4 +1,6 @@
-from app.ui.pages.trading import _risk_alerts, _trading_day
+import pandas as pd
+
+from app.ui.pages.trading import _activity_category, _activity_marker, _risk_alerts, _trading_day
 
 
 def test_trading_day_prefers_explicit_value_then_scan_id():
@@ -22,3 +24,11 @@ def test_risk_monitor_flags_actionable_position_conditions():
         "Exit signal",
         "Manual profile override",
     }
+
+
+def test_activity_categories_and_markers_classify_operational_events():
+    assert _activity_category("PAPER_ENTRY", "Telegram") == "Telegram"
+    assert _activity_category("OPENED", "Paper") == "Paper"
+    assert _activity_category("ExitTriggered", "Trades") == "Trades"
+    assert _activity_marker("OPENED", "Paper") == "GREEN"
+    assert _activity_marker("FAILED", "Errors") == "RED"

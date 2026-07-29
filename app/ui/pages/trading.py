@@ -114,29 +114,158 @@ def _render_live_positions(state):
             st.dataframe(pd.DataFrame(details, columns=["Field", "Value"]), width="stretch", hide_index=True)
 
 
-def _render_decision_feed(df):
+def _activity_category(event, source):
+    event = str(event or "").upper()
+    if source == "Telegram":
+        return "Telegram"
+    if source == "Paper" or event in {"OPENED", "BLOCKED", "SKIPPED"}:
+        return "Paper"
+    if event in {"ENTRYOPENED", "EXITTRIGGERED", "PARTIAL_PROFIT", "HOLD", "EXIT"}:
+        return "Trades"
+    if event in {"FAILED", "ERROR"}:
+        return "Errors"
+    return "System"
+
+
+def _activity_marker(event, category):
+    event = str(event or "").upper()
+    if category == "Telegram":
+        return "BLUE"
+    if category == "Errors":
+        return "RED"
+    if event in {"OPENED", "ENTRYOPENED", "ENTER", "ENTER_PAPER"}:
+        return "GREEN"
+    if event in {"EXIT", "EXITTRIGGERED", "HARD_STOP", "HARD_TARGET"}:
+        return "RED"
+    if event in {"BLOCKED", "REVIEW_TV_CHART"}:
+        return "YELLOW"
+    if event in {"WAIT", "SKIPPED"}:
+        return "GRAY"
+    return "ORANGE"
+
+
+def _activity_rows(state, df):
+    trading_day = _trading_day(state)
+    daily_dir = ROOT_DIR / "data" / "daily" / str(trading_day)
+    events = []
+    for row in _read_jsonl(daily_dir / "trade_timeline.jsonl"):
+        payload = row.get("payload") or {}
+        event = row.get("event_type")
+        category = _activity_category(event, "Trades")
+        events.append({
+            "Time": row.get("occurred_at"),
+            "Symbol": payload.get("symbol"),
+            "Category": category,
+            "Marker": _activity_marker(event, category),
+            "Event": _action_label(event),
+            "Detail": payload.get("exit_phase") or payload.get("entry_reason"),
+            "Source": "Trades",
+        })
+    decisions_path = daily_dir / "auto_paper_decisions.csv"
+    if decisions_path.exists():
+        decisions = pd.read_csv(decisions_path)
+        for _, row in decisions.iterrows():
+            event = row.get("decision")
+            category = _activity_category(event, "Paper")
+            events.append({
+                "Time": row.get("timestamp"),
+                "Symbol": row.get("symbol"),
+                "Category": category,
+                "Marker": _activity_marker(event, category),
+                "Event": _action_label(event),
+                "Detail": row.get("reason"),
+                "Source": "Paper",
+            })
+    for row in _telegram_rows(trading_day):
+        event = row.get("message_type") or row.get("event")
+        category = _activity_category(event, "Telegram")
+        events.append({
+            "Time": row.get("observed_at_utc"),
+            "Symbol": row.get("symbol"),
+            "Category": category,
+            "Marker": _activity_marker(event, category),
+            "Event": _action_label(event),
+            "Detail": row.get("event") if row.get("event") != "FAILED" else row.get("error"),
+            "Source": "Telegram",
+        })
+    if df is not None and not df.empty:
+        for _, row in df.iterrows():
+            event = row.get("Action Status")
+            if str(event or "").upper() in {"", "NO_TRADE_MARKET_CLOSED"}:
+                continue
+            category = _activity_category(event, "Scanner")
+            events.append({
+                "Time": row.get("Current ET") or row.get("Data Timestamp ET"),
+                "Symbol": row.get("Symbol"),
+                "Category": category,
+                "Marker": _activity_marker(event, category),
+                "Event": _action_label(event),
+                "Detail": row.get("Action Reason") or row.get("Blocked By"),
+                "Source": "Scanner",
+            })
+    timeline = pd.DataFrame(events)
+    if timeline.empty:
+        return timeline
+    timeline["_sort"] = pd.to_datetime(timeline["Time"], errors="coerce", utc=True)
+    return timeline.sort_values("_sort", ascending=False).reset_index(drop=True)
+
+
+def _render_activity_feed(state, df):
     import streamlit as st
 
-    st.subheader("Live Decision Feed")
-    if df is None or df.empty:
-        st.caption("No scanner decisions available.")
+    st.subheader("Activity Feed")
+    timeline = _activity_rows(state, df)
+    if timeline.empty:
+        st.caption("No trading, paper, Telegram, or scanner events recorded yet.")
         return
-    rows = []
-    for _, row in df.iterrows():
-        action = str(row.get("Action Status") or "").upper()
-        if action in {"", "WAIT", "NO_TRADE_MARKET_CLOSED"}:
-            continue
-        rows.append({
-            "Time": row.get("Current ET") or row.get("Data Timestamp ET"),
-            "Symbol": row.get("Symbol"),
-            "Decision": _action_label(action),
-            "Reason": row.get("Action Reason") or row.get("Blocked By"),
-            "Telegram": row.get("Telegram Sent") or row.get("Telegram Block Reason"),
-        })
-    if not rows:
-        st.caption("No material decision changes in the latest scan.")
+    st.caption(f"Today: {len(timeline)} events")
+    symbols = ["All Symbols"] + sorted(
+        symbol for symbol in timeline["Symbol"].dropna().astype(str).unique()
+        if symbol and symbol.lower() != "nan"
+    )
+    filters = st.columns([1, 1, 2, 1])
+    category = filters[0].selectbox(
+        "Type",
+        ["All", "Trades", "Telegram", "Paper", "System", "Errors"],
+        key=f"activity_category_{_trading_day(state)}",
+    )
+    symbol = filters[1].selectbox(
+        "Symbol",
+        symbols,
+        key=f"activity_symbol_{_trading_day(state)}",
+    )
+    search = filters[2].text_input("Search", key=f"activity_search_{_trading_day(state)}")
+    grouped = filters[3].checkbox("Group symbols", key=f"activity_group_{_trading_day(state)}")
+    filtered = timeline.copy()
+    if category != "All":
+        filtered = filtered[filtered["Category"] == category]
+    if symbol != "All Symbols":
+        filtered = filtered[filtered["Symbol"].astype(str) == symbol]
+    if search.strip():
+        search_text = search.strip().lower()
+        mask = filtered[["Symbol", "Event", "Detail", "Source"]].fillna("").astype(str).apply(
+            lambda row: row.str.lower().str.contains(search_text, regex=False).any(),
+            axis=1,
+        )
+        filtered = filtered[mask]
+    if grouped:
+        for grouped_symbol, rows in filtered.groupby(filtered["Symbol"].fillna("System"), sort=True):
+            with st.expander(f"{grouped_symbol} ({len(rows)} events)"):
+                st.dataframe(rows.drop(columns="_sort"), width="stretch", hide_index=True)
         return
-    st.dataframe(pd.DataFrame(rows).head(12), width="stretch", hide_index=True)
+    page_size = 25
+    total_pages = max(1, (len(filtered) + page_size - 1) // page_size)
+    page = st.number_input(
+        "Page",
+        min_value=1,
+        max_value=total_pages,
+        value=1,
+        step=1,
+        key=f"activity_page_{_trading_day(state)}",
+    )
+    start = (page - 1) * page_size
+    st.caption(f"Page {page} of {total_pages}")
+    st.dataframe(filtered.iloc[start:start + page_size].drop(columns="_sort"), width="stretch", hide_index=True)
 
 
 def _render_opportunity_board(state):
@@ -199,28 +328,14 @@ def _render_risk_monitor(state):
 def _render_telegram_status(state):
     import streamlit as st
 
-    st.subheader("Telegram Delivery")
+    st.markdown("#### Telegram")
     rows = _telegram_rows(_trading_day(state))
     sent = [row for row in rows if row.get("event") == "SENT"]
     failed = [row for row in rows if row.get("event") == "FAILED"]
     pending = [row for row in rows if row.get("event") == "ATTEMPT"]
-    metrics = st.columns(4)
-    metrics[0].metric("Sent", len(sent))
-    metrics[1].metric("Pending", len(pending))
-    metrics[2].metric("Failed", len(failed))
-    metrics[3].metric("Last Latency", f"{sent[-1].get('latency_ms', 0) / 1000:.1f}s" if sent else "-")
-    if sent or failed:
-        display = [
-            {
-                "Time": row.get("observed_at_utc"),
-                "Symbol": row.get("symbol"),
-                "Lifecycle": row.get("message_type"),
-                "Delivery": row.get("event"),
-                "Reason": row.get("error"),
-            }
-            for row in (sent + failed)[-10:]
-        ]
-        st.dataframe(pd.DataFrame(display), width="stretch", hide_index=True)
+    health = "HEALTHY" if not failed else "ATTENTION"
+    latency = f"{sent[-1].get('latency_ms', 0) / 1000:.1f}s" if sent else "-"
+    st.caption(f"{health} | Sent {len(sent)} | Pending {len(pending)} | Failed {len(failed)} | Last {latency}")
 
 
 def _render_market_pulse(state):
@@ -232,53 +347,12 @@ def _render_market_pulse(state):
         1 for candidate in (state.get("decision_center") or {}).get("ranked_opportunities") or []
         if str(candidate.get("action") or "").upper() in {"ENTER", "ENTER_PAPER", "REVIEW_TV_CHART"}
     )
-    st.subheader("Market Pulse")
-    metrics = st.columns(5)
-    metrics[0].metric("Bias", state.get("market_bias") or "MIXED")
-    metrics[1].metric("Universe", summary.get("scanned", 0))
-    metrics[2].metric("Bullish", summary.get("bullish", 0))
-    metrics[3].metric("Suggestions", suggestions)
-    metrics[4].metric("Open", len(positions))
-
-
-def _render_event_timeline(state):
-    import streamlit as st
-
-    trading_day = _trading_day(state)
-    daily_dir = ROOT_DIR / "data" / "daily" / str(trading_day)
-    events = []
-    for row in _read_jsonl(daily_dir / "trade_timeline.jsonl"):
-        events.append({
-            "Time": row.get("occurred_at"),
-            "Symbol": (row.get("payload") or {}).get("symbol"),
-            "Event": row.get("event_type"),
-            "Detail": (row.get("payload") or {}).get("exit_phase") or (row.get("payload") or {}).get("entry_reason"),
-        })
-    decisions_path = daily_dir / "auto_paper_decisions.csv"
-    if decisions_path.exists():
-        decisions = pd.read_csv(decisions_path)
-        for _, row in decisions.tail(30).iterrows():
-            events.append({
-                "Time": row.get("timestamp"),
-                "Symbol": row.get("symbol"),
-                "Event": row.get("decision"),
-                "Detail": row.get("reason"),
-            })
-    for row in _telegram_rows(trading_day):
-        events.append({
-            "Time": row.get("observed_at_utc"),
-            "Symbol": row.get("symbol"),
-            "Event": row.get("message_type"),
-            "Detail": row.get("event"),
-        })
-    st.subheader("Live Event Timeline")
-    if not events:
-        st.caption("No lifecycle or delivery events recorded yet.")
-        return
-    timeline = pd.DataFrame(events)
-    timeline["_sort"] = pd.to_datetime(timeline["Time"], errors="coerce", utc=True)
-    timeline = timeline.sort_values("_sort", ascending=False).drop(columns="_sort")
-    st.dataframe(timeline.head(30), width="stretch", hide_index=True)
+    st.markdown("#### Market")
+    st.caption(
+        f"{state.get('market_bias') or 'MIXED'} | {summary.get('scanned', 0)} scanned | "
+        f"{summary.get('bullish', 0)} bullish | {summary.get('bearish', 0)} bearish | "
+        f"{suggestions} suggestions | {len(positions)} active"
+    )
 
 
 def _render_trader_workspace(state, df):
@@ -287,16 +361,15 @@ def _render_trader_workspace(state, df):
     _render_live_positions(state)
     left, right = st.columns([3, 2])
     with left:
-        _render_decision_feed(df)
+        _render_activity_feed(state, df)
     with right:
         _render_risk_monitor(state)
     _render_opportunity_board(state)
-    left, right = st.columns([3, 2])
+    left, right = st.columns(2)
     with left:
         _render_telegram_status(state)
     with right:
         _render_market_pulse(state)
-    _render_event_timeline(state)
 
 
 def render(state, df, refresh_state):

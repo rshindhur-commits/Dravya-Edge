@@ -274,7 +274,7 @@ Dashboard KPI rows use the shared `kpi_card()` helper in `app/ui/components.py` 
 
 | Page | Primary question | Current contents | V1/V2 rule |
 | --- | --- | --- | --- |
-| **Trading** | What is the engine trading right now? | Live positions, decision feed, ranked opportunities, active risk monitor, Telegram delivery, market pulse, and event timeline | V1 only. V2 does not place trades, alter state, or create competing live controls. |
+| **Trading** | What is the engine trading right now? | Live positions, filterable Activity Feed, ranked opportunities, active risk monitor, compact Telegram/market status | V1 only. V2 does not place trades, alter state, or create competing live controls. |
 | **Validation** | Did execution behave well today? | Trade Doctor, Strategy Confidence, Trade Efficiency, Candidate Outcomes, Decision Analysis, V1/V2 completed-trade comparison, Trend Outcome Attribution, strong-trend execution failures, and V2 Learning Summary | Post-trade V2 evidence only. |
 | **Replay** | What would the saved scanner state have done? | Offline replay coverage, blockers, saved replay outputs, and replay summary | Current replay is V1-oriented. V1/V2 replay comparison is pending the Candidate Evidence merge. |
 | **Regression** | Would current strategy code have improved an archived day? | Neon archive/baseline status, on-demand HSR execution, result deltas, and versioned run history | Read-only against immutable snapshots and baselines; never changes daily truth. |
