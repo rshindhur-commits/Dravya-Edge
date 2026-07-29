@@ -12,6 +12,7 @@ def run_auto_paper_entries(df, controls):
         _auto_paper_entry_reason,
         _auto_paper_trade_count_today,
         auto_paper_session_block_reason,
+        should_record_auto_paper_session_skip,
         _decision_log_rows,
         _paper_trade_candidates,
         _real_entry_checklist,
@@ -33,13 +34,14 @@ def run_auto_paper_entries(df, controls):
 
     if controls["auto_paper_enabled"]:
         session_block = auto_paper_session_block_reason()
-        if session_block:
+        if session_block and should_record_auto_paper_session_skip(session_block):
             _record_auto_paper_decision(
                 "SYSTEM",
                 "SKIPPED",
                 session_block,
                 controls=controls,
             )
+        if session_block:
             return []
 
     candidates = _paper_trade_candidates(df)

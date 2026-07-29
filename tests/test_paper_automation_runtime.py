@@ -8,6 +8,7 @@ from app.runtime.paper_automation_support import (
     _auto_paper_entry_reason,
     _record_auto_paper_decision,
     load_auto_paper_controls,
+    should_record_auto_paper_session_skip,
 )
 
 
@@ -112,6 +113,9 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
             "app.runtime.paper_automation_support.auto_paper_session_block_reason",
             return_value="outside auto-entry window",
         ), patch(
+            "app.runtime.paper_automation_support.should_record_auto_paper_session_skip",
+            return_value=True,
+        ), patch(
             "app.runtime.paper_automation_support._record_auto_paper_decision",
         ) as record_decision:
             result = run_auto_paper_entries(df, controls)
@@ -123,6 +127,27 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
             "outside auto-entry window",
             controls=controls,
         )
+
+    def test_session_skip_is_not_repeated_within_market_session(self):
+
+        now = pd.Timestamp("2026-07-28 08:00:00", tz="America/New_York").to_pydatetime()
+        existing = [{
+            "trading_day": "2026-07-28",
+            "market_session": "PREMARKET",
+            "symbol": "SYSTEM",
+            "decision": "SKIPPED",
+            "reason": "outside auto-entry window",
+        }]
+        with patch(
+            "app.runtime.paper_automation_support.load_json_file",
+            return_value=existing,
+        ):
+            should_record = should_record_auto_paper_session_skip(
+                "outside auto-entry window",
+                now=now,
+            )
+
+        self.assertFalse(should_record)
 
     def test_auto_paper_exits_closes_when_exit_reason_exists(self):
 

@@ -166,6 +166,11 @@ def _activity_rows(state, df):
         decisions = pd.read_csv(decisions_path)
         for _, row in decisions.iterrows():
             event = row.get("decision")
+            if (
+                str(row.get("symbol") or "").upper() == "SYSTEM"
+                and str(event or "").upper() == "SKIPPED"
+            ):
+                continue
             category = _activity_category(event, "Paper")
             events.append({
                 "Time": row.get("timestamp"),

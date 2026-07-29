@@ -138,6 +138,23 @@ def auto_paper_session_block_reason(now=None):
     return None
 
 
+def should_record_auto_paper_session_skip(reason, now=None):
+    now = now or _current_et()
+    trading_day = get_trading_day(now)
+    market_session = classify_decision_time(now).get("market_session")
+    recent = load_json_file(str(AUTO_PAPER_DECISION_LOG_FILE), [])
+    for row in reversed(recent if isinstance(recent, list) else []):
+        if (
+            row.get("trading_day") == trading_day
+            and row.get("market_session") == market_session
+            and row.get("symbol") == "SYSTEM"
+            and row.get("decision") == "SKIPPED"
+            and row.get("reason") == reason
+        ):
+            return False
+    return True
+
+
 def _allow_review_tv_chart_auto_paper():
 
     return _env_bool("ALLOW_REVIEW_TV_CHART_AUTO_PAPER", False)
