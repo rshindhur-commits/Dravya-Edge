@@ -187,6 +187,7 @@ Exit decisions use `app/exit/exit_engine.py::evaluate_exit()` as the live single
 - `candidate_evidence.csv`
 - `candidate_evidence_status.json`
 - `candidate_outcome.csv`
+- `activity_trace.csv`
 - `decision_waterfall.csv`
 - `gate_decisions.csv`
 - `rule_evaluation.csv`
@@ -195,6 +196,21 @@ Exit decisions use `app/exit/exit_engine.py::evaluate_exit()` as the live single
 - `exit_quality_metrics.csv`
 
 Use this one-day export for post-market review. Weekly review should query the prior five trading days from the database to identify emerging patterns, while monthly review should examine the prior 20 trading days before approving strategy or threshold changes. The export's rule-attribution fields remain observational; they are not causal expected-$R$ claims.
+
+The daily activity trace is the chronological operational record for every evaluated ticker. It combines scanner recommendations, one event per evaluated rule with stage/actual/required/pass-fail values, auto-paper execution outcomes, paper lifecycle events, and Telegram delivery events using a stable event ID. Each scanner decision also retains the prior action, whether the state changed, action reason/gate, setup score, RR, option quality, and the exact completed 5-minute decision candle (time, open, high, low, close, volume). The local `activity_trace.csv` remains the review artifact, and each finalized scan queues an idempotent best-effort upsert to Postgres table `activity_trace_event`; migrations `016_activity_trace.sql` and `017_activity_trace_decision_context.sql` provide indexed lookup by trading day/symbol/time, trade/time, scan, and state transition. Database unavailability never blocks scanner completion, paper state, or Telegram delivery.
+
+For example, inspect all AAPL recommendation transitions for a day with:
+
+```sql
+SELECT occurred_at, previous_state, event AS new_state, context AS reason,
+			 stage, rule, setup_score, rr, option_quality,
+			 candle_time, candle_open, candle_high, candle_low, candle_close, candle_volume
+FROM activity_trace_event
+WHERE trading_day = DATE '2026-07-28'
+	AND symbol = 'AAPL'
+	AND origin = 'Scanner decision'
+ORDER BY occurred_at;
+```
 
 Daily validation uses a session model:
 

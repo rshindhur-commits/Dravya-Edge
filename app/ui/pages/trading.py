@@ -116,6 +116,8 @@ def _render_live_positions(state):
 
 def _activity_category(event, source):
     event = str(event or "").upper()
+    if source in {"Scanner", "Scanner decision", "Rule evaluation"}:
+        return "Scanner"
     if source == "Telegram":
         return "Telegram"
     if source == "Paper" or event in {"OPENED", "BLOCKED", "SKIPPED"}:
@@ -125,6 +127,15 @@ def _activity_category(event, source):
     if event in {"FAILED", "ERROR"}:
         return "Errors"
     return "System"
+
+
+def _paper_activity_context(row):
+    decision = str(row.get("decision") or "").upper()
+    reason = row.get("reason")
+    action_status = str(row.get("action_status") or "").upper()
+    if decision == "SKIPPED" and str(reason or "").upper() == action_status:
+        return "No execution gate recorded (legacy decision row)"
+    return reason
 
 
 def _activity_marker(event, category):
@@ -147,6 +158,34 @@ def _activity_marker(event, category):
 def _activity_rows(state, df):
     trading_day = _trading_day(state)
     daily_dir = ROOT_DIR / "data" / "daily" / str(trading_day)
+    trace_path = daily_dir / "activity_trace.csv"
+    if trace_path.exists() and trace_path.stat().st_size:
+        trace = pd.read_csv(trace_path)
+        trace = trace.rename(columns={
+            "time": "Time",
+            "symbol": "Symbol",
+            "category": "Category",
+            "event": "Event",
+            "context": "Context",
+            "origin": "Origin",
+            "previous_state": "Previous State",
+            "state_changed": "State Changed",
+            "setup_score": "Setup Score",
+            "rr": "RR",
+            "option_quality": "Option Quality",
+            "candle_time": "Decision Candle Time",
+            "candle_open": "Candle Open",
+            "candle_high": "Candle High",
+            "candle_low": "Candle Low",
+            "candle_close": "Candle Close",
+            "candle_volume": "Candle Volume",
+        })
+        trace["Marker"] = trace.apply(
+            lambda row: _activity_marker(row.get("Event"), row.get("Category")),
+            axis=1,
+        )
+        trace["_sort"] = pd.to_datetime(trace["Time"], errors="coerce", utc=True)
+        return trace.sort_values("_sort", ascending=False).reset_index(drop=True)
     events = []
     for row in _read_jsonl(daily_dir / "trade_timeline.jsonl"):
         payload = row.get("payload") or {}
@@ -158,8 +197,11 @@ def _activity_rows(state, df):
             "Category": category,
             "Marker": _activity_marker(event, category),
             "Event": _action_label(event),
-            "Detail": payload.get("exit_phase") or payload.get("entry_reason"),
-            "Source": "Trades",
+            "Context": payload.get("exit_phase") or payload.get("entry_reason"),
+            "Origin": "Trade lifecycle",
+            "Stage": "Trade lifecycle",
+            "Rule": None,
+            "Passed": None,
         })
     decisions_path = daily_dir / "auto_paper_decisions.csv"
     if decisions_path.exists():
@@ -178,8 +220,11 @@ def _activity_rows(state, df):
                 "Category": category,
                 "Marker": _activity_marker(event, category),
                 "Event": _action_label(event),
-                "Detail": row.get("reason"),
-                "Source": "Paper",
+                "Context": _paper_activity_context(row),
+                "Origin": "Auto-paper gate",
+                "Stage": "Auto-paper",
+                "Rule": row.get("blocked_by") or "Execution eligibility",
+                "Passed": str(event or "").upper() == "OPENED",
             })
     for row in _telegram_rows(trading_day):
         event = row.get("message_type") or row.get("event")
@@ -190,8 +235,11 @@ def _activity_rows(state, df):
             "Category": category,
             "Marker": _activity_marker(event, category),
             "Event": _action_label(event),
-            "Detail": row.get("event") if row.get("event") != "FAILED" else row.get("error"),
-            "Source": "Telegram",
+            "Context": row.get("event") if row.get("event") != "FAILED" else row.get("error"),
+            "Origin": "Telegram dispatcher",
+            "Stage": "Telegram",
+            "Rule": row.get("message_type"),
+            "Passed": row.get("event") == "SENT",
         })
     if df is not None and not df.empty:
         for _, row in df.iterrows():
@@ -205,8 +253,11 @@ def _activity_rows(state, df):
                 "Category": category,
                 "Marker": _activity_marker(event, category),
                 "Event": _action_label(event),
-                "Detail": row.get("Action Reason") or row.get("Blocked By"),
-                "Source": "Scanner",
+                "Context": row.get("Action Reason") or row.get("Blocked By"),
+                "Origin": "Scanner decision",
+                "Stage": row.get("ENTRY_GATE_FAILURE_STAGE") or "Decision",
+                "Rule": row.get("Blocked By") or "Action Status",
+                "Passed": str(event or "").upper() in {"ENTER", "ENTER_PAPER"},
             })
     timeline = pd.DataFrame(events)
     if timeline.empty:
@@ -231,7 +282,7 @@ def _render_activity_feed(state, df):
     filters = st.columns([1, 1, 2, 1])
     category = filters[0].selectbox(
         "Type",
-        ["All", "Trades", "Telegram", "Paper", "System", "Errors"],
+        ["All", "Trades", "Telegram", "Paper", "Scanner", "System", "Errors"],
         key=f"activity_category_{_trading_day(state)}",
     )
     symbol = filters[1].selectbox(
@@ -248,7 +299,7 @@ def _render_activity_feed(state, df):
         filtered = filtered[filtered["Symbol"].astype(str) == symbol]
     if search.strip():
         search_text = search.strip().lower()
-        mask = filtered[["Symbol", "Event", "Detail", "Source"]].fillna("").astype(str).apply(
+        mask = filtered[["Symbol", "Event", "Context", "Origin", "Stage", "Rule"]].fillna("").astype(str).apply(
             lambda row: row.str.lower().str.contains(search_text, regex=False).any(),
             axis=1,
         )

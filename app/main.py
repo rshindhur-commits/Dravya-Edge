@@ -820,6 +820,36 @@ def _safe_metric(df, column):
         return None
 
 
+def _decision_candle_snapshot(df):
+
+    if df is None or df.empty:
+
+        return {}
+
+    timestamp = df.index[-1]
+
+    def metric(*columns):
+
+        for column in columns:
+
+            value = _safe_metric(df, column)
+
+            if value is not None:
+
+                return value
+
+        return None
+
+    return {
+        "time": timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp),
+        "open": metric("Open", "open"),
+        "high": metric("High", "high"),
+        "low": metric("Low", "low"),
+        "close": metric("Close", "close"),
+        "volume": metric("Volume", "volume"),
+    }
+
+
 def _append_daily_candles(symbol, candles_df, trading_day, scan_id, interval="5m"):
 
     try:
@@ -3229,6 +3259,43 @@ def _persist_scan_outputs(
 
         print(f"[CANDIDATE INTELLIGENCE WARNING] {exc}")
 
+    try:
+
+        with profile_timer.stage("Activity trace"):
+
+            from app.analytics.activity_trace import (
+                persist_activity_trace,
+                write_daily_activity_trace,
+            )
+
+            activity_trace_result = write_daily_activity_trace(
+                trading_day,
+                scanner_rows=records,
+                scan_id=scan_id,
+                observed_at=observed_at.isoformat(),
+            )
+
+        print(
+            "[ACTIVITY TRACE] "
+            f"saved {activity_trace_result['rows']} events to "
+            f"{activity_trace_result['path']}"
+        )
+
+        get_runtime_scheduler().submit_normal(
+            RuntimeJob(
+                name="persist_activity_trace_db",
+                priority=3,
+                func=persist_activity_trace,
+                args=(activity_trace_result["events"],),
+                cancelable=True,
+                scan_id=scan_id,
+            )
+        )
+
+    except Exception as exc:
+
+        print(f"[ACTIVITY TRACE WARNING] {exc}")
+
     with profile_timer.stage("Excel scanner_output"):
 
         output_file = _write_scanner_output_files(
@@ -5230,6 +5297,8 @@ def _run_scanner_impl():
                 f"active_trade={active_trade is not None}"
             )
 
+            decision_candle = _decision_candle_snapshot(df_5m)
+
 
 
             result_row = {
@@ -5263,6 +5332,18 @@ def _run_scanner_impl():
                 ),
 
                 "Price": latest_price,
+
+                "Decision Candle Time ET": decision_candle.get("time"),
+
+                "Decision Candle Open": decision_candle.get("open"),
+
+                "Decision Candle High": decision_candle.get("high"),
+
+                "Decision Candle Low": decision_candle.get("low"),
+
+                "Decision Candle Close": decision_candle.get("close"),
+
+                "Decision Candle Volume": decision_candle.get("volume"),
 
                 "Final Signal": final_signal,
 

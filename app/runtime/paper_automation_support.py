@@ -485,7 +485,7 @@ def build_paper_rule_evaluations(row, allowed, reason, scan_id):
 
 
 def _scanner_block_reason(row):
-    for column in ["Option Rejection Reason", "Realtime Block Reason", "Action Reason", "Regime Block Reason", "Event Block Reason", "Blocked By", "Action Status"]:
+    for column in ["Option Rejection Reason", "Realtime Block Reason", "Action Reason", "Regime Block Reason", "Event Block Reason", "Blocked By"]:
         value = row.get(column)
         if value is not None and str(value).strip() not in ["", "nan", "None"]:
             return str(value)

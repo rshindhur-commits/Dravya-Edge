@@ -1,6 +1,12 @@
 import pandas as pd
 
-from app.ui.pages.trading import _activity_category, _activity_marker, _risk_alerts, _trading_day
+from app.ui.pages.trading import (
+    _activity_category,
+    _activity_marker,
+    _paper_activity_context,
+    _risk_alerts,
+    _trading_day,
+)
 
 
 def test_trading_day_prefers_explicit_value_then_scan_id():
@@ -30,5 +36,14 @@ def test_activity_categories_and_markers_classify_operational_events():
     assert _activity_category("PAPER_ENTRY", "Telegram") == "Telegram"
     assert _activity_category("OPENED", "Paper") == "Paper"
     assert _activity_category("ExitTriggered", "Trades") == "Trades"
+    assert _activity_category("WAIT", "Scanner") == "Scanner"
     assert _activity_marker("OPENED", "Paper") == "GREEN"
     assert _activity_marker("FAILED", "Errors") == "RED"
+
+
+def test_legacy_skipped_paper_row_does_not_present_action_as_reason():
+    context = _paper_activity_context(
+        {"decision": "SKIPPED", "reason": "ENTER_PAPER", "action_status": "ENTER_PAPER"}
+    )
+
+    assert context == "No execution gate recorded (legacy decision row)"

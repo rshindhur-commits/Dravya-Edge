@@ -9,6 +9,7 @@ from app.runtime.paper_automation_support import (
     _record_auto_paper_decision,
     load_auto_paper_controls,
     should_record_auto_paper_session_skip,
+    _scanner_block_reason,
 )
 
 
@@ -148,6 +149,12 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
             )
 
         self.assertFalse(should_record)
+
+    def test_scanner_block_reason_does_not_use_action_status_as_fallback(self):
+
+        reason = _scanner_block_reason(pd.Series({"Action Status": "ENTER_PAPER"}))
+
+        self.assertEqual(reason, "auto paper enabled; no eligible entry candidate")
 
     def test_auto_paper_exits_closes_when_exit_reason_exists(self):
 

@@ -1,8 +1,18 @@
 {
-  "generated_at_utc": "2026-07-29T00:58:47.543421+00:00",
-  "performance_rows": 102,
+  "generated_at_utc": "2026-07-29T01:28:40.815637+00:00",
+  "performance_rows": 103,
   "metrics_rows": 193,
   "recent_timings": [
+    {
+      "observed_at_utc": "2026-07-29T01:28:40.810976+00:00",
+      "trading_day": "2026-07-28",
+      "scan_id": NaN,
+      "category": "dashboard",
+      "stage": "page_render",
+      "page": "Trading",
+      "seconds": 0.0358,
+      "metadata": "{}"
+    },
     {
       "observed_at_utc": "2026-07-29T00:58:47.539000+00:00",
       "trading_day": "2026-07-28",
@@ -235,16 +245,6 @@
     },
     {
       "observed_at_utc": "2026-07-27T21:07:57.243801+00:00",
-      "trading_day": null,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": null,
-      "seconds": 0.0,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-27T21:07:11.227321+00:00",
       "trading_day": null,
       "scan_id": NaN,
       "category": "telegram",
@@ -542,7 +542,7 @@
       "category": "dashboard",
       "stage": "page_render",
       "page": "Trading",
-      "average_seconds": 0.0367
+      "average_seconds": 0.0365
     }
   ],
   "average_runtime_by_job": [

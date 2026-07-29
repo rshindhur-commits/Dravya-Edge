@@ -1,0 +1,8 @@
+event_id,trading_day,time,symbol,category,event,context,origin,stage,rule,passed,actual,required,scan_id,candidate_key,trade_id,previous_state,state_changed,setup_score,rr,option_quality,candle_time,candle_open,candle_high,candle_low,candle_close,candle_volume
+94f30b03e116011cfd768ee5,2026-07-28,2026-07-28 19:17:05,NVDA,Paper,SKIPPED,ENTER_PAPER,Auto-paper gate,Auto-paper,,False,,,2026-07-28_191705,,,,,,,,,,,,,
+91f8af1fcd054644343edae2,2026-07-28,2026-07-28 19:17:20,NVDA,Paper,SKIPPED,ENTER_PAPER,Auto-paper gate,Auto-paper,,False,,,2026-07-28_191720,,,,,,,,,,,,,
+3447924ffd175c0aa5813ee4,2026-07-28,2026-07-28 19:17:43,NVDA,Paper,SKIPPED,ENTER_PAPER,Auto-paper gate,Auto-paper,,False,,,2026-07-28_191743,,,,,,,,,,,,,
+a8718312524f6d6e83f5ea20,2026-07-28,2026-07-28 19:51:12,SYSTEM,Paper,SKIPPED,outside auto-entry window,Auto-paper gate,Auto-paper,,False,,,2026-07-28_195112,,,,,,,,,,,,,
+c9b6880eee6960feb19c4bcc,2026-07-28,2026-07-28 19:51:41,SYSTEM,Paper,SKIPPED,outside auto-entry window,Auto-paper gate,Auto-paper,,False,,,2026-07-28_195141,,,,,,,,,,,,,
+72c91fa8b5f543736f41b2da,2026-07-28,2026-07-28 20:32:33,SYSTEM,Paper,SKIPPED,outside auto-entry window,Auto-paper gate,Auto-paper,,False,,,2026-07-28_203233,,,,,,,,,,,,,
+deed42f11377b78dc11da8b9,2026-07-28,2026-07-28 20:49:40,SYSTEM,Paper,SKIPPED,outside auto-entry window,Auto-paper gate,Auto-paper,,False,,,2026-07-28_204940,,,,,,,,,,,,,
