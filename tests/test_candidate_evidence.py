@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from app.analytics.candidate_evidence import (
+    build_candidate_evidence,
     build_candidate_evidence_from_frames,
     write_candidate_evidence,
 )
@@ -34,6 +35,7 @@ def test_candidate_evidence_collapses_scans_and_joins_outcomes():
         ]),
         suggestions={"aapl": {"symbol": "AAPL", "direction": "CALL", "setup_type": "EMA_PULLBACK", "status": "PROMOTED_TO_PAPER"}},
         paper_events=pd.DataFrame([{"symbol": "AAPL", "direction": "CALL", "event_type": "OPEN", "status": "OPEN"}]),
+        auto_paper_decisions=pd.DataFrame([{"symbol": "AAPL", "decision": "OPENED"}]),
         trend_capture=pd.DataFrame([{"Symbol": "AAPL", "Direction": "CALL", "Setup": "EMA_PULLBACK", "Trend Capture %": 72, "Trade Efficiency Score": 88}]),
         attribution=pd.DataFrame([{"symbol": "AAPL", "setup": "EMA_PULLBACK", "root_cause": "STALE_QUOTE"}]),
     )
@@ -52,6 +54,7 @@ def test_candidate_evidence_collapses_scans_and_joins_outcomes():
     assert row["ranking_score"] == 126
     assert row["candidate_rank"] == 1
     assert row["entered"]
+    assert row["auto_paper_decision"] == "OPENED"
     assert row["target_first"]
     assert row["winner"]
     assert row["suggestion_status"] == "PROMOTED_TO_PAPER"
@@ -149,3 +152,61 @@ def test_writer_records_failed_database_promotion(tmp_path):
     assert result["status"]["rows_expected"] == 1
     assert result["status"]["rows_written"] == 1
     assert result["status"]["db_rows_persisted"] == 0
+
+
+def test_builder_prefers_accumulated_daily_snapshots_over_latest_scan(monkeypatch):
+    accumulated = pd.DataFrame([
+        {
+            "Symbol": "AAPL", "Candidate Direction": "CALL", "Entry": "EMA_PULLBACK",
+            "scan_timestamp": "2026-07-28 10:00:00", "Candidate RR": 2.0,
+        },
+        {
+            "Symbol": "AAPL", "Candidate Direction": "CALL", "Entry": "EMA_PULLBACK",
+            "scan_timestamp": "2026-07-28 10:05:00", "Candidate RR": 2.5,
+        },
+    ])
+    latest_scan = accumulated.tail(1).copy()
+    monkeypatch.setattr(
+        "app.analytics.candidate_evidence._read_snapshot",
+        lambda _day: accumulated,
+    )
+    monkeypatch.setattr(
+        "app.analytics.candidate_evidence.load_json_file",
+        lambda *_args: {},
+    )
+    monkeypatch.setattr(
+        "app.analytics.candidate_evidence.build_loss_attribution",
+        lambda _day: pd.DataFrame(),
+    )
+
+    evidence = build_candidate_evidence(
+        "2026-07-28",
+        candidate_snapshots=latest_scan,
+    )
+
+    assert len(evidence) == 1
+    assert evidence.iloc[0]["scan_count"] == 2
+    assert evidence.iloc[0]["rr"] == 2.5
+
+
+def test_builder_uses_auto_paper_gate_reason_not_enter_paper_action():
+    evidence = build_candidate_evidence_from_frames(
+        "2026-07-28",
+        pd.DataFrame([{
+            "Symbol": "AAPL",
+            "Candidate Direction": "CALL",
+            "Entry": "EMA_PULLBACK",
+            "Action Status": "ENTER_PAPER",
+            "Blocked By": "ENTER_PAPER",
+        }]),
+        auto_paper_decisions=pd.DataFrame([{
+            "symbol": "AAPL",
+            "decision": "BLOCKED",
+            "reason": "not top candidate",
+            "timestamp": "2026-07-28 10:00:00",
+        }]),
+    )
+
+    assert evidence.iloc[0]["rule_evaluation"] == "not top candidate"
+    assert evidence.iloc[0]["auto_paper_decision"] == "BLOCKED"
+    assert evidence.iloc[0]["auto_paper_blocked_by"] == "not top candidate"

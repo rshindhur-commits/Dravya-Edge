@@ -20,7 +20,7 @@ EVIDENCE_COLUMNS = [
     "entry_priority_adjustment", "expected_remaining_trend", "projected_entry_grade",
     "ranking_score", "candidate_rank",
     "option_quality", "trend_health", "regime", "top_candidate", "quote_freshness", "rule_evaluation",
-    "decision", "suggestion_status", "paper_trade_status", "entered",
+    "decision", "auto_paper_decision", "auto_paper_blocked_by", "suggestion_status", "paper_trade_status", "entered",
     "replay_outcome", "target_first", "stop_first", "winner", "missed_winner",
     "final_r", "trend_capture", "mfe", "tes", "engineering_root_cause", "evidence_updated_at",
 ]
@@ -118,6 +118,13 @@ def _paper_map(paper_events):
     )
 
 
+def _auto_paper_map(decisions):
+    return _latest_map(
+        decisions,
+        lambda row: _symbol(_value(row, "symbol", "Symbol")),
+    )
+
+
 def _trade_efficiency_map(trend_capture):
     return _latest_map(
         trend_capture,
@@ -141,6 +148,7 @@ def build_candidate_evidence_from_frames(
     candidate_snapshots,
     suggestions=None,
     paper_events=None,
+    auto_paper_decisions=None,
     trend_capture=None,
     attribution=None,
 ):
@@ -168,6 +176,7 @@ def build_candidate_evidence_from_frames(
 
     suggestion_by_key = _suggestion_map(suggestions)
     paper_by_key = _paper_map(paper_events)
+    auto_paper_by_symbol = _auto_paper_map(auto_paper_decisions)
     trend_by_key = _trade_efficiency_map(trend_capture)
     root_by_key = _root_cause_map(attribution)
     records = []
@@ -178,6 +187,7 @@ def build_candidate_evidence_from_frames(
         candidate_id = _candidate_id(trading_day, symbol, direction, setup)
         suggestion = suggestion_by_key.get(_candidate_key(symbol, direction, setup), {})
         paper = paper_by_key.get((symbol, direction), {})
+        auto_paper = auto_paper_by_symbol.get(symbol, {})
         trend = trend_by_key.get(_candidate_key(symbol, direction, setup), {})
         root = root_by_key.get((symbol, setup), {})
         replay_outcome = _text(_value(latest, "replay_outcome", "Replay Outcome"))
@@ -185,7 +195,21 @@ def build_candidate_evidence_from_frames(
         stop_first = "STOP" in replay_outcome.upper()
         paper_event_type = _text(_value(paper, "event_type")).upper()
         paper_status = _text(_value(paper, "status")) or paper_event_type
-        entered = paper_event_type == "OPEN" or paper_status.upper() == "OPEN"
+        auto_paper_decision = _text(_value(auto_paper, "decision")).upper()
+        auto_paper_blocked_by = (
+            _value(auto_paper, "reason")
+            if auto_paper_decision == "BLOCKED"
+            else None
+        )
+        entered = (
+            paper_event_type == "OPEN"
+            or paper_status.upper() == "OPEN"
+            or auto_paper_decision == "OPENED"
+        )
+        decision = _value(latest, "action_status", "Action Status")
+        scanner_rule = _value(latest, "blocked_by", "Blocked By")
+        if _text(scanner_rule).upper() == _text(decision).upper():
+            scanner_rule = None
         winner = target_first or _text(_value(trend, "Replay Outcome")).upper().find("TARGET") >= 0
         records.append({
             "candidate_id": candidate_id,
@@ -217,8 +241,10 @@ def build_candidate_evidence_from_frames(
             "regime": _value(latest, "market_regime", "Market Regime"),
             "top_candidate": _value(latest, "top_candidate", "Top Candidate"),
             "quote_freshness": _value(latest, "option_quote_freshness", "Option Quote Freshness"),
-            "rule_evaluation": _value(latest, "blocked_by", "Blocked By", "Action Reason"),
-            "decision": _value(latest, "action_status", "Action Status"),
+            "rule_evaluation": auto_paper_blocked_by or scanner_rule or _value(latest, "Action Reason"),
+            "decision": decision,
+            "auto_paper_decision": auto_paper_decision or None,
+            "auto_paper_blocked_by": auto_paper_blocked_by,
             "suggestion_status": suggestion.get("status"),
             "paper_trade_status": paper_status or None,
             "entered": entered,
@@ -252,19 +278,35 @@ def build_candidate_evidence(trading_day, candidate_snapshots=None):
     suggestions = load_json_file(str(daily_path(trading_day, "suggested_trade_state.json")), {})
     if not suggestions:
         suggestions = load_json_file("app/state/suggested_trade_state.json", {})
+    accumulated_snapshots = _read_snapshot(trading_day)
+    snapshots = (
+        accumulated_snapshots
+        if not accumulated_snapshots.empty
+        else candidate_snapshots
+    )
     return build_candidate_evidence_from_frames(
         trading_day,
-        candidate_snapshots if candidate_snapshots is not None else _read_snapshot(trading_day),
+        snapshots,
         suggestions=suggestions,
         paper_events=_read_csv(daily_path(trading_day, "paper_trade_events.csv")),
+        auto_paper_decisions=_read_csv(daily_path(trading_day, "auto_paper_decisions.csv")),
         trend_capture=_read_csv(daily_path(trading_day, "trend_capture_analysis.csv")),
         attribution=build_loss_attribution(trading_day),
     )
 
 
 def write_candidate_evidence(trading_day, candidate_snapshots=None):
-    evidence = build_candidate_evidence(trading_day, candidate_snapshots=candidate_snapshots)
-    source_rows = int(len(candidate_snapshots)) if candidate_snapshots is not None else None
+    accumulated_snapshots = _read_snapshot(trading_day)
+    evidence_source = (
+        accumulated_snapshots
+        if not accumulated_snapshots.empty
+        else candidate_snapshots
+    )
+    evidence = build_candidate_evidence(
+        trading_day,
+        candidate_snapshots=evidence_source,
+    )
+    source_rows = int(len(evidence_source)) if evidence_source is not None else None
     csv_path = daily_path(trading_day, "candidate_evidence.csv")
     parquet_path = daily_path(trading_day, "candidate_evidence.parquet")
     evidence.to_csv(csv_path, index=False)

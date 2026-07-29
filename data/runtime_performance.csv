@@ -94,3 +94,7 @@ observed_at_utc,trading_day,scan_id,category,stage,page,seconds,metadata
 2026-07-27T21:47:34.304603+00:00,,,telegram,send_telegram_alert,,3.9782,{}
 2026-07-27T21:47:35.245558+00:00,,,telegram,send_telegram_alert,,0.91,{}
 2026-07-27T21:47:36.168437+00:00,,,telegram,send_telegram_alert,,0.8893,{}
+2026-07-28T23:20:31.371392+00:00,,,telegram,send_telegram_alert,,0.0,{}
+2026-07-28T23:29:59.591029+00:00,,,telegram,send_telegram_alert,,0.0,{}
+2026-07-28T23:54:45.006244+00:00,,,telegram,send_telegram_alert,,0.0,{}
+2026-07-28T23:55:13.871721+00:00,,,telegram,send_telegram_alert,,0.0,{}

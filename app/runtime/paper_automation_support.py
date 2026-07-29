@@ -23,10 +23,12 @@ from app.storage.auto_paper_decision_store import (
 )
 from app.storage.daily_paths import get_daily_dir
 from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
+from app.utils.json_store import load_json_file
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 AUTO_PAPER_DECISION_LOG_FILE = ROOT_DIR / "app" / "state" / "auto_paper_decision_log.json"
+AUTO_PAPER_SETTINGS_FILE = ROOT_DIR / "app" / "state" / "auto_paper_settings.json"
 AUTO_PAPER_TOP_CANDIDATES = [
     "BULLISH_TOP_1",
     "BEARISH_TOP_1",
@@ -49,9 +51,27 @@ REVIEW_VALIDATION_ENTRY_TYPES = {
 AUTO_PAPER_ENTRY_START = time(9, 45)
 AUTO_PAPER_ENTRY_END = time(15, 30)
 AUTO_PAPER_EOD_CLOSE = time(15, 55)
+AUTO_PAPER_MAX_CANDIDATE_RANK = 3
 DEFAULT_AUTO_PAPER_MIN_RR = 1.8
 DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0
 DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 10.0
+
+
+def load_auto_paper_controls():
+    settings = load_json_file(str(AUTO_PAPER_SETTINGS_FILE), {})
+    return {
+        "auto_paper_enabled": _boolish(
+            settings.get("auto_paper_enabled", _env_bool("AUTO_PAPER_ENABLED", True))
+        ),
+        "max_daily": int(settings.get("auto_paper_max_daily", 3)),
+        "min_setup": float(settings.get("auto_paper_min_setup", 70)),
+        "min_rr": float(settings.get("auto_paper_min_rr", DEFAULT_AUTO_PAPER_MIN_RR)),
+        "direction": settings.get("auto_paper_direction", "Both"),
+        "auto_exit_enabled": _boolish(settings.get("auto_paper_exit_enabled", True)),
+        "eod_close_enabled": _boolish(settings.get("auto_paper_eod_close_enabled", False)),
+        "restore_multiday_positions": _boolish(settings.get("restore_multiday_positions", True)),
+        "profit_r": float(settings.get("auto_paper_profit_r", 1.0)),
+    }
 
 
 def _env_bool(name, default=False):
@@ -107,6 +127,15 @@ def _boolish(value):
 def _current_et():
 
     return datetime.now(ZoneInfo("America/New_York"))
+
+
+def auto_paper_session_block_reason(now=None):
+    now = now or _current_et()
+    if now.weekday() >= 5:
+        return "market day closed"
+    if not (AUTO_PAPER_ENTRY_START <= now.time() <= AUTO_PAPER_ENTRY_END):
+        return "outside auto-entry window"
+    return None
 
 
 def _allow_review_tv_chart_auto_paper():
@@ -297,6 +326,15 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
     decision_time = _current_et()
     trading_day = get_trading_day(decision_time)
     scan_timestamp = decision_time.strftime("%Y-%m-%d %H:%M:%S")
+    action_status = row.get("Action Status") if row is not None else None
+    scanner_blocked_by = row.get("Blocked By") if row is not None else None
+    blocked_by = (
+        reason
+        if str(decision or "").upper() == "BLOCKED"
+        else None
+        if str(scanner_blocked_by or "").strip().upper() == str(action_status or "").strip().upper()
+        else scanner_blocked_by
+    )
     entry = {
         "timestamp": scan_timestamp,
         "trading_day": trading_day,
@@ -317,8 +355,10 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "setup_valid": row.get("Setup Valid") if row is not None else None,
         "execution_ready": row.get("Execution Ready") if row is not None else None,
         "realtime_ready": row.get("Realtime Ready") if row is not None else None,
-        "blocked_by": row.get("Blocked By") if row is not None else None,
-        "action_status": row.get("Action Status") if row is not None else None,
+        "blocked_by": blocked_by,
+        "scanner_blocked_by": scanner_blocked_by,
+        "action_status": action_status,
+        "action_reason": row.get("Action Reason") if row is not None else None,
     }
     append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
     update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
@@ -348,15 +388,26 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     now_et = _current_et()
     if not controls["auto_paper_enabled"]:
         return False, "auto paper disabled"
-    if now_et.weekday() >= 5:
-        return False, "market day closed"
-    if not (AUTO_PAPER_ENTRY_START <= now_et.time() <= AUTO_PAPER_ENTRY_END):
-        return False, "outside auto-entry window"
+    session_block = auto_paper_session_block_reason(now_et)
+    if session_block:
+        return False, session_block
     action_status = str(row.get("Action Status")).strip().upper()
     realtime_ready = str(row.get("Realtime Ready")).strip().lower() in ["true", "1", "yes"]
     review_validation_candidate = action_status == "REVIEW_TV_CHART" and _allow_review_tv_chart_auto_paper()
     top_candidate = row.get("Top Candidate")
-    if top_candidate not in AUTO_PAPER_TOP_CANDIDATES and not _high_quality_index_review_exception(row):
+    candidate_rank = _safe_float(row.get("Candidate Rank"), None)
+    rank_eligible = (
+        candidate_rank is not None
+        and candidate_rank <= env_int(
+            "AUTO_PAPER_MAX_CANDIDATE_RANK",
+            AUTO_PAPER_MAX_CANDIDATE_RANK,
+        )
+    )
+    if (
+        top_candidate not in AUTO_PAPER_TOP_CANDIDATES
+        and not rank_eligible
+        and not _high_quality_index_review_exception(row)
+    ):
         return False, "not top candidate"
     if _safe_float(row.get("Setup %"), None) is None:
         row = row.copy()

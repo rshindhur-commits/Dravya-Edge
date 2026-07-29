@@ -55,6 +55,7 @@ AUTO_PAPER_DECISION_FIELDS = [
     "real_entry_checklist",
     "action_status",
     "blocked_by",
+    "scanner_blocked_by",
     "action_reason",
     "option_rejection_reason",
     "realtime_block_reason",

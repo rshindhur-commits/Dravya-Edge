@@ -30,6 +30,7 @@ REVIEW_ARTIFACTS = (
     "trade.csv",
     "exit_quality_metrics.csv",
 )
+EVIDENCE_STATUS_ARTIFACT = "candidate_evidence_status.json"
 
 
 def _read_csv(path: Path):
@@ -121,6 +122,7 @@ def _generated_review_frames(trading_day, directory: Path):
 def build_daily_review_export(trading_day, directory=None):
     directory = Path(directory) if directory is not None else daily_path(trading_day, "review_export.zip").parent
     frames = _generated_review_frames(trading_day, directory)
+    evidence_status = _read_json(directory / EVIDENCE_STATUS_ARTIFACT)
     manifest = {
         "trading_day": trading_day,
         "artifacts": {
@@ -132,9 +134,23 @@ def build_daily_review_export(trading_day, directory=None):
             "Empty CSV files mean the selected daily artifact was not available.",
         ],
     }
+    manifest["artifacts"][EVIDENCE_STATUS_ARTIFACT] = {
+        "rows": evidence_status.get("evidence_rows") if evidence_status else 0,
+        "available": bool(evidence_status),
+    }
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name in REVIEW_ARTIFACTS:
             archive.writestr(name, frames[name].to_csv(index=False))
+        archive.writestr(
+            EVIDENCE_STATUS_ARTIFACT,
+            json.dumps(
+                evidence_status or {
+                    "available": False,
+                    "reason": "Candidate evidence status was not written for this trading day.",
+                },
+                indent=2,
+            ),
+        )
         archive.writestr("manifest.json", json.dumps(manifest, indent=2))
     return buffer.getvalue(), manifest

@@ -27,6 +27,9 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 PAPER_TRADE_STATE_FILE = str(
     ROOT_DIR / "app" / "state" / "paper_trade_state.json"
 )
+LEGACY_TRADE_STATE_FILE = str(
+    ROOT_DIR / "app" / "state" / "trade_state.json"
+)
 ET_TZ = ZoneInfo("America/New_York")
 PROFILE_OVERRIDE_SOURCES = {"MANUAL_OVERRIDE", "BROKER_SYNC"}
 
@@ -80,6 +83,144 @@ def save_paper_trades(state):
         PAPER_TRADE_STATE_FILE,
         state
     )
+
+
+def _queue_paper_trade_upsert(trade):
+
+    try:
+        from app.db.persistence import upsert_paper_trade
+        from app.runtime import RuntimeJob, get_runtime_scheduler
+
+        get_runtime_scheduler().submit_normal(RuntimeJob(
+            name="upsert_paper_trade_db",
+            priority=3,
+            func=upsert_paper_trade,
+            args=(trade.copy(),),
+            cancelable=True,
+            scan_id=trade.get("scan_id"),
+        ))
+    except Exception as exc:
+        print(f"[PAPER TRADE DB UPSERT WARNING] {exc}")
+
+
+def get_open_paper_trade(symbol):
+
+    state = load_paper_trades()
+    _, trade = active_symbol_trade(state, symbol)
+    if trade is None:
+        trade = _migrate_legacy_scanner_trade(symbol, state)
+    return trade
+
+
+def _migrate_legacy_scanner_trade(symbol, paper_state):
+
+    legacy_state = load_json_file(LEGACY_TRADE_STATE_FILE, {})
+    legacy_trade = legacy_state.get(symbol)
+    if not isinstance(legacy_trade, dict) or str(legacy_trade.get("status") or "").upper() != "OPEN":
+        return None
+
+    opened_at = legacy_trade.get("opened_at") or _timestamp_for_key(_now_et())
+    scanner_context = {
+        "Symbol": symbol,
+        "Candidate Direction": legacy_trade.get("direction"),
+        "Entry": legacy_trade.get("entry_type"),
+        "Candidate RR": legacy_trade.get("rr_progress"),
+        "Option Quality Score": legacy_trade.get("option_quality_score"),
+        "Option Expiration": legacy_trade.get("option_expiration"),
+        "Expiration Bucket": legacy_trade.get("option_expiration_bucket"),
+    }
+    trade = {
+        **legacy_trade,
+        "trade_id": str(uuid4()),
+        "trade_state": "OPEN",
+        "holding_profile": derive_holding_profile(scanner_context).value,
+        "holding_profile_locked_at": opened_at,
+        "holding_profile_override_source": None,
+        "days_held": legacy_trade.get("days_held", 1),
+        "overnight_count": legacy_trade.get("overnight_count", 0),
+        "forced_eod_exit": False,
+        "option_mid": legacy_trade.get("option_entry_mid"),
+        "scanner_context": scanner_context,
+        "trade_mode": "PAPER",
+        "entry_source": "LEGACY_SCANNER_STATE_MIGRATION",
+        "opened_at": opened_at,
+        "opened_at_et": legacy_trade.get("opened_at_et") or opened_at,
+        "closed_at": None,
+        "close_price": None,
+        "exit_reason": None,
+    }
+    trade_key = _state_key_for_trade(trade)
+    trade["trade_key"] = trade_key
+    paper_state[trade_key] = trade
+    save_paper_trades(paper_state)
+    _append_paper_trade_event(trade, "OPEN")
+
+    del legacy_state[symbol]
+    save_json_file(LEGACY_TRADE_STATE_FILE, legacy_state)
+    return trade
+
+
+def update_paper_trade(
+    symbol,
+    highest_price,
+    rr_progress,
+    updated_stop,
+    lowest_price=None,
+    bars_in_trade=None,
+    partial_profit_taken=None,
+    option_data=None,
+    option_pl=None,
+    execution_metrics=None,
+    exit_state=None,
+):
+
+    state = load_paper_trades()
+    trade_key, trade = active_symbol_trade(state, symbol)
+    if trade is None:
+        return None
+
+    trade["highest_price"] = highest_price
+    trade["lowest_price"] = lowest_price if lowest_price is not None else trade.get("lowest_price")
+    trade["rr_progress"] = rr_progress
+    trade["stop_loss"] = updated_stop
+    if bars_in_trade is not None:
+        trade["bars_in_trade"] = bars_in_trade
+    if partial_profit_taken is not None:
+        trade["partial_profit_taken"] = partial_profit_taken
+    if option_data:
+        for field, option_field in {
+            "option_current_mid": "mid_price",
+            "option_bid": "bid",
+            "option_ask": "ask",
+            "option_spread_pct": "spread_pct",
+            "option_volume": "volume",
+            "option_open_interest": "open_interest",
+            "option_delta": "delta",
+            "option_theta": "theta",
+            "option_iv": "iv",
+            "option_gamma": "gamma",
+            "option_expiration_bucket": "expiration_bucket",
+            "option_expiration_risk": "expiration_risk",
+            "option_quality_score": "option_quality_score",
+            "option_liquidity_grade": "option_liquidity_grade",
+            "option_quality_reasons": "option_quality_reasons",
+            "option_quote_freshness": "quote_freshness",
+            "option_quote_age_minutes": "quote_age_minutes",
+        }.items():
+            trade[field] = option_data.get(option_field)
+    if option_pl:
+        trade["option_pl_pct"] = option_pl.get("option_pl_pct")
+        trade["option_pl_dollars"] = option_pl.get("option_pl_dollars")
+    if execution_metrics:
+        for field in ("mfe_r", "mae_r", "trend_health_score"):
+            if execution_metrics.get(field) is not None:
+                trade[field] = execution_metrics.get(field)
+    if exit_state is not None:
+        trade["v1_ema_grace_pending"] = bool(exit_state.get("v1_ema_grace_pending"))
+
+    state[trade_key] = trade
+    save_paper_trades(state)
+    return trade
 
 
 def _state_key_for_trade(trade):
@@ -709,6 +850,7 @@ def open_paper_trade(
         trade,
         "OPEN"
     )
+    _queue_paper_trade_upsert(trade)
 
     try:
 
@@ -745,7 +887,8 @@ def close_paper_trade(
     symbol,
     close_price=None,
     exit_reason="Manual paper exit",
-    scanner_context=None
+    scanner_context=None,
+    notify_exit=True,
 ):
 
     state = load_paper_trades()
@@ -808,6 +951,7 @@ def close_paper_trade(
 
     state[trade_key] = trade
     save_paper_trades(state)
+    _queue_paper_trade_upsert(trade)
 
     event_type = (
         "MANUAL_CLOSE"
@@ -822,45 +966,46 @@ def close_paper_trade(
     trend_capture_row = _append_trend_capture_for_closed_trade(trade)
     _save_paper_trade_telemetry(trade)
 
-    try:
+    if notify_exit:
+        try:
 
-        from app.alerts.telegram_alerts import maybe_send_trade_exit_alert
+            from app.alerts.telegram_alerts import maybe_send_trade_exit_alert
 
-        telegram_result = maybe_send_trade_exit_alert(
-            symbol=symbol,
-            trade=trade,
-            exit_reason=exit_reason,
-            current_price=close_price,
-            option_current_mid=trade.get("option_mid"),
-            pnl_pct=trade.get("pnl_pct"),
-            r_multiple=trade.get("r_multiple"),
-            outcome=trade.get("outcome"),
-            event_type="EXIT",
-            event_timestamp=trade.get("closed_at"),
-            expected_underlying_price=(
-                scanner_context or {}
-            ).get("Price"),
-            price_source="paper_trade_close_price",
-            scanner_row_symbol=(
-                scanner_context or {}
-            ).get("Symbol"),
-            trend_capture_pct=(
-                (trend_capture_row or {}).get("Trend Capture %")
-                if isinstance(trend_capture_row, dict)
-                else None
+            telegram_result = maybe_send_trade_exit_alert(
+                symbol=symbol,
+                trade=trade,
+                exit_reason=exit_reason,
+                current_price=close_price,
+                option_current_mid=trade.get("option_mid"),
+                pnl_pct=trade.get("pnl_pct"),
+                r_multiple=trade.get("r_multiple"),
+                outcome=trade.get("outcome"),
+                event_type="EXIT",
+                event_timestamp=trade.get("closed_at"),
+                expected_underlying_price=(
+                    scanner_context or {}
+                ).get("Price"),
+                price_source="paper_trade_close_price",
+                scanner_row_symbol=(
+                    scanner_context or {}
+                ).get("Symbol"),
+                trend_capture_pct=(
+                    (trend_capture_row or {}).get("Trend Capture %")
+                    if isinstance(trend_capture_row, dict)
+                    else None
+                )
             )
-        )
 
-        if telegram_result.get("sent"):
+            if telegram_result.get("sent"):
 
-            state[trade_key] = trade
-            save_paper_trades(state)
+                state[trade_key] = trade
+                save_paper_trades(state)
 
-    except Exception as e:
+        except Exception as e:
 
-        print(
-            f"[PAPER TELEGRAM EXIT ALERT ERROR] {symbol}: {e}"
-        )
+            print(
+                f"[PAPER TELEGRAM EXIT ALERT ERROR] {symbol}: {e}"
+            )
 
     return trade
 

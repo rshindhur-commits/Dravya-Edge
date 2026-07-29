@@ -165,6 +165,15 @@ def build_historical_v2_learning(limit=20):
     learning = pd.concat(frames, ignore_index=True, sort=False)
     if "trading_day" not in learning.columns:
         return {"daily": [], "exit_phase": []}
+    if (
+        "engine_version" in learning.columns
+        and learning["engine_version"].notna().any()
+    ):
+        learning = learning[
+            learning["engine_version"].astype(str).str.lower().eq("v2")
+        ].copy()
+    if learning.empty:
+        return {"daily": [], "exit_phase": []}
 
     numeric_columns = [
         "trend_age", "entry_efficiency_score", "trend_capture_pct", "tes",

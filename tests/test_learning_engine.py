@@ -19,3 +19,18 @@ class LearningEngineTests(unittest.TestCase):
         self.assertEqual(summary["avg_r_delta"], 0.5)
         self.assertEqual(summary["premature_exits"], 1)
         self.assertEqual(summary["blocking_stages"]["Risk"], 2)
+
+    def test_daily_summary_excludes_v1_records_from_v2_shadow_count(self):
+        summary = build_daily_learning_summary(
+            "2026-07-28",
+            pd.DataFrame([
+                {"engine_version": "v1", "entry_efficiency_score": 90},
+                {"engine_version": "v2", "entry_efficiency_score": 80},
+            ]),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+        )
+
+        self.assertEqual(summary["v2_shadow_trades"], 1)
+        self.assertEqual(summary["avg_entry_efficiency"], 80.0)

@@ -1,8 +1,48 @@
 {
-  "generated_at_utc": "2026-07-27T21:47:36.175198+00:00",
-  "performance_rows": 95,
-  "metrics_rows": 192,
+  "generated_at_utc": "2026-07-28T23:55:13.877564+00:00",
+  "performance_rows": 99,
+  "metrics_rows": 193,
   "recent_timings": [
+    {
+      "observed_at_utc": "2026-07-28T23:55:13.871721+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.0,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-28T23:54:45.006244+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.0,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-28T23:29:59.591029+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.0,
+      "metadata": "{}"
+    },
+    {
+      "observed_at_utc": "2026-07-28T23:20:31.371392+00:00",
+      "trading_day": NaN,
+      "scan_id": NaN,
+      "category": "telegram",
+      "stage": "send_telegram_alert",
+      "page": NaN,
+      "seconds": 0.0,
+      "metadata": "{}"
+    },
     {
       "observed_at_utc": "2026-07-27T21:47:36.168437+00:00",
       "trading_day": NaN,
@@ -212,49 +252,20 @@
       "page": NaN,
       "seconds": 0.0,
       "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-27T21:01:20.078950+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.0,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-25T03:57:48.359429+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.933,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-25T03:57:47.389136+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 4.0149,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-25T03:57:43.340865+00:00",
-      "trading_day": NaN,
-      "scan_id": NaN,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": NaN,
-      "seconds": 0.978,
-      "metadata": "{}"
     }
   ],
   "recent_jobs": [
+    {
+      "observed_at_utc": "2026-07-27T21:47:36.240360+00:00",
+      "scan_id": NaN,
+      "job_id": "068126d4-13df-44d5-b853-9a397fcff5ed",
+      "job_name": "insert",
+      "priority": "NORMAL",
+      "queue_wait": 0.0007,
+      "queue_runtime": 0.0465,
+      "total_runtime": 0.0472,
+      "status": "COMPLETED"
+    },
     {
       "observed_at_utc": "2026-07-27T21:47:35.484311+00:00",
       "scan_id": NaN,
@@ -518,17 +529,6 @@
       "queue_runtime": 0.0479,
       "total_runtime": 0.0484,
       "status": "COMPLETED"
-    },
-    {
-      "observed_at_utc": "2026-07-27T21:16:22.625972+00:00",
-      "scan_id": NaN,
-      "job_id": "be64ac8a-edee-4e8d-90c6-94ce7e540692",
-      "job_name": "insert",
-      "priority": "NORMAL",
-      "queue_wait": 0.0467,
-      "queue_runtime": 0.1729,
-      "total_runtime": 0.2196,
-      "status": "COMPLETED"
     }
   ],
   "average_seconds_by_stage": [
@@ -536,7 +536,7 @@
       "category": "telegram",
       "stage": "send_telegram_alert",
       "page": NaN,
-      "average_seconds": 0.6319
+      "average_seconds": 0.6064
     }
   ],
   "average_runtime_by_job": [
@@ -550,7 +550,7 @@
     },
     {
       "job_name": "insert",
-      "average_runtime": 0.2856
+      "average_runtime": 0.2842
     }
   ]
 }

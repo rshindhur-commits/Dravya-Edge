@@ -6,7 +6,7 @@ from app.storage.daily_paths import daily_path
 
 
 def append_learning_record(record):
-    if not record:
+    if not record or str(record.get("engine_version") or "").lower() != "v2":
         return None
     trading_day = record.get("trading_day")
     csv_path = daily_path(trading_day, "v2_learning_dataset.csv")
@@ -33,8 +33,29 @@ def summarize_learning_dataset(dataset):
             "Avg Trend Capture %": None,
             "Avg TES": None,
         }
+    if (
+        "engine_version" in dataset.columns
+        and dataset["engine_version"].notna().any()
+    ):
+        dataset = dataset[
+            dataset["engine_version"].astype(str).str.lower().eq("v2")
+        ].copy()
+    if dataset.empty:
+        return {
+            "Completed learning records": 0,
+            "Avg Trend Age": None,
+            "Avg Entry Efficiency": None,
+            "Avg Exit Trend Health": None,
+            "Avg MFE R": None,
+            "Avg MAE R": None,
+            "Avg Trend Capture %": None,
+            "Avg TES": None,
+        }
     def average(column):
-        values = pd.to_numeric(dataset.get(column), errors="coerce")
+        values = pd.to_numeric(
+            dataset.get(column, pd.Series(dtype=float)),
+            errors="coerce",
+        )
         return round(float(values.mean()), 2) if values.notna().any() else None
     return {
         "Completed learning records": int(len(dataset)),

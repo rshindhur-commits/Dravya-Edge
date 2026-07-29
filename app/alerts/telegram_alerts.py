@@ -2006,7 +2006,9 @@ def maybe_send_paper_entry_alert(
         "candidate_key": trade.get("trade_key") or alert_key,
         "source": "paper_entry",
         "action_status": action_status,
+        "trade_id": trade.get("trade_id"),
         "trade_key": trade.get("trade_key") or _state_key_for_alert(trade),
+        "lifecycle_id": _trade_lifecycle_id(trade),
         "last_r_multiple": 0.0,
         "last_trend_health": scanner_context.get("V2 Trend Health Status"),
         "setup_key": "_".join([
@@ -2604,12 +2606,27 @@ def build_trade_cancelled_alert_message(suggestion, reason=None, event_timestamp
     ])
 
 
+def _suggestion_was_alerted_to_subscriber(suggestion):
+
+    suggestion_id = str((suggestion or {}).get("suggestion_id") or "")
+    if not suggestion_id:
+        return False
+    for metadata in _load_alert_state().get("sent", {}).values():
+        if str(metadata.get("candidate_key") or "") != suggestion_id:
+            continue
+        if metadata.get("message_type") in {"WATCHLIST_REVIEW", "REVIEW"}:
+            return True
+    return False
+
+
 @_telegram_attempt_logger("TRADE_CANCELLED")
 def maybe_send_trade_cancelled_alert(suggestion, reason=None, event_timestamp=None):
 
     suggestion = suggestion or {}
     if not telegram_entry_alerts_enabled():
         return {"sent": False, "reason": "TELEGRAM_ENTRY_ALERTS_DISABLED"}
+    if not _suggestion_was_alerted_to_subscriber(suggestion):
+        return {"sent": False, "reason": "NO_SUBSCRIBER_ALERT_TO_CANCEL"}
 
     alert_key = "|".join([
         "TRADE_CANCELLED",

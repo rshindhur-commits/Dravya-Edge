@@ -57,6 +57,14 @@ def build_aggregate_statistics(evidence):
 
 def build_daily_learning_summary(trading_day, v2_learning, comparisons, exits, waterfalls):
     v2_learning = v2_learning if v2_learning is not None else pd.DataFrame()
+    if (
+        not v2_learning.empty
+        and "engine_version" in v2_learning.columns
+        and v2_learning["engine_version"].notna().any()
+    ):
+        v2_learning = v2_learning[
+            v2_learning["engine_version"].astype(str).str.lower().eq("v2")
+        ].copy()
     comparisons = comparisons if comparisons is not None else pd.DataFrame()
     exits = exits if exits is not None else pd.DataFrame()
     waterfalls = waterfalls if waterfalls is not None else pd.DataFrame()

@@ -2900,6 +2900,15 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
     trading_day = get_trading_day(decision_time)
     scan_timestamp = decision_time.strftime("%Y-%m-%d %H:%M:%S")
     controls = controls or {}
+    action_status = row.get("Action Status") if row is not None else None
+    scanner_blocked_by = row.get("Blocked By") if row is not None else None
+    blocked_by = (
+        reason
+        if str(decision or "").upper() == "BLOCKED"
+        else None
+        if str(scanner_blocked_by or "").strip().upper() == str(action_status or "").strip().upper()
+        else scanner_blocked_by
+    )
     entry = {
         "timestamp": scan_timestamp,
         "trading_day": trading_day,
@@ -2941,8 +2950,9 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "real_trade_readiness": row.get("Real Trade Readiness") if row is not None else None,
         "real_review_scan_count": row.get("Real Review Scan Count") if row is not None else None,
         "real_entry_checklist": row.get("Real Entry Checklist") if row is not None else None,
-        "action_status": row.get("Action Status") if row is not None else None,
-        "blocked_by": row.get("Blocked By") if row is not None else None,
+        "action_status": action_status,
+        "blocked_by": blocked_by,
+        "scanner_blocked_by": scanner_blocked_by,
         "action_reason": row.get("Action Reason") if row is not None else None,
         "option_rejection_reason": row.get("Option Rejection Reason") if row is not None else None,
         "realtime_block_reason": row.get("Realtime Block Reason") if row is not None else None,

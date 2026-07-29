@@ -1,7 +1,8 @@
 import pandas as pd
+from unittest.mock import patch
 
 from app.analytics.v2_learning_dataset import build_learning_record
-from app.analytics.v2_learning_writer import summarize_learning_dataset
+from app.analytics.v2_learning_writer import append_learning_record, summarize_learning_dataset
 
 
 def test_learning_record_captures_execution_specific_metrics():
@@ -34,3 +35,21 @@ def test_learning_summary_uses_execution_metrics():
 
     assert summary["Completed learning records"] == 1
     assert summary["Avg Trend Capture %"] == 70
+
+
+def test_v2_writer_rejects_non_v2_learning_records():
+    with patch("app.analytics.v2_learning_writer.daily_path") as daily_path:
+        result = append_learning_record({"engine_version": "v1"})
+
+    assert result is None
+    daily_path.assert_not_called()
+
+
+def test_learning_summary_ignores_legacy_v1_records():
+    summary = summarize_learning_dataset(pd.DataFrame([
+        {"engine_version": "v1", "entry_efficiency_score": 90},
+        {"engine_version": "v2", "entry_efficiency_score": 80},
+    ]))
+
+    assert summary["Completed learning records"] == 1
+    assert summary["Avg Entry Efficiency"] == 80.0

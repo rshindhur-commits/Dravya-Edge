@@ -2,11 +2,10 @@ from app.indicators.technical_indicators import (
     get_live_price
 )
 
-from app.state.state_trade_manager import (
-    get_trade,
-    open_trade,
-    close_trade,
-    update_trade
+from app.state.paper_trade_manager import (
+    close_paper_trade,
+    get_open_paper_trade,
+    update_paper_trade,
 )
 from app.state.entry_exit_v2_shadow_state import (
     close_shadow_trade,
@@ -3356,6 +3355,23 @@ def _finalize_scan_outputs(
     )
     health.health_score = calculate_health_score(health)
 
+    with stage_timer.stage("Auto paper entries"):
+
+        from app.runtime.paper_automation import run_auto_paper_entries
+        from app.runtime.paper_automation_support import load_auto_paper_controls
+
+        auto_paper_opened = run_auto_paper_entries(
+            df_results,
+            load_auto_paper_controls(),
+        )
+
+    if auto_paper_opened:
+
+        print(
+            "[AUTO PAPER] opened "
+            + ", ".join(auto_paper_opened)
+        )
+
     with stage_timer.stage("Telegram"):
 
         telegram_summary = _dispatch_telegram_entry_alerts(
@@ -3387,6 +3403,7 @@ def _finalize_scan_outputs(
         "average_symbol_runtime": health.average_symbol_runtime,
         "candidate_funnel": candidate_funnel,
         "telegram_summary": telegram_summary,
+        "auto_paper_opened": auto_paper_opened,
     }
 
     _persist_scan_outputs(
@@ -3776,7 +3793,7 @@ def _run_scanner_impl():
 
             #     continue
 
-            active_trade = get_trade(symbol)
+            active_trade = get_open_paper_trade(symbol)
             opened_trade_this_scan = False
 
             if (
@@ -4351,8 +4368,6 @@ def _run_scanner_impl():
                     try:
 
                         from app.analytics.engine_version_comparison import append_engine_trade_event
-                        from app.analytics.v2_learning_dataset import build_learning_record
-                        from app.analytics.v2_learning_writer import append_learning_record
 
                         v1_completed_trade = {
                             **active_trade,
@@ -4372,18 +4387,18 @@ def _run_scanner_impl():
                             "v1",
                             v1_completed_trade,
                         )
-                        append_learning_record(
-                            build_learning_record(
-                                trading_day,
-                                v1_completed_trade,
-                            )
-                        )
 
                     except Exception as exc:
 
                         print(f"[V1 ENGINE EVENT WARNING] {exc}")
 
-                    close_trade(symbol)
+                    close_paper_trade(
+                        symbol,
+                        close_price=current_symbol_close,
+                        exit_reason=exit_setup.get("exit_reason") or "Scanner exit",
+                        scanner_context={"Symbol": symbol, "Price": current_symbol_close},
+                        notify_exit=False,
+                    )
 
                     trade_management["trade_action"] = "EXIT"
 
@@ -4479,7 +4494,7 @@ def _run_scanner_impl():
                                 f"[TELEGRAM PARTIAL ALERT ERROR] {symbol}: {e}"
                             )
 
-                    update_trade(
+                    update_paper_trade(
 
                         symbol,
 
@@ -4996,50 +5011,8 @@ def _run_scanner_impl():
 
                     )
 
-                if (
-                    entry_setup
-                    and entry_setup["entry_quality"] == "HIGH"
-                    and option_recommendation
-                    and (
-                        not active_trade
-                        or active_trade["status"] != "OPEN"
-                    )
-                ):
-
-                    open_trade(
-                        symbol,
-                        risk_setup["entry_price"],
-                        risk_setup["stop_loss"],
-                        risk_setup["take_profit"],
-                        entry_type=entry_setup["entry_type"],
-                        direction=shadow_entry_v2.get("direction"),
-                        option_data=option_recommendation,
-                        contracts=(
-                            position_data.get("contracts")
-                            if position_data
-                            else None
-                        ),
-                        execution_features=shadow_entry_v2,
-                    )
-
-                    active_trade = get_trade(symbol)
-                    opened_trade_this_scan = True
-
-                    trade_management = {
-                        "trade_action": "OPENED",
-                        "updated_stop": "-",
-                        "rr_progress": 0,
-                        "highest_price": "-",
-                        "adjustment_reason": "Entry opened this scan"
-                    }
-
-                    exit_setup = {
-                        "exit_signal": False,
-                        "exit_reason": (
-                            "Entry opened this scan; "
-                            "exit evaluation starts next scan"
-                        )
-                    }
+                # Paper entries are owned exclusively by run_auto_paper_entries(),
+                # which applies execution gates and persists the full lifecycle state.
 
             # =====================================
             # Replay projection outcome

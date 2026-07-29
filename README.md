@@ -97,6 +97,8 @@ Each candidate and paper trade has a `holding_profile`: `INTRADAY` or `MULTIDAY`
 
 Paper-trade state retains `trade_state`, `holding_profile`, `opened_at`, `closed_at`, `days_held`, `overnight_count`, `forced_eod_exit`, `session_id_open`, `session_id_current`, and `session_id_close`. At session startup, `initialize_session_lifecycle()` restores open multi-day positions and archives prior-session candidates unless they are promoted multi-day positions. Suggestions use `ARCHIVED` as their terminal session-cleanup state.
 
+Paper state is the single managed-trade source. `ENTER_PAPER` is a scanner recommendation, not a completed paper entry: auto-paper must still pass the entry window, top-candidate, entry-gate, realtime, bid/ask, event/regime, direction, duplicate, cooldown, capacity, and daily-limit checks. A top-three `Candidate Rank` satisfies the top-candidate execution gate when a presentation tag is missing. Its exact `OPENED`, `BLOCKED`, or `SKIPPED` outcome is written to `auto_paper_decisions.csv`; outside the entry window, logging emits one system-level skip rather than one row per symbol. Scanner finalization and the dashboard both invoke the same auto-paper runtime using persisted controls, so standalone `python -m app.main` scans can create eligible paper trades without a dashboard render. An existing open legacy scanner-state record is promoted once into paper state on first lookup and tagged `LEGACY_SCANNER_STATE_MIGRATION`; this preserves management and lifecycle continuity without sending a retroactive entry alert.
+
 The Day 2 subscriber message is `POSITION CONTINUES`, not `NEW TRADE`; it identifies when the trade opened, current $R$, trend health, and the hold action. The Trading page shows separate Intraday and Multi-day counts for open trades.
 
 The Paper Automation sidebar names its three lifecycle phases explicitly:
@@ -108,6 +110,8 @@ The Paper Automation sidebar names its three lifecycle phases explicitly:
 | `Restore Multi-day Positions Next Session` | Next market session | Restores eligible multi-day positions without changing candidate archival. |
 
 Multi-day positions remain open unless a normal exit rule fires.
+
+Auto-paper decision records keep scanner recommendation and execution gates separate: `action_status` is the scanner action, `blocked_by` is the actual auto-paper gate result, `scanner_blocked_by` preserves the raw scanner field, and `action_reason` preserves the scanner explanation. This makes `ENTER_PAPER` followed by an execution rejection diagnosable without treating the action code as the blocker.
 
 Disabling `Auto Close Intraday Trades` does **not** promote an `INTRADAY` trade to `MULTIDAY`. If such a trade remains open overnight, the next session restores it as `INTRADAY`, refreshes its holding duration, and records the warning: `Intraday trade carried overnight because Auto Close Intraday Trades was disabled.` It does not receive a `POSITION CONTINUES` alert or become eligible for multi-day restoration rules.
 
@@ -181,6 +185,7 @@ Exit decisions use `app/exit/exit_engine.py::evaluate_exit()` as the live single
 - `daily_engine_summary.csv`
 - `candidate_snapshot.csv`
 - `candidate_evidence.csv`
+- `candidate_evidence_status.json`
 - `candidate_outcome.csv`
 - `decision_waterfall.csv`
 - `gate_decisions.csv`
@@ -506,7 +511,7 @@ The Daily Validation Report and Validation page include an **Entry/Exit V2 Shado
 | Area | V1 | V2 shadow |
 | --- | --- | --- |
 | Entry decision | Production paper decision | Independent proposal from indicators, trend, price, and shared risk geometry |
-| Trade state | `trade_state.json` | `entry_exit_v2_shadow_state.json` |
+| Trade state | `paper_trade_state.json` | `entry_exit_v2_shadow_state.json` |
 | Entry/exit execution | May open and close paper trades | Never places, closes, or modifies a V1 trade |
 | Telegram and suggestions | V1-owned operational flow | No Telegram dispatch or suggestion mutation |
 | Risk controls | Existing production controls | Uses the same risk geometry; hard stop and target remain absolute in V2 simulation |
@@ -534,13 +539,13 @@ Trend Capture % is the primary V2 engineering target. Win rate, average $R$, TES
 
 ### V2 Learning Dataset
 
-`app/analytics/v2_learning_dataset.py` creates one compact execution-learning record for every completed V1 and V2 shadow trade. It stores execution-specific features rather than duplicating raw scanner indicators:
+`app/analytics/v2_learning_dataset.py` creates one compact execution-learning record for every completed V2 shadow trade. Completed V1 events remain in `engine_trade_events.csv` and are paired through `engine_trade_comparisons.csv`; they are not written into the V2 learning dataset or counted as V2 shadow trades. The dataset stores execution-specific features rather than duplicating raw scanner indicators:
 
 - Entry timing: trend age, pullback number, bars since breakout, Entry Efficiency Score, EMA/VWAP/EMA20 distance, ATR extension, alignment score, and volume-confirmation score.
 - Trade evolution: maximum/minimum/average trend health, trend-health standard deviation, MFE/MAE in $R$, bars held, and time held.
 - Exit and outcome: exit phase/reason, final $R$, Trend Capture %, TES, left on table, grades/verdicts when available, and derived execution labels.
 
-`app/analytics/v2_learning_writer.py` writes the daily dataset to `data/daily/YYYY-MM-DD/v2_learning_dataset.csv` and writes Parquet when available. V2 shadow state aggregates health/MFE/MAE continuously; V1 records use the same-entry observational metrics captured during its active lifecycle.
+`app/analytics/v2_learning_writer.py` writes the daily dataset to `data/daily/YYYY-MM-DD/v2_learning_dataset.csv` and writes Parquet when available. V2 shadow state aggregates health/MFE/MAE continuously. The V2 Learning Summary therefore measures completed V2 shadows, not per-scan proposals or V1 completions.
 
 The **Validation** page shows a V2 Learning Summary for the day. The existing **Reports** page renders multi-day Execution Learning Trends for Trend Age, Entry Efficiency, Trend Capture %, TES, and V2 exit phase. The Daily Validation Report includes the same daily summary.
 
@@ -577,7 +582,7 @@ Daily validation checks after replay:
 - Partial replay should be `0`.
 - `ENTRY_SETUP_CANDIDATE`, `ENTRY_READINESS`, and `FAILED_ENTRY_CONDITIONS` should match between scanner output and replay output.
 
-Auto-paper decisions are emitted from the Streamlit dashboard auto-paper path, not from the standalone scanner loop. The dashboard writer appends the full-day CSV and then updates the capped dashboard JSON from the same decision row.
+Auto-paper decisions are emitted from the shared runtime invoked by both scanner finalization and the Streamlit dashboard. The writer appends the full-day CSV and then updates the capped dashboard JSON from the same decision row.
 
 The first section is `Validation Data Health`. It shows counts for scanner rows, candidate snapshots, telemetry rows, paper-trade state records, paper-trade event rows, auto-paper decisions, opened decisions, suggested trades, and trade state records. If no paper trades are found, the report explicitly warns that it is based on blocked/skipped candidates only.
 
@@ -795,6 +800,8 @@ Telegram entry and exit alerts are opt-in and use duplicate protection so dashbo
 Subscriber messages are decision-first rather than scanner-first. `NEW TRADE` leads with `BUY NOW` or `SELL NOW`, then lists underlying entry/stop/target, $R$, Trade Quality or projected grade, confidence, recommended option strike/expiration/premium/cost/spread/liquidity, and the setup rationale. Every option-bearing lifecycle message (`NEW TRADE`, update, partial profit, continuation, and close) includes the original selected `Contract`, `Expiry`, and `Contract Cost`; `NEW TRADE` also retains the option premium. `TRADE UPDATE`, `STOP MOVED`, and `PARTIAL PROFIT` messages are compact state transitions. `TRADE CLOSED` leads with outcome and $R$, then explains the exit and includes Trend Capture % and left-on-table $R$ when MFE data is available. Internal action codes, quote provenance, and other scanner diagnostics remain in the dispatch audit rather than subscriber messages.
 
 Subscriber sequencing is enforced per immutable `trade_id`: a delivered `NEW TRADE` / `TRADE_OPEN` is required before an update, partial-profit, continuation, or close can be sent for that trade. Terminal messages without that prior subscriber entry are suppressed and audited as `SUBSCRIBER_NEW_TRADE_NOT_SENT`; a cancellation is reserved for a suggestion that was never entered. Close messages suppress the holding-time line when reconstructed timestamps would produce a negative duration.
+
+Suggestion cancellations are also subscriber-relative: a `TRADE CANCELLED` message requires a prior delivered review alert for the same suggestion. Suggestions that were never visible to the subscriber expire without a Telegram message.
 
 For local `.env` configuration, credential lookup accepts both `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` and the legacy lowercase `bot_token` / `chat_id` keys. The direct test utility is `python tools/send_test_telegram_alert.py`. If Telegram returns `Bad Request: chat not found`, refresh the chat ID after the bot has been started or added to the destination chat; rotate any token exposed in a terminal URL/error trace.
 

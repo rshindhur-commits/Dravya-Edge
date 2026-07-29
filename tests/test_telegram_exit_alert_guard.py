@@ -1,9 +1,11 @@
 import unittest
 
 from app.alerts.telegram_alerts import (
+    _subscriber_entry_metadata,
     _can_send_exit_alert,
     _exit_alert_key,
     build_trade_exit_alert_message,
+    maybe_send_trade_cancelled_alert,
     maybe_send_trade_exit_alert,
 )
 from unittest.mock import patch
@@ -93,6 +95,70 @@ class TelegramExitAlertGuardTests(unittest.TestCase):
 
         self.assertFalse(result["sent"])
         self.assertEqual(result["reason"], "SUBSCRIBER_NEW_TRADE_NOT_SENT")
+
+    def test_subscriber_entry_lookup_uses_paper_trade_id(self):
+
+        trade = {"trade_id": "trade-123", "trade_key": "legacy-key"}
+        with patch(
+            "app.alerts.telegram_alerts._load_alert_state",
+            return_value={
+                "sent": {
+                    "PAPER_ENTRY|trade-123": {
+                        "message_type": "PAPER_ENTRY",
+                        "trade_id": "trade-123",
+                        "lifecycle_id": "trade-123",
+                        "sent_at": "2026-07-28T15:00:00+00:00",
+                    }
+                }
+            },
+        ):
+            metadata = _subscriber_entry_metadata(trade)
+
+        self.assertEqual(metadata["lifecycle_id"], "trade-123")
+
+    def test_cancelled_alert_is_suppressed_without_subscriber_visibility(self):
+
+        suggestion = {"suggestion_id": "suggestion-1", "symbol": "NVDA", "direction": "PUT"}
+        with patch(
+            "app.alerts.telegram_alerts.telegram_entry_alerts_enabled",
+            return_value=True,
+        ), patch(
+            "app.alerts.telegram_alerts._load_alert_state",
+            return_value={"sent": {}},
+        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
+            result = maybe_send_trade_cancelled_alert(suggestion)
+
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "NO_SUBSCRIBER_ALERT_TO_CANCEL")
+        send_alert.assert_not_called()
+
+    def test_cancelled_alert_requires_matching_prior_review_alert(self):
+
+        suggestion = {"suggestion_id": "suggestion-1", "symbol": "NVDA", "direction": "PUT"}
+        with patch(
+            "app.alerts.telegram_alerts.telegram_entry_alerts_enabled",
+            return_value=True,
+        ), patch(
+            "app.alerts.telegram_alerts._load_alert_state",
+            return_value={
+                "sent": {
+                    "REVIEW|suggestion-1": {
+                        "candidate_key": "suggestion-1",
+                        "message_type": "WATCHLIST_REVIEW",
+                    }
+                }
+            },
+        ), patch(
+            "app.alerts.telegram_alerts.alert_was_sent",
+            return_value=False,
+        ), patch(
+            "app.alerts.telegram_alerts.send_telegram_alert",
+            return_value={},
+        ) as send_alert:
+            result = maybe_send_trade_cancelled_alert(suggestion)
+
+        self.assertTrue(result["sent"])
+        send_alert.assert_called_once()
 
     def test_negative_holding_time_is_omitted(self):
 

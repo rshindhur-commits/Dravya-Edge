@@ -85,6 +85,23 @@ class ReportStateBuilderTests(unittest.TestCase):
         self.assertEqual(history["daily"][0]["Entry Efficiency"], 80.0)
         self.assertEqual(history["exit_phase"][0]["Exit Phase"], "TREND_FAILURE")
 
+    def test_historical_v2_learning_ignores_v1_rows(self):
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            root = Path(temp_dir)
+            directory = root / "2026-07-28"
+            directory.mkdir()
+            pd.DataFrame([
+                {"trading_day": "2026-07-28", "engine_version": "v1", "entry_efficiency_score": 90},
+                {"trading_day": "2026-07-28", "engine_version": "v2", "entry_efficiency_score": 80},
+            ]).to_csv(directory / "v2_learning_dataset.csv", index=False)
+
+            with patch("app.ui.cache.report_state_builder.DAILY_DIR", root):
+                history = build_historical_v2_learning()
+
+        self.assertEqual(history["daily"][0]["Entry Efficiency"], 80.0)
+
     def test_builds_historical_entry_timing_and_ranking(self):
 
         history = build_historical_observational_analytics([
