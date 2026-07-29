@@ -99,7 +99,7 @@ Paper-trade state retains `trade_state`, `holding_profile`, `opened_at`, `closed
 
 Paper state is the single managed-trade source. `ENTER_PAPER` is a scanner recommendation, not a completed paper entry: auto-paper must still pass the entry window, top-candidate, entry-gate, realtime, bid/ask, event/regime, direction, duplicate, cooldown, capacity, and daily-limit checks. A top-three `Candidate Rank` satisfies the top-candidate execution gate when a presentation tag is missing. Its exact `OPENED`, `BLOCKED`, or `SKIPPED` outcome is written to `auto_paper_decisions.csv`; outside the entry window, logging emits one system-level skip rather than one row per symbol. Scanner finalization and the dashboard both invoke the same auto-paper runtime using persisted controls, so standalone `python -m app.main` scans can create eligible paper trades without a dashboard render. An existing open legacy scanner-state record is promoted once into paper state on first lookup and tagged `LEGACY_SCANNER_STATE_MIGRATION`; this preserves management and lifecycle continuity without sending a retroactive entry alert.
 
-The Day 2 subscriber message is `POSITION CONTINUES`, not `NEW TRADE`; it identifies when the trade opened, current $R$, trend health, and the hold action. The Trading page shows separate Intraday and Multi-day counts for open trades.
+The Day 2 subscriber message is `POSITION CONTINUES`, not `NEW TRADE`; it identifies when the trade opened, current $R$, trend health, and the hold action. The Trading page shows canonical live positions with holding profile and current action.
 
 The Paper Automation sidebar names its three lifecycle phases explicitly:
 
@@ -274,7 +274,7 @@ Dashboard KPI rows use the shared `kpi_card()` helper in `app/ui/components.py` 
 
 | Page | Primary question | Current contents | V1/V2 rule |
 | --- | --- | --- | --- |
-| **Trading** | What should I trade right now? | Today’s Decision Center, top-five ranked V1 decisions, open V1 trades, compact performance, and market summary | V1 only. V2 does not place trades, alter state, or create competing live controls. |
+| **Trading** | What is the engine trading right now? | Live positions, decision feed, ranked opportunities, active risk monitor, Telegram delivery, market pulse, and event timeline | V1 only. V2 does not place trades, alter state, or create competing live controls. |
 | **Validation** | Did execution behave well today? | Trade Doctor, Strategy Confidence, Trade Efficiency, Candidate Outcomes, Decision Analysis, V1/V2 completed-trade comparison, Trend Outcome Attribution, strong-trend execution failures, and V2 Learning Summary | Post-trade V2 evidence only. |
 | **Replay** | What would the saved scanner state have done? | Offline replay coverage, blockers, saved replay outputs, and replay summary | Current replay is V1-oriented. V1/V2 replay comparison is pending the Candidate Evidence merge. |
 | **Regression** | Would current strategy code have improved an archived day? | Neon archive/baseline status, on-demand HSR execution, result deltas, and versioned run history | Read-only against immutable snapshots and baselines; never changes daily truth. |
