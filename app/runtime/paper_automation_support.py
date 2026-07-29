@@ -343,6 +343,11 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
     decision_time = _current_et()
     trading_day = get_trading_day(decision_time)
     scan_timestamp = decision_time.strftime("%Y-%m-%d %H:%M:%S")
+    scan_id = (
+        row.get("Scan ID") or row.get("scan_id")
+        if row is not None
+        else None
+    ) or get_scan_id(trading_day, decision_time)
     action_status = row.get("Action Status") if row is not None else None
     scanner_blocked_by = row.get("Blocked By") if row is not None else None
     blocked_by = (
@@ -356,7 +361,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "timestamp": scan_timestamp,
         "trading_day": trading_day,
         "session_id": get_session_id(trading_day),
-        "scan_id": get_scan_id(trading_day, decision_time),
+        "scan_id": scan_id,
         "scan_timestamp": scan_timestamp,
         **classify_decision_time(decision_time),
         "gate_mode": "auto_paper",

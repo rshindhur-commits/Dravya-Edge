@@ -8,6 +8,7 @@ from app.analytics.candidate_evidence import (
     build_candidate_evidence_from_frames,
     write_candidate_evidence,
 )
+from app.db.candidate_evidence_repository import CandidateEvidenceRepository
 
 
 def test_candidate_evidence_collapses_scans_and_joins_outcomes():
@@ -60,6 +61,51 @@ def test_candidate_evidence_collapses_scans_and_joins_outcomes():
     assert row["suggestion_status"] == "PROMOTED_TO_PAPER"
     assert row["trend_capture"] == 72
     assert row["tes"] == 88
+
+
+def test_candidate_evidence_preserves_actionable_decision_after_later_wait():
+    evidence = build_candidate_evidence_from_frames(
+        "2026-07-29",
+        pd.DataFrame([
+            {
+                "symbol": "NFLX", "direction": "CALL", "setup_type": "BREAKOUT",
+                "scan_timestamp": "2026-07-29 10:03:00", "scan_id": "scan-enter",
+                "action_status": "ENTER_PAPER", "action_reason": "Risk, option, and timing checks passed",
+            },
+            {
+                "symbol": "NFLX", "direction": "CALL", "setup_type": "BREAKOUT",
+                "scan_timestamp": "2026-07-29 10:08:00", "scan_id": "scan-wait",
+                "action_status": "WAIT", "action_reason": "No actionable entry trigger",
+            },
+        ]),
+    )
+
+    row = evidence.iloc[0]
+    assert row["decision"] == "ENTER_PAPER"
+    assert row["latest_decision"] == "WAIT"
+    assert row["first_actionable_decision"] == "ENTER_PAPER"
+    assert row["first_actionable_scan_id"] == "scan-enter"
+    assert [item["decision"] for item in row["decision_history"]] == ["ENTER_PAPER", "WAIT"]
+
+
+def test_evidence_repository_normalizes_missing_actionable_timestamp(monkeypatch):
+    captured = []
+    repository = CandidateEvidenceRepository()
+    monkeypatch.setattr(
+        repository,
+        "_batch_execute",
+        lambda _statement, records: captured.extend(records) or len(records),
+    )
+
+    repository.batch_upsert([{
+        "candidate_id": "candidate-1",
+        "first_actionable_at": pd.NaT,
+        "option_quality": float("nan"),
+        "decision_history": [],
+    }])
+
+    assert captured[0]["first_actionable_at"] is None
+    assert 'NaN' not in captured[0]["payload"]
 
 
 def test_writer_uses_finalized_candidates_without_rereading_snapshots(tmp_path):
@@ -136,6 +182,9 @@ def test_writer_records_failed_database_promotion(tmp_path):
         "app.analytics.candidate_evidence.db_writes_enabled",
         return_value=True,
     ), patch(
+        "app.analytics.candidate_evidence._read_database_snapshots",
+        return_value=pd.DataFrame(),
+    ), patch(
         "app.db.candidate_evidence_repository.CandidateEvidenceRepository.batch_upsert",
         return_value=0,
     ):
@@ -171,6 +220,10 @@ def test_builder_prefers_accumulated_daily_snapshots_over_latest_scan(monkeypatc
         lambda _day: accumulated,
     )
     monkeypatch.setattr(
+        "app.analytics.candidate_evidence._read_database_snapshots",
+        lambda _day: pd.DataFrame(),
+    )
+    monkeypatch.setattr(
         "app.analytics.candidate_evidence.load_json_file",
         lambda *_args: {},
     )
@@ -187,6 +240,30 @@ def test_builder_prefers_accumulated_daily_snapshots_over_latest_scan(monkeypatc
     assert len(evidence) == 1
     assert evidence.iloc[0]["scan_count"] == 2
     assert evidence.iloc[0]["rr"] == 2.5
+
+
+def test_builder_merges_durable_and_current_snapshots_for_decision_lineage(monkeypatch):
+    durable = pd.DataFrame([{
+        "symbol": "NFLX", "direction": "PUT", "setup_type": "VWAP_REJECTION",
+        "scan_timestamp": "2026-07-29 10:03:00", "scan_id": "scan-enter",
+        "action_status": "ENTER_PAPER",
+    }])
+    current = pd.DataFrame([{
+        "Symbol": "NFLX", "Candidate Direction": "PUT", "Entry": "VWAP_REJECTION",
+        "Current ET": "2026-07-29 10:08:00", "Scan ID": "scan-wait",
+        "Action Status": "WAIT",
+    }])
+    monkeypatch.setattr("app.analytics.candidate_evidence._read_database_snapshots", lambda _day: durable)
+    monkeypatch.setattr("app.analytics.candidate_evidence._read_snapshot", lambda _day: pd.DataFrame())
+    monkeypatch.setattr("app.analytics.candidate_evidence.load_json_file", lambda *_args: {})
+    monkeypatch.setattr("app.analytics.candidate_evidence.build_loss_attribution", lambda _day: pd.DataFrame())
+
+    evidence = build_candidate_evidence("2026-07-29", candidate_snapshots=current)
+
+    row = evidence.iloc[0]
+    assert row["scan_count"] == 2
+    assert row["decision"] == "ENTER_PAPER"
+    assert row["latest_decision"] == "WAIT"
 
 
 def test_builder_uses_auto_paper_gate_reason_not_enter_paper_action():

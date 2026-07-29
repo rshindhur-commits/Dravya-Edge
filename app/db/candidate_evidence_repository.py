@@ -1,20 +1,32 @@
 import json
 
+from app.db.persistence import _json_safe
 from app.db.repository_base import BestEffortRepository
+
+
+def _nullable(value):
+    if value is None or str(value).strip().lower() in {"", "nan", "nat", "none"}:
+        return None
+    return value
 
 
 class CandidateEvidenceRepository(BestEffortRepository):
     def batch_upsert(self, rows):
         records = []
         for row in rows or []:
+            row = _json_safe(row or {})
             records.append({
                 **row,
+                "first_actionable_at": _nullable(row.get("first_actionable_at")),
+                "decision_history": json.dumps(row.get("decision_history") or [], default=str),
                 "payload": json.dumps(row, default=str),
             })
         return self._batch_execute("""
             INSERT INTO candidate_evidence (
                 candidate_id, trading_day, symbol, direction, setup, rr, setup_score,
                 option_quality, trend_health, regime, top_candidate, quote_freshness, rule_evaluation, decision,
+                latest_decision, first_actionable_decision, first_actionable_at,
+                first_actionable_scan_id, decision_history,
                 suggestion_status, paper_trade_status, replay_outcome, target_first,
                 stop_first, winner, missed_winner, trend_capture, tes,
                 engineering_root_cause, payload, evidence_updated_at
@@ -23,6 +35,9 @@ class CandidateEvidenceRepository(BestEffortRepository):
                 CAST(:rr AS DOUBLE PRECISION), CAST(:setup_score AS DOUBLE PRECISION),
                 CAST(:option_quality AS DOUBLE PRECISION), :trend_health,
                 :regime, :top_candidate, :quote_freshness, :rule_evaluation, :decision,
+                :latest_decision, :first_actionable_decision,
+                CAST(:first_actionable_at AS TIMESTAMPTZ), :first_actionable_scan_id,
+                CAST(:decision_history AS JSONB),
                 :suggestion_status, :paper_trade_status, :replay_outcome, :target_first,
                 :stop_first, :winner, :missed_winner, CAST(:trend_capture AS DOUBLE PRECISION),
                 CAST(:tes AS DOUBLE PRECISION), :engineering_root_cause,
@@ -37,6 +52,11 @@ class CandidateEvidenceRepository(BestEffortRepository):
                 quote_freshness = EXCLUDED.quote_freshness,
                 rule_evaluation = EXCLUDED.rule_evaluation,
                 decision = EXCLUDED.decision,
+                latest_decision = EXCLUDED.latest_decision,
+                first_actionable_decision = EXCLUDED.first_actionable_decision,
+                first_actionable_at = EXCLUDED.first_actionable_at,
+                first_actionable_scan_id = EXCLUDED.first_actionable_scan_id,
+                decision_history = EXCLUDED.decision_history,
                 suggestion_status = EXCLUDED.suggestion_status,
                 paper_trade_status = EXCLUDED.paper_trade_status,
                 replay_outcome = EXCLUDED.replay_outcome,

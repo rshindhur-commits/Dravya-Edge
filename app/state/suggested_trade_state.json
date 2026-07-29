@@ -12,8 +12,8 @@
         "first_seen_at": "2026-07-24T22:56:59-04:00",
         "last_seen_at": "2026-07-28T21:28:40-04:00",
         "last_valid_at": "2026-07-28T21:28:40-04:00",
-        "status": "STILL_VALID_CALL",
-        "validity_reason": "current valid scanner candidate",
+        "status": "ARCHIVED",
+        "validity_reason": "archived at session start",
         "times_seen": 5,
         "original_setup_percent": null,
         "original_rr": 1.8,
@@ -33,7 +33,7 @@
         "action_reason": "Risk, option, and timing checks passed",
         "realtime_ready": true,
         "realtime_block_reason": NaN,
-        "archived_at": "2026-07-28T18:58:29-04:00"
+        "archived_at": "2026-07-29T13:38:27-04:00"
     },
     "AVGO|CALL|EMA_PULLBACK|O:AVGO260717C00380000": {
         "suggestion_id": "AVGO|CALL|EMA_PULLBACK|O:AVGO260717C00380000",
@@ -48,8 +48,8 @@
         "first_seen_at": "2026-07-24T22:56:59-04:00",
         "last_seen_at": "2026-07-28T21:28:40-04:00",
         "last_valid_at": "2026-07-28T21:28:40-04:00",
-        "status": "STILL_VALID_CALL",
-        "validity_reason": "current valid scanner candidate",
+        "status": "ARCHIVED",
+        "validity_reason": "archived at session start",
         "times_seen": 5,
         "original_setup_percent": null,
         "original_rr": 1.8,
@@ -69,7 +69,7 @@
         "action_reason": "Risk, option, and timing checks passed",
         "realtime_ready": true,
         "realtime_block_reason": NaN,
-        "archived_at": "2026-07-28T18:58:29-04:00"
+        "archived_at": "2026-07-29T13:38:27-04:00"
     },
     "MU|CALL|EMA_PULLBACK|O:MU260717C01150000": {
         "suggestion_id": "MU|CALL|EMA_PULLBACK|O:MU260717C01150000",
@@ -84,8 +84,8 @@
         "first_seen_at": "2026-07-24T22:56:59-04:00",
         "last_seen_at": "2026-07-28T21:28:40-04:00",
         "last_valid_at": "2026-07-28T21:28:40-04:00",
-        "status": "STILL_VALID_CALL",
-        "validity_reason": "current valid scanner candidate",
+        "status": "ARCHIVED",
+        "validity_reason": "archived at session start",
         "times_seen": 5,
         "original_setup_percent": null,
         "original_rr": 1.8,
@@ -105,6 +105,6 @@
         "action_reason": "Risk, option, and timing checks passed",
         "realtime_ready": true,
         "realtime_block_reason": NaN,
-        "archived_at": "2026-07-28T18:58:29-04:00"
+        "archived_at": "2026-07-29T13:38:27-04:00"
     }
 }

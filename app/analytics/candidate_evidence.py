@@ -20,10 +20,15 @@ EVIDENCE_COLUMNS = [
     "entry_priority_adjustment", "expected_remaining_trend", "projected_entry_grade",
     "ranking_score", "candidate_rank",
     "option_quality", "trend_health", "regime", "top_candidate", "quote_freshness", "rule_evaluation",
-    "decision", "auto_paper_decision", "auto_paper_blocked_by", "suggestion_status", "paper_trade_status", "entered",
+    "decision", "latest_decision", "first_actionable_decision", "first_actionable_at",
+    "first_actionable_scan_id", "decision_history", "auto_paper_decision",
+    "auto_paper_blocked_by", "suggestion_status", "paper_trade_status", "entered",
     "replay_outcome", "target_first", "stop_first", "winner", "missed_winner",
     "final_r", "trend_capture", "mfe", "tes", "engineering_root_cause", "evidence_updated_at",
 ]
+
+
+ACTIONABLE_DECISIONS = {"ENTER", "ENTER_PAPER"}
 
 
 def _read_csv(path: Path):
@@ -44,6 +49,73 @@ def _read_snapshot(trading_day):
     if not snapshots.empty:
         return snapshots
     return _read_csv(daily_path(trading_day, "scanner_output_close.csv"))
+
+
+def _read_database_snapshots(trading_day):
+    if not db_writes_enabled():
+        return pd.DataFrame()
+    try:
+        from sqlalchemy import text
+
+        from app.db.connection import get_engine
+
+        with get_engine().connect() as connection:
+            return pd.read_sql(text("""
+                SELECT trading_day, scan_id, created_at AS scan_timestamp,
+                       created_at AS timestamp, symbol, setup AS setup_type,
+                       direction, score AS setup_percent, action AS action_status,
+                       blocked_reason AS blocked_by, risk_reward AS candidate_rr,
+                       regime AS market_regime, NULL::TEXT AS top_candidate,
+                       option_quality AS option_quality_score,
+                       candidate_rank, realtime_ready, execution_ready
+                FROM candidate_snapshot
+                WHERE trading_day = CAST(:trading_day AS DATE)
+                ORDER BY created_at
+            """), connection, params={"trading_day": trading_day})
+    except Exception:
+        return pd.DataFrame()
+
+
+def _canonicalize_snapshot_source(frame):
+    frame = frame.copy()
+    aliases = {
+        "scan_id": ["Scan ID"],
+        "scan_timestamp": ["timestamp", "Data Timestamp ET", "Current ET"],
+        "symbol": ["Symbol"],
+        "setup_type": ["Entry", "setup"],
+        "direction": ["Candidate Direction"],
+        "action_status": ["Action Status"],
+    }
+    for canonical, names in aliases.items():
+        values = frame[canonical] if canonical in frame.columns else pd.Series(None, index=frame.index)
+        for name in names:
+            if name in frame.columns:
+                values = values.combine_first(frame[name])
+        frame[canonical] = values
+    return frame
+
+
+def _merge_snapshot_sources(*frames):
+    available = [
+        _canonicalize_snapshot_source(frame)
+        for frame in frames
+        if frame is not None and not frame.empty
+    ]
+    if not available:
+        return pd.DataFrame()
+    merged = pd.concat(available, ignore_index=True, sort=False)
+    if not all(column in merged.columns for column in ["symbol", "setup_type"]):
+        return merged
+    identity = merged.apply(
+        lambda row: "|".join([
+            _text(row.get("scan_id")) or _text(row.get("scan_timestamp")),
+            _symbol(row.get("symbol")),
+            _direction(row.get("direction")),
+            _text(row.get("setup_type")).upper(),
+        ]),
+        axis=1,
+    )
+    return merged.loc[~identity.duplicated(keep="last")].reset_index(drop=True)
 
 
 def _first_existing(frame, names):
@@ -87,6 +159,24 @@ def _value(row, *names):
 
 def _candidate_key(symbol, direction, setup):
     return symbol, direction, _text(setup).upper()
+
+
+def _decision_history(group, timestamp_column):
+    history = []
+    previous = None
+    for _, observation in group.iterrows():
+        decision = _text(_value(observation, "action_status", "Action Status")).upper()
+        if not decision or decision == previous:
+            continue
+        history.append({
+            "decision": decision,
+            "observed_at": _value(observation, timestamp_column, "timestamp"),
+            "scan_id": _value(observation, "scan_id", "Scan ID"),
+            "reason": _value(observation, "action_reason", "Action Reason"),
+            "blocked_by": _value(observation, "blocked_by", "Blocked By"),
+        })
+        previous = decision
+    return history
 
 
 def _latest_map(frame, key_builder):
@@ -172,7 +262,13 @@ def build_candidate_evidence_from_frames(
 
     timestamp_column = _first_existing(snapshots, ["scan_timestamp", "timestamp", "Data Timestamp ET", "Current ET"])
     if timestamp_column:
-        snapshots = snapshots.sort_values(timestamp_column)
+        snapshots = snapshots.assign(
+            _evidence_sort_time=pd.to_datetime(
+                snapshots[timestamp_column],
+                errors="coerce",
+                utc=True,
+            )
+        ).sort_values("_evidence_sort_time")
 
     suggestion_by_key = _suggestion_map(suggestions)
     paper_by_key = _paper_map(paper_events)
@@ -184,6 +280,22 @@ def build_candidate_evidence_from_frames(
     for (symbol, direction, setup), group in snapshots.groupby(["_symbol", "_direction", "_setup"], dropna=False):
         latest = group.iloc[-1]
         first = group.iloc[0]
+        decision_history = _decision_history(group, timestamp_column)
+        actionable = next(
+            (
+                observation
+                for _, observation in group.iterrows()
+                if _text(_value(observation, "action_status", "Action Status")).upper()
+                in ACTIONABLE_DECISIONS
+            ),
+            None,
+        )
+        latest_decision = _value(latest, "action_status", "Action Status")
+        first_actionable_decision = _value(
+            actionable,
+            "action_status",
+            "Action Status",
+        ) if actionable is not None else None
         candidate_id = _candidate_id(trading_day, symbol, direction, setup)
         suggestion = suggestion_by_key.get(_candidate_key(symbol, direction, setup), {})
         paper = paper_by_key.get((symbol, direction), {})
@@ -206,7 +318,7 @@ def build_candidate_evidence_from_frames(
             or paper_status.upper() == "OPEN"
             or auto_paper_decision == "OPENED"
         )
-        decision = _value(latest, "action_status", "Action Status")
+        decision = first_actionable_decision or latest_decision
         scanner_rule = _value(latest, "blocked_by", "Blocked By")
         if _text(scanner_rule).upper() == _text(decision).upper():
             scanner_rule = None
@@ -243,6 +355,11 @@ def build_candidate_evidence_from_frames(
             "quote_freshness": _value(latest, "option_quote_freshness", "Option Quote Freshness"),
             "rule_evaluation": auto_paper_blocked_by or scanner_rule or _value(latest, "Action Reason"),
             "decision": decision,
+            "latest_decision": latest_decision,
+            "first_actionable_decision": first_actionable_decision,
+            "first_actionable_at": _value(actionable, timestamp_column, "timestamp") if actionable is not None else None,
+            "first_actionable_scan_id": _value(actionable, "scan_id", "Scan ID") if actionable is not None else None,
+            "decision_history": decision_history,
             "auto_paper_decision": auto_paper_decision or None,
             "auto_paper_blocked_by": auto_paper_blocked_by,
             "suggestion_status": suggestion.get("status"),
@@ -279,10 +396,10 @@ def build_candidate_evidence(trading_day, candidate_snapshots=None):
     if not suggestions:
         suggestions = load_json_file("app/state/suggested_trade_state.json", {})
     accumulated_snapshots = _read_snapshot(trading_day)
-    snapshots = (
-        accumulated_snapshots
-        if not accumulated_snapshots.empty
-        else candidate_snapshots
+    snapshots = _merge_snapshot_sources(
+        _read_database_snapshots(trading_day),
+        accumulated_snapshots,
+        candidate_snapshots,
     )
     return build_candidate_evidence_from_frames(
         trading_day,
@@ -296,11 +413,10 @@ def build_candidate_evidence(trading_day, candidate_snapshots=None):
 
 
 def write_candidate_evidence(trading_day, candidate_snapshots=None):
-    accumulated_snapshots = _read_snapshot(trading_day)
-    evidence_source = (
-        accumulated_snapshots
-        if not accumulated_snapshots.empty
-        else candidate_snapshots
+    evidence_source = _merge_snapshot_sources(
+        _read_database_snapshots(trading_day),
+        _read_snapshot(trading_day),
+        candidate_snapshots,
     )
     evidence = build_candidate_evidence(
         trading_day,

@@ -70,6 +70,7 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
 
         row = pd.Series({
             "Symbol": "AAPL",
+            "Scan ID": "2026-07-28_100000",
             "Action Status": "ENTER_PAPER",
             "Top Candidate": None,
             "Candidate Rank": 2,
@@ -224,6 +225,7 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
         self.assertEqual(entry["blocked_by"], "not top candidate")
         self.assertEqual(entry["scanner_blocked_by"], "ENTER_PAPER")
         self.assertEqual(entry["action_reason"], "Risk and option checks passed")
+        self.assertEqual(entry["scan_id"], "2026-07-28_100000")
 
 
 if __name__ == "__main__":

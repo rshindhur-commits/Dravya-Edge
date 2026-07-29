@@ -3287,7 +3287,7 @@ def _persist_scan_outputs(
                 priority=3,
                 func=persist_activity_trace,
                 args=(activity_trace_result["events"],),
-                cancelable=True,
+                cancelable=False,
                 scan_id=scan_id,
             )
         )
