@@ -55,6 +55,11 @@ AUTO_PAPER_MAX_CANDIDATE_RANK = 3
 DEFAULT_AUTO_PAPER_MIN_RR = 1.8
 DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0
 DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 10.0
+AUTO_PAPER_REQUIRED_COLUMNS = [
+    "Symbol", "Setup Valid", "Candidate Direction", "Candidate Entry Price",
+    "Candidate Stop Price", "Candidate Target Price", "Candidate RR", "Entry",
+    "Action Status", "Next Condition", "Live Chart Checklist",
+]
 
 
 def load_auto_paper_controls():
@@ -295,20 +300,44 @@ def _paper_trade_candidates(df):
 
     if df.empty:
         return pd.DataFrame()
-    required_columns = ["Symbol", "Setup Valid", "Candidate Direction", "Candidate Entry Price", "Candidate Stop Price", "Candidate Target Price", "Candidate RR", "Entry", "Action Status", "Next Condition", "Live Chart Checklist"]
-    if any(column not in df.columns for column in required_columns):
+    eligible = [
+        index
+        for index, row in df.iterrows()
+        if _paper_candidate_filter_reason(row) is None
+    ]
+    return df.loc[eligible].copy()
+
+
+def _auto_paper_actionable_rows(df):
+    if df.empty or "Action Status" not in df.columns:
         return pd.DataFrame()
-    allowed_statuses = ["ENTER", "ENTER_PAPER"]
+    statuses = {"ENTER", "ENTER_PAPER"}
     if _allow_review_tv_chart_auto_paper():
-        allowed_statuses.append("REVIEW_TV_CHART")
-    affordability_ok = _affordability_mask(df, _ignore_affordability_for_paper_validation())
-    candidates = df[(df["Setup Valid"] == True) & (df["Candidate Direction"].isin(["CALL", "PUT"])) & (df["Action Status"].isin(allowed_statuses)) & affordability_ok].copy()
-    candidates = candidates[candidates["Entry"].map(_is_valid_new_entry_type)].copy()
-    if "Realtime Ready" in candidates.columns:
-        realtime_ready = candidates["Realtime Ready"].astype(str).str.lower().isin(["true", "1", "yes"])
-        review_ready = candidates["Action Status"].astype(str).str.upper().eq("REVIEW_TV_CHART") & _allow_review_tv_chart_auto_paper()
-        candidates = candidates[realtime_ready | review_ready]
-    return candidates
+        statuses.add("REVIEW_TV_CHART")
+    return df[df["Action Status"].astype(str).str.upper().isin(statuses)].copy()
+
+
+def _paper_candidate_filter_reason(row):
+    missing = [column for column in AUTO_PAPER_REQUIRED_COLUMNS if column not in row.index]
+    if missing:
+        return "MISSING_SCANNER_FIELDS:" + ",".join(missing)
+    status = str(row.get("Action Status") or "").upper()
+    if status not in {"ENTER", "ENTER_PAPER", "REVIEW_TV_CHART"}:
+        return "NOT_ACTIONABLE_STATUS"
+    if status == "REVIEW_TV_CHART" and not _allow_review_tv_chart_auto_paper():
+        return "REVIEW_VALIDATION_DISABLED"
+    if not _boolish(row.get("Setup Valid")):
+        return "SETUP_INVALID"
+    if row.get("Candidate Direction") not in {"CALL", "PUT"}:
+        return "INVALID_CANDIDATE_DIRECTION"
+    if not _is_valid_new_entry_type(row.get("Entry")):
+        return "INVALID_ENTRY_TYPE"
+    if not _ignore_affordability_for_paper_validation() and not _boolish(row.get("Affordable")):
+        return "PAPER_AFFORDABILITY_REJECTED"
+    review_ready = status == "REVIEW_TV_CHART" and _allow_review_tv_chart_auto_paper()
+    if not review_ready and not _boolish(row.get("Realtime Ready")):
+        return row.get("Realtime Block Reason") or "REALTIME_NOT_READY"
+    return None
 
 
 def _scanner_context_from_row(row):

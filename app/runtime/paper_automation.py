@@ -14,7 +14,9 @@ def run_auto_paper_entries(df, controls):
         auto_paper_session_block_reason,
         should_record_auto_paper_session_skip,
         _decision_log_rows,
+        _auto_paper_actionable_rows,
         _paper_trade_candidates,
+        _paper_candidate_filter_reason,
         _real_entry_checklist,
         _real_trade_readiness,
         _record_auto_paper_decision,
@@ -32,6 +34,37 @@ def run_auto_paper_entries(df, controls):
 
         paper_trades = {}
 
+    actionable_rows = _auto_paper_actionable_rows(df)
+    accounted = set()
+    outcomes = {"OPENED": 0, "BLOCKED": 0, "SKIPPED": 0}
+
+    def record_terminal(row, decision, reason, trade=None):
+        _record_auto_paper_decision(
+            row.get("Symbol"),
+            decision,
+            reason,
+            row,
+            trade=trade,
+            controls=controls,
+        )
+        accounted.add(row.name)
+        outcomes[decision] += 1
+
+    def report_accounting():
+        unaccounted = actionable_rows.loc[
+            ~actionable_rows.index.isin(accounted)
+        ]
+        for _, row in unaccounted.iterrows():
+            record_terminal(row, "BLOCKED", "UNACCOUNTED_AUTO_PAPER_CANDIDATE")
+        print(
+            "[AUTO PAPER ACCOUNTING] "
+            f"actionable={len(actionable_rows)} "
+            f"opened={outcomes['OPENED']} "
+            f"blocked={outcomes['BLOCKED']} "
+            f"skipped={outcomes['SKIPPED']} "
+            f"unaccounted={len(unaccounted)}"
+        )
+
     if controls["auto_paper_enabled"]:
         session_block = auto_paper_session_block_reason()
         if session_block and should_record_auto_paper_session_skip(session_block):
@@ -42,13 +75,21 @@ def run_auto_paper_entries(df, controls):
                 controls=controls,
             )
         if session_block:
+            for _, row in actionable_rows.iterrows():
+                record_terminal(row, "SKIPPED", session_block)
+            report_accounting()
             return []
 
     candidates = _paper_trade_candidates(df)
+    excluded_actionable = actionable_rows.loc[
+        ~actionable_rows.index.isin(candidates.index)
+    ]
+    for _, row in excluded_actionable.iterrows():
+        record_terminal(row, "SKIPPED", _paper_candidate_filter_reason(row))
 
     if candidates.empty:
 
-        log_rows = _decision_log_rows(df)
+        log_rows = _decision_log_rows(df).drop(index=actionable_rows.index, errors="ignore")
 
         if controls["auto_paper_enabled"]:
 
@@ -61,6 +102,7 @@ def run_auto_paper_entries(df, controls):
                     controls=controls
                 )
 
+                report_accounting()
                 return []
 
             market_closed_rows = pd.DataFrame()
@@ -102,6 +144,7 @@ def run_auto_paper_entries(df, controls):
                         controls=controls
                     )
 
+                report_accounting()
                 return []
 
             if not log_rows.empty:
@@ -116,6 +159,7 @@ def run_auto_paper_entries(df, controls):
                         controls=controls
                     )
 
+                report_accounting()
                 return []
 
             _record_auto_paper_decision(
@@ -125,6 +169,7 @@ def run_auto_paper_entries(df, controls):
                 controls=controls
             )
 
+            report_accounting()
             return []
 
         if not log_rows.empty:
@@ -139,6 +184,7 @@ def run_auto_paper_entries(df, controls):
                     controls=controls
                 )
 
+            report_accounting()
             return []
 
         _record_auto_paper_decision(
@@ -148,20 +194,16 @@ def run_auto_paper_entries(df, controls):
             controls=controls
         )
 
+        report_accounting()
         return []
 
     if not controls["auto_paper_enabled"]:
 
         for _, row in candidates.iterrows():
 
-            _record_auto_paper_decision(
-                row.get("Symbol"),
-                "SKIPPED",
-                "auto paper disabled",
-                row,
-                controls=controls
-            )
+            record_terminal(row, "SKIPPED", "auto paper disabled")
 
+        report_accounting()
         return []
 
     opened = []
@@ -172,13 +214,7 @@ def run_auto_paper_entries(df, controls):
 
         if not allowed:
 
-            _record_auto_paper_decision(
-                row.get("Symbol"),
-                "BLOCKED",
-                reason,
-                row,
-                controls=controls
-            )
+            record_terminal(row, "BLOCKED", reason)
             continue
 
         try:
@@ -198,45 +234,56 @@ def run_auto_paper_entries(df, controls):
         entry_source = "AUTO_PAPER_REVIEW_VALIDATION" if is_review_validation else "AUTO_PAPER"
         notes_prefix = "Auto paper review validation entry" if is_review_validation else "Auto paper entry"
         spread_note = "; missing spread allowed for paper" if _safe_float(row.get("Option Spread %"), None) is None else ""
-        opened_trade = open_paper_trade(
-            symbol=row_for_trade.get("Symbol"),
-            direction=row_for_trade.get("Candidate Direction"),
-            entry_price=row_for_trade.get("Candidate Entry Price"),
-            stop_loss=row_for_trade.get("Candidate Stop Price"),
-            take_profit=row_for_trade.get("Candidate Target Price"),
-            entry_type=row_for_trade.get("Entry"),
-            option_ticker=row_for_trade.get("Option Ticker"),
-            option_bid=row_for_trade.get("Option Bid"),
-            option_ask=row_for_trade.get("Option Ask"),
-            notes=f"{notes_prefix}: {reason}{spread_note}",
-            scanner_context=scanner_context,
-            entry_source=entry_source,
-            trade_mode="PAPER",
-            include_in_strategy_stats=not is_review_validation
-        )
+        try:
+            opened_trade = open_paper_trade(
+                symbol=row_for_trade.get("Symbol"),
+                direction=row_for_trade.get("Candidate Direction"),
+                entry_price=row_for_trade.get("Candidate Entry Price"),
+                stop_loss=row_for_trade.get("Candidate Stop Price"),
+                take_profit=row_for_trade.get("Candidate Target Price"),
+                entry_type=row_for_trade.get("Entry"),
+                option_ticker=row_for_trade.get("Option Ticker"),
+                option_bid=row_for_trade.get("Option Bid"),
+                option_ask=row_for_trade.get("Option Ask"),
+                notes=f"{notes_prefix}: {reason}{spread_note}",
+                scanner_context=scanner_context,
+                entry_source=entry_source,
+                trade_mode="PAPER",
+                include_in_strategy_stats=not is_review_validation
+            )
+        except Exception as exc:
+            record_terminal(row, "BLOCKED", f"PAPER_OPEN_FAILED:{type(exc).__name__}:{exc}")
+            continue
+        opened_log_row = row_for_trade.copy()
+        opened_log_row["Paper Trade Opened"] = True
+        opened_log_row["Real Trade Readiness"] = _real_trade_readiness(opened_log_row)
+        opened_log_row["Real Entry Checklist"] = _real_entry_checklist(opened_log_row)
+        record_terminal(opened_log_row, "OPENED", reason, trade=opened_trade)
         paper_trades = load_paper_trades()
         opened.append(row.get("Symbol"))
 
         if promote_suggestion_to_paper_trade:
 
-            promote_suggestion_to_paper_trade(
-                symbol=row_for_trade.get("Symbol"),
-                direction=row_for_trade.get("Candidate Direction"),
-                setup_type=row_for_trade.get("Entry"),
-                option_ticker=row_for_trade.get("Option Ticker"),
-                opened_at=opened_trade.get("opened_at"),
-                trade_key=opened_trade.get("trade_key")
-            )
+            try:
+                promote_suggestion_to_paper_trade(
+                    symbol=row_for_trade.get("Symbol"),
+                    direction=row_for_trade.get("Candidate Direction"),
+                    setup_type=row_for_trade.get("Entry"),
+                    option_ticker=row_for_trade.get("Option Ticker"),
+                    opened_at=opened_trade.get("opened_at"),
+                    trade_key=opened_trade.get("trade_key")
+                )
+            except Exception as exc:
+                print(f"[AUTO PAPER PROMOTION WARNING] {row.get('Symbol')}: {exc}")
 
-        telegram_entry_result = maybe_send_paper_entry_alert(
-            opened_trade,
-            scanner_context,
-            reason=f"{notes_prefix}: {reason}"
-        )
-        opened_log_row = row_for_trade.copy()
-        opened_log_row["Paper Trade Opened"] = True
-        opened_log_row["Real Trade Readiness"] = _real_trade_readiness(opened_log_row)
-        opened_log_row["Real Entry Checklist"] = _real_entry_checklist(opened_log_row)
+        try:
+            telegram_entry_result = maybe_send_paper_entry_alert(
+                opened_trade,
+                scanner_context,
+                reason=f"{notes_prefix}: {reason}"
+            )
+        except Exception as exc:
+            telegram_entry_result = {"reason": f"TELEGRAM_ENTRY_ALERT_FAILED:{type(exc).__name__}:{exc}"}
 
         _record_auto_paper_decision(
             row.get("Symbol"),
@@ -245,19 +292,15 @@ def run_auto_paper_entries(df, controls):
             opened_log_row,
             controls=controls
         )
-        _record_auto_paper_decision(
-            row.get("Symbol"),
-            "OPENED",
-            reason,
-            opened_log_row,
-            trade=opened_trade,
-            controls=controls
-        )
 
         if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
 
+            remaining = candidates.loc[~candidates.index.isin(accounted)]
+            for _, remaining_row in remaining.iterrows():
+                record_terminal(remaining_row, "BLOCKED", "DAILY_AUTO_PAPER_LIMIT_REACHED")
             break
 
+    report_accounting()
     return opened
 
 

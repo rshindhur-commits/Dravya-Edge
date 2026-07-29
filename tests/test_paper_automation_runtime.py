@@ -66,6 +66,92 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
         record_decision.assert_called_once()
         self.assertEqual(record_decision.call_args.args[1], "SKIPPED")
 
+    def test_filtered_enter_paper_candidate_receives_terminal_audit(self):
+
+        row = {
+            "Symbol": "NFLX",
+            "Action Status": "ENTER_PAPER",
+            "Setup Valid": False,
+            "Candidate Direction": "PUT",
+            "Candidate Entry Price": 100,
+            "Candidate Stop Price": 101,
+            "Candidate Target Price": 98,
+            "Candidate RR": 2.0,
+            "Entry": "VWAP_REJECTION",
+            "Next Condition": "-",
+            "Live Chart Checklist": "-",
+            "Realtime Ready": True,
+        }
+        controls = {"auto_paper_enabled": True, "max_daily": 3}
+
+        with patch(
+            "app.runtime.paper_automation_support.auto_paper_session_block_reason",
+            return_value=None,
+        ), patch(
+            "app.runtime.paper_automation_support._record_auto_paper_decision",
+        ) as record_decision, patch(
+            "app.state.paper_trade_manager.load_paper_trades",
+            return_value={},
+        ):
+            result = run_auto_paper_entries(pd.DataFrame([row]), controls)
+
+        self.assertEqual(result, [])
+        terminal = [
+            call for call in record_decision.call_args_list
+            if call.args[1] in {"OPENED", "BLOCKED", "SKIPPED"}
+            and call.args[0] == "NFLX"
+        ]
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(terminal[0].args[1], "SKIPPED")
+        self.assertEqual(terminal[0].args[2], "SETUP_INVALID")
+
+    def test_opened_candidate_is_audited_when_telegram_fails(self):
+
+        row = {
+            "Symbol": "NFLX",
+            "Action Status": "ENTER_PAPER",
+            "Setup Valid": True,
+            "Candidate Direction": "PUT",
+            "Candidate Entry Price": 100,
+            "Candidate Stop Price": 101,
+            "Candidate Target Price": 98,
+            "Candidate RR": 2.0,
+            "Entry": "VWAP_REJECTION",
+            "Next Condition": "-",
+            "Live Chart Checklist": "-",
+            "Realtime Ready": True,
+            "Option Bid": 2.0,
+            "Option Ask": 2.2,
+        }
+        controls = {"auto_paper_enabled": True, "max_daily": 3}
+
+        with patch(
+            "app.runtime.paper_automation_support.auto_paper_session_block_reason",
+            return_value=None,
+        ), patch(
+            "app.runtime.paper_automation_support._auto_paper_entry_reason",
+            return_value=(True, "ELIGIBLE"),
+        ), patch(
+            "app.runtime.paper_automation_support._record_auto_paper_decision",
+        ) as record_decision, patch(
+            "app.state.paper_trade_manager.load_paper_trades",
+            return_value={},
+        ), patch(
+            "app.state.paper_trade_manager.open_paper_trade",
+            return_value={"trade_key": "nflx-trade", "opened_at": "2026-07-29 10:00:00"},
+        ), patch(
+            "app.alerts.telegram_alerts.maybe_send_paper_entry_alert",
+            side_effect=RuntimeError("transport unavailable"),
+        ):
+            result = run_auto_paper_entries(pd.DataFrame([row]), controls)
+
+        self.assertEqual(result, ["NFLX"])
+        terminal = [
+            call for call in record_decision.call_args_list
+            if call.args[1] == "OPENED" and call.args[0] == "NFLX"
+        ]
+        self.assertEqual(len(terminal), 1)
+
     def test_auto_paper_entry_accepts_top_rank_without_display_tag(self):
 
         row = pd.Series({
