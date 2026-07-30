@@ -7149,17 +7149,38 @@ def _run_scanner_impl():
 
 
 def run_scanner():
+    """Run one scan under the cross-process scan lock.
 
-    runtime_scheduler = get_runtime_scheduler()
-    runtime_scheduler.set_scanner_running(True)
+    The lock makes every entry point mutually exclusive -- app.runtime.scan_loop,
+    the dashboard button, dashboard auto-refresh, and a bare `python -m app.main`.
+    Without it two processes can run a scan at once and lose each other's paper
+    state updates, because state mutation is read-modify-write on a JSON file.
 
-    try:
+    Returns None when another scan already holds the lock.
+    """
 
-        return _run_scanner_impl()
+    from app.runtime.scan_lock import lock_age_minutes, scan_lock
 
-    finally:
+    with scan_lock() as lock:
 
-        runtime_scheduler.set_scanner_running(False)
+        if not lock.acquired:
+            age = lock_age_minutes()
+            print(
+                "[SCANNER] skipped: another scan is already running"
+                + (f" (lock held {age:.1f} min)" if age is not None else "")
+            )
+            return None
+
+        runtime_scheduler = get_runtime_scheduler()
+        runtime_scheduler.set_scanner_running(True)
+
+        try:
+
+            return _run_scanner_impl()
+
+        finally:
+
+            runtime_scheduler.set_scanner_running(False)
 
 
 if __name__ == "__main__":

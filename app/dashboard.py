@@ -161,9 +161,6 @@ SCANNER_FILE = ROOT_DIR / "scanner_output.xlsx"
 LIVE_SCANNER_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.xlsx"
 LIVE_SCANNER_CSV_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.csv"
 LIVE_DASHBOARD_STATE_FILE = ROOT_DIR / "data" / "live" / "dashboard_state.json"
-SCANNER_LOCK_FILE = ROOT_DIR / "data" / "live" / "scanner_run.lock"
-SCANNER_STATUS_FILE = ROOT_DIR / "data" / "live" / "scanner_run_status.json"
-SCANNER_LOCK_STALE_MINUTES = 10
 TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "trade_state.json"
 TELEMETRY_FILE = ROOT_DIR / "telemetry" / "trade_telemetry.csv"
 PAPER_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "paper_trade_state.json"
@@ -181,6 +178,7 @@ REFRESH_INTERVALS = {
 }
 
 SCANNER_CADENCE_INTERVALS = {
+    "Session-aware (2/5/10 min)": None,
     "5 min": 5,
     "15 min": 15
 }
@@ -3663,187 +3661,11 @@ def _scanner_output_age_minutes():
     )
 
 
-def _load_scanner_run_status():
-
-    return load_json_file(
-        str(SCANNER_STATUS_FILE),
-        {}
-    )
-
-
-def _save_scanner_run_status(status):
-
-    save_json_file(
-        str(SCANNER_STATUS_FILE),
-        status
-    )
-
-
-def _scanner_status_timestamp_age_minutes(field):
-
-    status = _load_scanner_run_status()
-    value = status.get(field)
-
-    if not value:
-
-        return None
-
-    try:
-
-        timestamp = datetime.fromisoformat(value)
-
-        if timestamp.tzinfo is None:
-
-            timestamp = timestamp.replace(
-                tzinfo=ZoneInfo("America/New_York")
-            )
-
-        current_et = datetime.now(
-            ZoneInfo("America/New_York")
-        )
-
-        return round(
-            (current_et - timestamp.astimezone(ZoneInfo("America/New_York"))).total_seconds() / 60,
-            2
-        )
-
-    except Exception:
-
-        return None
-
-
-def _scanner_recently_attempted(cadence_minutes):
-
-    ages = [
-        age for age in [
-            _scanner_status_timestamp_age_minutes("last_started_at"),
-            _scanner_status_timestamp_age_minutes("last_completed_at")
-        ]
-        if age is not None
-    ]
-
-    if not ages:
-
-        return False
-
-    return min(ages) < cadence_minutes
-
-
-def _mark_scanner_started():
-
-    status = _load_scanner_run_status()
-    status.update({
-        "status": "RUNNING",
-        "last_started_at": datetime.now(ZoneInfo("America/New_York")).isoformat()
-    })
-    _save_scanner_run_status(status)
-
-
-def _mark_scanner_completed(result_status="COMPLETED"):
-
-    status = _load_scanner_run_status()
-    status.update({
-        "status": result_status,
-        "last_completed_at": datetime.now(ZoneInfo("America/New_York")).isoformat()
-    })
-    _save_scanner_run_status(status)
-
-
-def _scanner_lock_age_minutes():
-
-    if not SCANNER_LOCK_FILE.exists():
-
-        return None
-
-    modified_at = datetime.fromtimestamp(
-        SCANNER_LOCK_FILE.stat().st_mtime,
-        tz=ZoneInfo("America/New_York")
-    )
-    current_et = datetime.now(
-        ZoneInfo("America/New_York")
-    )
-
-    return round(
-        (current_et - modified_at).total_seconds() / 60,
-        2
-    )
-
-
-def _scanner_is_running():
-
-    lock_age = _scanner_lock_age_minutes()
-
-    if lock_age is None:
-
-        return False
-
-    if lock_age > SCANNER_LOCK_STALE_MINUTES:
-
-        try:
-
-            SCANNER_LOCK_FILE.unlink()
-
-        except Exception:
-
-            pass
-
-        return False
-
-    return True
-
-
-def _acquire_scanner_lock():
-
-    SCANNER_LOCK_FILE.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    try:
-
-        lock_handle = os.open(
-            str(SCANNER_LOCK_FILE),
-            os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        )
-
-    except FileExistsError:
-
-        if _scanner_is_running():
-
-            return False
-
-        try:
-
-            SCANNER_LOCK_FILE.unlink()
-
-        except Exception:
-
-            return False
-
-        return _acquire_scanner_lock()
-
-    with os.fdopen(lock_handle, "w", encoding="utf-8") as file:
-
-        file.write(
-            datetime.now(ZoneInfo("America/New_York")).isoformat()
-        )
-
-    return True
-
-
-def _release_scanner_lock():
-
-    try:
-
-        SCANNER_LOCK_FILE.unlink()
-
-    except FileNotFoundError:
-
-        pass
-
-    except Exception:
-
-        pass
+# The `scanner_run_status.json` polling helpers that used to live here are gone
+# with the browser-triggered scan they served. One of them also deleted the scan
+# lock after 10 minutes, while the lock's own reclaim threshold is 15, so it could
+# unlink a lock a live scan still held. app.runtime.scan_supervisor.status() is now
+# the single source of scan-engine state.
 
 
 def _auto_refresh_defaults():
@@ -3860,11 +3682,7 @@ def _auto_refresh_defaults():
 
     if "scanner_cadence_label" not in st.session_state:
 
-        st.session_state["scanner_cadence_label"] = "5 min"
-
-    if "last_auto_run_marker" not in st.session_state:
-
-        st.session_state["last_auto_run_marker"] = None
+        st.session_state["scanner_cadence_label"] = "Session-aware (2/5/10 min)"
 
     if "auto_paper_enabled" not in st.session_state:
 
@@ -4001,6 +3819,71 @@ def _render_auto_paper_controls():
 
 
 
+def _render_scan_engine_status(cadence_override_minutes):
+    """Start the in-process scan engine and report it in the sidebar.
+
+    Scanning is no longer triggered by a browser rerun or by an operator button:
+    `app.runtime.scan_supervisor` owns cadence on a daemon thread, so scans
+    continue with no tab open and nothing to click. This panel is read-only
+    status, and it is the panel to check when the page looks stale.
+    """
+
+    from app.runtime.scan_supervisor import ensure_started
+
+    _prime_scanner_environment()
+
+    engine = ensure_started(
+        interval_override=(
+            cadence_override_minutes * 60
+            if cadence_override_minutes
+            else None
+        )
+    )
+
+    st.sidebar.subheader("Scan Engine")
+
+    if not engine.get("thread_alive"):
+
+        st.sidebar.error(
+            "Scan engine thread is not running. Restart Streamlit; no scans are happening."
+        )
+
+    engine_status = str(engine.get("status") or "IDLE")
+    scans = engine.get("scans") or 0
+    failures = engine.get("failures") or 0
+    interval_seconds = engine.get("interval_seconds")
+
+    st.sidebar.caption(
+        f"{engine_status} | session {engine.get('session') or '-'} | "
+        + (f"every {int(interval_seconds) // 60} min" if interval_seconds else "cadence pending")
+    )
+    st.sidebar.caption(
+        f"Scans since engine start: {scans} | failures: {failures}"
+    )
+
+    last_completed = engine.get("last_completed_at")
+
+    if last_completed:
+
+        duration = engine.get("last_duration_seconds")
+        st.sidebar.caption(
+            f"Last scan finished {str(last_completed)[11:19]} ET"
+            + (f" in {duration}s" if duration else "")
+        )
+
+    next_due = engine.get("next_due_at")
+
+    if next_due:
+
+        st.sidebar.caption(f"Next scan due {str(next_due)[11:19]} ET")
+
+    if failures and engine.get("last_error"):
+
+        st.sidebar.warning(f"Last scan error: {engine['last_error']}")
+
+    return engine
+
+
 def _render_auto_refresh_controls():
 
     _auto_refresh_defaults()
@@ -4026,7 +3909,7 @@ def _render_auto_refresh_controls():
         options=list(SCANNER_CADENCE_INTERVALS.keys()),
         key="scanner_cadence_label"
     )
-    scanner_cadence_minutes = SCANNER_CADENCE_INTERVALS[
+    cadence_override_minutes = SCANNER_CADENCE_INTERVALS[
         scanner_cadence_label
     ]
     age_minutes = _scanner_output_age_minutes()
@@ -4039,6 +3922,9 @@ def _render_auto_refresh_controls():
 
     st.sidebar.caption(
         f"Market hours: {session_label}"
+    )
+    st.sidebar.caption(
+        "Auto Refresh redraws the page only. Scans are run by the scan engine below."
     )
 
     if age_minutes is None:
@@ -4068,86 +3954,35 @@ def _render_auto_refresh_controls():
             key="scanner_refresh"
         )
 
-    should_run_scanner = (
-        auto_refresh_enabled
-        and not _scanner_is_running()
-        and not _scanner_recently_attempted(scanner_cadence_minutes)
-        and (
-            age_minutes is None
-            or age_minutes >= scanner_cadence_minutes
-        )
-    )
+    engine = _render_scan_engine_status(cadence_override_minutes)
+    engine_interval_seconds = engine.get("interval_seconds")
 
     return {
         "enabled": auto_refresh_enabled,
         "interval_minutes": interval_minutes,
-        "scanner_cadence_minutes": scanner_cadence_minutes,
+        "scanner_cadence_minutes": (
+            cadence_override_minutes
+            or (int(engine_interval_seconds) // 60 if engine_interval_seconds else 5)
+        ),
         "age_minutes": age_minutes,
         "refresh_count": refresh_count,
-        "should_run_scanner": should_run_scanner
+        "engine": engine
     }
 
 
-def _maybe_auto_run_scanner(refresh_state):
+def _prime_scanner_environment():
+    """Publish Streamlit secrets into the environment before the engine starts.
 
-    if not refresh_state["should_run_scanner"]:
+    The scan engine runs on a background thread, and `st.secrets` is only reliably
+    reachable from the script thread, so credentials are resolved here once per
+    process. This ran inside the old per-scan trigger; the engine scans without a
+    trigger, so it has to happen at dashboard start instead or scans would run
+    with no Polygon key.
+    """
 
-        return
-
-    scanner_file = (
-        LIVE_SCANNER_CSV_FILE
-        if LIVE_SCANNER_CSV_FILE.exists()
-        else LIVE_SCANNER_FILE
-        if LIVE_SCANNER_FILE.exists()
-        else SCANNER_FILE
-    )
-    marker = (
-        scanner_file.stat().st_mtime
-        if scanner_file.exists()
-        else "missing"
-    )
-
-    if st.session_state.get("last_auto_run_marker") == marker:
+    if st.session_state.get("scanner_environment_primed"):
 
         return
-
-    st.session_state["last_auto_run_marker"] = marker
-
-    with st.spinner("Auto-running scanner..."):
-
-        try:
-
-            result = _run_scanner_once()
-
-            if result.get("ran"):
-
-                st.sidebar.success(
-                    "Scanner auto-run completed."
-                )
-
-            else:
-
-                st.sidebar.info(
-                    "Scanner already running; showing latest available results."
-                )
-
-        except Exception as exc:
-
-            st.sidebar.error(
-                f"Scanner auto-run failed: {exc}"
-            )
-
-
-def _run_scanner_once():
-
-    if not _acquire_scanner_lock():
-
-        return {
-            "ran": False,
-            "reason": "SCANNER_ALREADY_RUNNING"
-        }
-
-    _mark_scanner_started()
 
     try:
 
@@ -4172,25 +4007,11 @@ def _run_scanner_once():
 
             pass
 
-        from app.main import run_scanner
+        st.session_state["scanner_environment_primed"] = True
 
-        run_scanner()
+    except Exception as exc:
 
-        _mark_scanner_completed("COMPLETED")
-
-        return {
-            "ran": True,
-            "reason": "COMPLETED"
-        }
-
-    except Exception:
-
-        _mark_scanner_completed("FAILED")
-        raise
-
-    finally:
-
-        _release_scanner_lock()
+        st.sidebar.error(f"Could not load scanner credentials: {exc}")
 
 
 def _scanner_context_from_row(row):
@@ -8666,27 +8487,10 @@ def main():
         ],
         key="dashboard_page",
     )
-    _maybe_auto_run_scanner(refresh_state)
 
-    if st.button("Run scanner now"):
-
-        with st.spinner("Running scanner..."):
-
-            try:
-
-                result = _run_scanner_once()
-
-                if result.get("ran"):
-
-                    st.success("Scanner completed. Dashboard refreshed.")
-
-                else:
-
-                    st.info("Scanner already running; showing latest available results.")
-
-            except Exception as exc:
-
-                st.error(f"Scanner failed: {exc}")
+    # No scan trigger here. Scanning is owned by app.runtime.scan_supervisor,
+    # started from the sidebar's Scan Engine panel, so cadence does not depend on
+    # a rerun, a page, or an operator remembering to click anything.
 
     if TRADING_DASHBOARD_STATE_ONLY and page == "Trading":
 
