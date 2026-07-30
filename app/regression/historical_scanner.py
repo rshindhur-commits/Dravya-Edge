@@ -188,13 +188,23 @@ def _trade_identity(symbol, direction, setup):
 
 
 def _option_quote(row: dict, stage: str) -> dict:
-    """Archived option quote at one leg of the trade, prefixed by stage."""
+    """Archived option quote at one leg of the trade, prefixed by stage.
+
+    `Option Bid`/`Option Ask` are written only for candidates being evaluated for
+    entry. A symbol already held is past that stage, so the exit leg falls back to
+    the `Active Option *` columns, which carry the live quote for an open position.
+    Without that fallback every replayed exit was unpriced.
+    """
 
     return {
-        f"{stage}_option_bid": _number(_first(row, "Option Bid")),
-        f"{stage}_option_ask": _number(_first(row, "Option Ask")),
-        f"{stage}_option_mid": _number(_first(row, "Option Mid Price", "Option Midpoint")),
-        f"{stage}_option_spread_pct": _number(_first(row, "Option Spread %")),
+        f"{stage}_option_bid": _number(_first(row, "Option Bid", "Active Option Bid")),
+        f"{stage}_option_ask": _number(_first(row, "Option Ask", "Active Option Ask")),
+        f"{stage}_option_mid": _number(
+            _first(row, "Option Mid Price", "Option Midpoint", "Active Option Mid")
+        ),
+        f"{stage}_option_spread_pct": _number(
+            _first(row, "Option Spread %", "Active Option Spread %")
+        ),
     }
 
 

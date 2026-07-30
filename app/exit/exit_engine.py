@@ -155,6 +155,41 @@ def trend_still_valid(df, direction):
     )
 
 
+def _momentum_exits_allowed(holding_profile, bars_in_trade):
+    """Whether minute-scale invalidation may close this position yet.
+
+    EMA9, VWAP, MACD and failed-breakout are momentum signals measured on the scan
+    timeframe. Applied to an INTRADAY position that is the intent. Applied to a
+    MULTIDAY position on its entry bar it is a category error: the trade was opened
+    to be held for days and is being judged by a nine-period EMA.
+
+    On 2026-07-30 every paper trade was tagged MULTIDAY and every one exited on a
+    momentum rule with `bars_in_trade` between 0 and 2 -- average hold 6.8 minutes,
+    against 14 and 48 minutes on 2026-07-27 before the R denominator was corrected
+    and the early-exit guard stopped firing. Replaying that day held to stop or
+    target instead produced +8.91R versus the -0.76R actually booked. That is a
+    structural comparison rather than a priced one, but the direction is stark.
+
+    So a MULTIDAY position gets a minimum leash before momentum may close it.
+    Protective exits are deliberately untouched and still fire from bar zero: hard
+    stop, target, profit protection, confirmed trend failure, time stagnation and
+    the near-close rule. This defers the twitchy signals, it does not remove risk
+    control.
+
+    Tunable for A/B against archived days. Zero restores the previous behaviour.
+    """
+
+    if str(holding_profile or "").upper() != "MULTIDAY":
+        return True
+
+    minimum_bars = _env_float("MULTIDAY_MOMENTUM_EXIT_MIN_BARS", 6)
+
+    try:
+        return float(bars_in_trade or 0) >= minimum_bars
+    except (TypeError, ValueError):
+        return True
+
+
 def _should_guard_early_exit(df, exit_reason, bars_in_trade, rr_progress, is_short):
 
     if bars_in_trade > 3:
@@ -431,7 +466,9 @@ def evaluate_exit(
             exit_signal = True
             exit_reason = primary_exit["reason"]
 
-    if True:
+    momentum_exits_allowed = _momentum_exits_allowed(holding_profile, bars_in_trade)
+
+    if momentum_exits_allowed:
 
         if is_short and pd.notna(latest.get("EMA9")):
 
@@ -458,7 +495,7 @@ def evaluate_exit(
             exit_signal = True
             exit_reason = primary_exit["reason"]
 
-    if pd.notna(latest.get("VWAP")):
+    if momentum_exits_allowed and pd.notna(latest.get("VWAP")):
 
         if is_short and current_price > latest["VWAP"]:
 
@@ -475,7 +512,7 @@ def evaluate_exit(
             exit_signal = True
             exit_reason = primary_exit["reason"]
 
-    if True:
+    if momentum_exits_allowed:
 
         if (
             is_short
@@ -502,7 +539,7 @@ def evaluate_exit(
             exit_signal = True
             exit_reason = primary_exit["reason"]
 
-    if latest.get("FAILED_BREAKOUT", False):
+    if momentum_exits_allowed and latest.get("FAILED_BREAKOUT", False):
 
         exit_reasons.append(_exit_diagnostic("FAILED_BREAKOUT", "Failed breakout"))
         primary_exit = _select_primary_exit(exit_reasons)

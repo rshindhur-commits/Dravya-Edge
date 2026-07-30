@@ -6429,6 +6429,35 @@ def _run_scanner_impl():
                     else None
                 ),
 
+                # The held position's live bid and ask, not just its mid.
+                #
+                # Without these the regression archive cannot price a round trip:
+                # `Option Bid`/`Option Ask` are only written for candidates that
+                # reach option selection, and a symbol already held is past that
+                # stage, so the exit leg of every replayed trade was unpriced.
+                # Premium pricing coverage on the 2026-07-30 archive was 0 of 5
+                # trades for that reason, which left the harness scoring in R --
+                # the measure that rates a tight stop best right up until the
+                # spread is paid. The snapshot is already fetched for the P&L
+                # figure below; only these two fields were being discarded.
+                "Active Option Bid": (
+                    active_option_snapshot.get("bid")
+                    if active_option_snapshot
+                    else None
+                ),
+
+                "Active Option Ask": (
+                    active_option_snapshot.get("ask")
+                    if active_option_snapshot
+                    else None
+                ),
+
+                "Active Option Spread %": (
+                    active_option_snapshot.get("spread_pct")
+                    if active_option_snapshot
+                    else None
+                ),
+
                 "Active Option P/L %": active_option_pl.get(
                     "option_pl_pct"
                 ),
