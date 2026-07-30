@@ -91,6 +91,39 @@ def _price_for(trade, prices):
     )
 
 
+_positions_restored = False
+
+
+def _restore_lost_positions_once():
+    """Re-adopt open positions from Postgres on the first scan of a process.
+
+    Runs before the session lifecycle so a recovered MULTIDAY position is present
+    when `restore_open_multiday_positions()` looks for it, and before any entry
+    gating so the daily cap counts it.
+
+    Once per process, not once per scan: the state file is only ever lost when the
+    container restarts, and that is exactly when a new process starts. Repeating
+    the query every five minutes would add nothing and cost a database round trip
+    inside the scan path.
+    """
+
+    global _positions_restored
+
+    if _positions_restored:
+        return []
+
+    _positions_restored = True
+
+    try:
+        from app.state.paper_trade_manager import restore_open_trades_from_db
+
+        return restore_open_trades_from_db()
+
+    except Exception as exc:
+        print(f"[PAPER STATE RESTORE WARNING] {exc}")
+        return []
+
+
 def initialize_paper_session(controls=None, trading_day=None):
     """Restore multi-day positions and archive stale candidates at scan start.
 
@@ -101,6 +134,8 @@ def initialize_paper_session(controls=None, trading_day=None):
     from app.state.trade_session_lifecycle import initialize_session_lifecycle
 
     controls = _controls(controls)
+
+    _restore_lost_positions_once()
 
     try:
 

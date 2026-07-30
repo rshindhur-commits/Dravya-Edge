@@ -187,6 +187,75 @@ def _trade_identity(symbol, direction, setup):
     return "|".join([str(symbol), str(direction), str(setup)])
 
 
+def _option_quote(row: dict, stage: str) -> dict:
+    """Archived option quote at one leg of the trade, prefixed by stage.
+
+    `Option Bid`/`Option Ask` are written only for candidates being evaluated for
+    entry. A symbol already held is past that stage, so the exit leg falls back to
+    the `Active Option *` columns, which carry the live quote for an open position.
+    Without that fallback every replayed exit was unpriced.
+    """
+
+    return {
+        f"{stage}_option_bid": _number(_first(row, "Option Bid", "Active Option Bid")),
+        f"{stage}_option_ask": _number(_first(row, "Option Ask", "Active Option Ask")),
+        f"{stage}_option_mid": _number(
+            _first(row, "Option Mid Price", "Option Midpoint", "Active Option Mid")
+        ),
+        f"{stage}_option_spread_pct": _number(
+            _first(row, "Option Spread %", "Active Option Spread %")
+        ),
+    }
+
+
+def _option_round_trip(trade: dict) -> dict:
+    """What the option round trip returned, in premium terms.
+
+    The harness scored trades only in R, computed on the underlying. That is the
+    wrong instrument and it inverts the ranking: on 2026-07-30 the two trades with
+    the best R (+1.35, +0.88) were the worst in premium (-7.69%, -4.95%), because
+    they paid the widest spreads. A tool blind to spread will always prefer the
+    tightest stop, right up until the account disagrees.
+
+    Two paths, because the archive is uneven. Exact bid/ask are recorded only for
+    candidates that reached option selection -- 19 of 494 rows on 2026-07-30 -- so
+    where both legs are quoted the true ask-to-bid round trip is used. Where only
+    `Option Spread %` survives (124 of 494) the spread is charged against the mid
+    move instead. Where neither exists the trade is left unpriced as None rather
+    than assumed free, and `priced_trades` in the metrics reports the coverage so a
+    thin sample can never masquerade as a complete one.
+    """
+
+    entry_ask = trade.get("entry_option_ask")
+    entry_mid = trade.get("entry_option_mid")
+    exit_bid = trade.get("exit_option_bid")
+    exit_mid = trade.get("exit_option_mid")
+    spread_pct = trade.get("entry_option_spread_pct")
+
+    if entry_ask and exit_bid and entry_ask > 0:
+        gross = ((exit_mid - entry_mid) / entry_mid * 100) if (entry_mid and exit_mid) else None
+        net = (exit_bid - entry_ask) / entry_ask * 100
+        return {
+            "option_pnl_pct": round(gross, 2) if gross is not None else None,
+            "option_pnl_pct_net": round(net, 2),
+            "option_pricing_basis": "quoted",
+        }
+
+    if entry_mid and exit_mid and entry_mid > 0 and spread_pct:
+        gross = (exit_mid - entry_mid) / entry_mid * 100
+        return {
+            "option_pnl_pct": round(gross, 2),
+            "option_pnl_pct_net": round(gross - float(spread_pct), 2),
+            "option_pricing_basis": "spread_estimate",
+        }
+
+    return {
+        "option_pnl_pct": None,
+        "option_pnl_pct_net": None,
+        "option_pricing_basis": "unpriced",
+    }
+
+
 def reconstruct_trades(context: RegressionContext, evaluator: Callable | None = None) -> pd.DataFrame:
     evaluator = evaluator or _default_evaluator
     snapshots = _snapshot_frames(context)
@@ -221,6 +290,7 @@ def reconstruct_trades(context: RegressionContext, evaluator: Callable | None = 
                     "target_price": target,
                     "holding_profile": evaluation.get("holding_profile") or derive_holding_profile(row).value,
                     "status": "OPEN",
+                    **_option_quote(row, "entry"),
                 }
                 continue
             if existing is None or price is None:
@@ -238,6 +308,8 @@ def reconstruct_trades(context: RegressionContext, evaluator: Callable | None = 
             existing["r_multiple"] = round(abs(existing["target_price"] - existing["entry_price"]) / risk, 2) if hit_target else -1.0
             existing["outcome"] = "WIN" if hit_target else "LOSS"
             existing["status"] = "CLOSED"
+            existing.update(_option_quote(row, "exit"))
+            existing.update(_option_round_trip(existing))
             completed.append(existing)
             del open_trades[symbol]
 
@@ -245,13 +317,26 @@ def reconstruct_trades(context: RegressionContext, evaluator: Callable | None = 
 
 
 def _metrics(trades: pd.DataFrame) -> dict:
+    empty = {
+        "trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "total_r": 0.0,
+        "average_r": 0.0, "profit_factor": None, "priced_trades": 0,
+        "net_win_rate": None, "total_option_pnl_pct": None,
+        "average_option_pnl_pct": None, "pricing_coverage_pct": 0.0,
+    }
     if trades is None or trades.empty:
-        return {"trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "total_r": 0.0, "average_r": 0.0, "profit_factor": None}
+        return empty
     r_values = pd.to_numeric(trades.get("r_multiple"), errors="coerce").dropna()
     wins = int((r_values > 0).sum())
     losses = int((r_values < 0).sum())
     gains = r_values[r_values > 0].sum()
     losses_r = abs(r_values[r_values < 0].sum())
+
+    # Premium terms sit beside R deliberately. R decides nothing on its own here:
+    # a wider stop mechanically lowers R while improving the real outcome, so a
+    # verdict computed on total_r alone will always favour the tightest stop.
+    net = pd.to_numeric(trades.get("option_pnl_pct_net", pd.Series(dtype=float)), errors="coerce").dropna()
+    net_wins = net[net > 0]
+
     return {
         "trades": int(len(trades)),
         "wins": wins,
@@ -260,6 +345,11 @@ def _metrics(trades: pd.DataFrame) -> dict:
         "total_r": round(float(r_values.sum()), 2),
         "average_r": round(float(r_values.mean()), 2) if len(r_values) else 0.0,
         "profit_factor": round(float(gains / losses_r), 2) if losses_r else None,
+        "priced_trades": int(len(net)),
+        "pricing_coverage_pct": round(len(net) / len(trades) * 100, 1) if len(trades) else 0.0,
+        "net_win_rate": round(float(len(net_wins) / len(net) * 100), 1) if len(net) else None,
+        "total_option_pnl_pct": round(float(net.sum()), 2) if len(net) else None,
+        "average_option_pnl_pct": round(float(net.mean()), 2) if len(net) else None,
     }
 
 

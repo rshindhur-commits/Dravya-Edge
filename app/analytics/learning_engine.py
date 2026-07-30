@@ -44,15 +44,71 @@ def _number_mean(frame, column):
 
 
 def build_aggregate_statistics(evidence):
+    """Per-dimension performance, over candidates that actually became trades.
+
+    This used to aggregate every scanned candidate. Three things went wrong with
+    that, and they compounded into a figure that was not merely imprecise but
+    backwards. On 2026-07-30 it reported EMA_PULLBACK as `sample_size 51, wins 0,
+    losses 51, average_r 29.02`:
+
+    * `sample_size` counted candidates, not trades. 51 EMA_PULLBACK candidates
+      were scanned; 5 were traded.
+    * every untraded candidate was booked as a loss, because `winner` defaults to
+      False for a candidate that was never entered.
+    * `average_r` was filled from `trend_capture`, a percentage, so it read 29.02
+      alongside zero wins -- arithmetically impossible for an R multiple.
+
+    A candidate that was never entered has no outcome and must not vote. Rows are
+    now restricted to those with a real trade, and R comes from the trade's own
+    `r_multiple`.
+    """
+
     evidence = evidence if evidence is not None else pd.DataFrame()
     records = []
+
+    if evidence.empty:
+        return records
+
+    traded = _traded_candidates(evidence)
+
+    if traded.empty:
+        return records
+
     for kind, column in [("setup", "setup"), ("regime", "regime"), ("market", "regime"), ("lifecycle", "decision")]:
-        if column not in evidence.columns: continue
-        for value, group in evidence.groupby(column, dropna=True):
-            winners = group.get("winner", pd.Series(False, index=group.index)).astype(bool)
-            r = pd.to_numeric(group.get("trend_capture", pd.Series(dtype=float)), errors="coerce")
-            records.append({"summary_type": kind, "dimension": column, "dimension_value": str(value), "sample_size": int(len(group)), "wins": int(winners.sum()), "losses": int((~winners).sum()), "average_r": round(float(r.mean()), 2) if r.notna().any() else None, "profit_factor": None})
+        if column not in traded.columns: continue
+        for value, group in traded.groupby(column, dropna=True):
+            r = pd.to_numeric(group.get("r_multiple", pd.Series(dtype=float)), errors="coerce").dropna()
+            wins = r[r > 0]
+            losses = r[r < 0]
+            gross_profit = float(wins.sum()) if len(wins) else 0.0
+            gross_loss = abs(float(losses.sum())) if len(losses) else 0.0
+            records.append({
+                "summary_type": kind,
+                "dimension": column,
+                "dimension_value": str(value),
+                "sample_size": int(len(group)),
+                "wins": int(len(wins)),
+                "losses": int(len(losses)),
+                "average_r": round(float(r.mean()), 2) if len(r) else None,
+                "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss else None,
+            })
     return records
+
+
+def _traded_candidates(evidence):
+    """Rows that became a real trade, by whichever column this dataset carries."""
+
+    if "trade_status" in evidence.columns:
+        status = evidence["trade_status"].astype(str).str.upper()
+        return evidence[status.ne("NOT_CREATED") & status.ne("NAN") & status.ne("NONE")]
+
+    if "entered" in evidence.columns:
+        return evidence[evidence["entered"].astype(bool)]
+
+    if "r_multiple" in evidence.columns:
+        return evidence[pd.to_numeric(evidence["r_multiple"], errors="coerce").notna()]
+
+    return evidence.iloc[0:0]
 
 
 def build_daily_learning_summary(trading_day, v2_learning, comparisons, exits, waterfalls):
@@ -98,6 +154,34 @@ def build_daily_learning_summary(trading_day, v2_learning, comparisons, exits, w
     }
 
 
+def _closed_trades_for(trading_day, paper_events):
+    """Closed trades for the day, preferring the durable source.
+
+    `paper_trade_events.csv` lives under data/daily/, which is ephemeral on
+    Streamlit Cloud: a container restart deletes it, and the learning summary then
+    reported `completed_trades: 0` for a day that had traded. Postgres survives the
+    restart, so it is tried first and the CSV becomes the fallback for local runs
+    or a database that is unreachable.
+
+    Only the richer source wins. If the database returns nothing the CSV is used
+    unchanged, so this can never reduce what was already being measured.
+    """
+
+    paper_events = paper_events if paper_events is not None else pd.DataFrame()
+
+    try:
+        from app.db.paper_trade_repository import PaperTradeRepository
+
+        rows = PaperTradeRepository().fetch_closed(trading_day)
+    except Exception:
+        rows = []
+
+    if rows and len(rows) >= len(paper_events):
+        return pd.DataFrame(rows)
+
+    return paper_events
+
+
 def write_daily_learning_summary(trading_day):
     def read(name):
         path = daily_path(trading_day, name)
@@ -127,7 +211,9 @@ def write_daily_learning_summary(trading_day):
         evidence, refresh, completed_trades=int(len(read("trend_capture_analysis.csv")))
     )
     summary["aggregate_statistics"] = build_aggregate_statistics(evidence)
-    summary["performance"] = build_performance_statistics(paper_events)
+    summary["performance"] = build_performance_statistics(
+        _closed_trades_for(trading_day, paper_events)
+    )
     from app.db.learning_engine_repository import LearningEngineRepository
     repository = LearningEngineRepository()
     db_persisted = repository.persist(summary, comparisons.to_dict("records"))

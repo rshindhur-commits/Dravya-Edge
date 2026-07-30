@@ -273,7 +273,12 @@ def upsert_paper_trade(trade):
     return _safe_execute(statement, params)
 
 
-def record_scanner_run_start(run_id, payload=None):
+def record_scanner_run_start(run_id, payload=None, started_at=None):
+    """Record a scan start. `started_at` is when the scan began, not when this ran.
+
+    See record_scanner_run_finish for why the distinction matters.
+    """
+
     statement = _payload_param(text("""
         INSERT INTO scanner_runs (
             run_id,
@@ -284,7 +289,7 @@ def record_scanner_run_start(run_id, payload=None):
             :run_id,
             'STARTED',
             :payload,
-            now()
+            COALESCE(CAST(:started_at AS timestamptz), now())
         )
         ON CONFLICT (run_id) DO UPDATE SET
             status = EXCLUDED.status,
@@ -296,12 +301,43 @@ def record_scanner_run_start(run_id, payload=None):
         statement,
         {
             "run_id": run_id,
-            "payload": _json_safe(payload or {})
+            "payload": _json_safe(payload or {}),
+            "started_at": _timestamp_text(started_at),
         }
     )
 
 
-def record_scanner_run_finish(run_id, status="FINISHED", rows_count=None, payload=None):
+def _timestamp_text(value):
+    """Coerce a timestamp to a string Postgres can cast, or None."""
+
+    if value is None or value == "":
+        return None
+
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+
+    return str(value)
+
+
+def record_scanner_run_finish(run_id, status="FINISHED", rows_count=None, payload=None,
+                              finished_at=None):
+    """Record a scan completion at the time it actually completed.
+
+    `finished_at` was `now()`, evaluated when the write executed. These writes go
+    through a single-threaded background queue behind hundreds of gate, rule and
+    snapshot rows, so the recorded time was when the queue drained, not when the
+    scan ended. On 2026-07-30 a scan the engine measured at 88.4 seconds was
+    recorded as 312, and rows sat at STARTED for minutes after finishing.
+
+    The table then reads as though scans overlap and runs are orphaned. That cost
+    real diagnostic time: it produced a confident and wrong conclusion that the
+    container was restarting every fifteen minutes and running concurrent scanners,
+    when the scanner was healthy and only its bookkeeping was late.
+
+    Falls back to `now()` when the caller has no timestamp, so a missing value
+    degrades to the old behaviour rather than a null.
+    """
+
     statement = _payload_param(text("""
         INSERT INTO scanner_runs (
             run_id,
@@ -314,13 +350,13 @@ def record_scanner_run_finish(run_id, status="FINISHED", rows_count=None, payloa
             :status,
             :rows_count,
             :payload,
-            now()
+            COALESCE(CAST(:finished_at AS timestamptz), now())
         )
         ON CONFLICT (run_id) DO UPDATE SET
             status = EXCLUDED.status,
             rows_count = EXCLUDED.rows_count,
             payload = EXCLUDED.payload,
-            finished_at = now()
+            finished_at = COALESCE(CAST(:finished_at AS timestamptz), now())
     """))
 
     return _safe_execute(
@@ -329,7 +365,8 @@ def record_scanner_run_finish(run_id, status="FINISHED", rows_count=None, payloa
             "run_id": run_id,
             "status": status,
             "rows_count": rows_count,
-            "payload": _json_safe(payload or {})
+            "payload": _json_safe(payload or {}),
+            "finished_at": _timestamp_text(finished_at),
         }
     )
 

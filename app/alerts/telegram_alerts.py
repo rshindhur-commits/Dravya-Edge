@@ -1211,6 +1211,30 @@ def _trade_quality_grade(score, projected_grade=None):
     return "C"
 
 
+def _holding_profile_line(trade, scanner_context=None):
+    """How long this trade is meant to be held, in the subscriber's terms.
+
+    MULTIDAY and INTRADAY are internal labels with very different consequences:
+    an intraday position is force-closed at 15:55 ET, a multi-day one is carried
+    overnight with gap risk. Sending both as an identical "NEW TRADE" leaves a
+    subscriber no way to know which they are holding.
+    """
+
+    profile = str(
+        (trade or {}).get("holding_profile")
+        or (scanner_context or {}).get("Holding Profile")
+        or ""
+    ).strip().upper()
+
+    if profile == "MULTIDAY":
+        return "Hold: MULTI-DAY (carried overnight)"
+
+    if profile == "INTRADAY":
+        return "Hold: INTRADAY (closed by market close)"
+
+    return None
+
+
 def _format_expected_hold(value):
 
     text = str(value or "").strip()
@@ -1663,6 +1687,13 @@ def build_paper_entry_alert_message(trade, scanner_context, reason=None):
         "<b>SETUP</b>",
         _fmt(str(setup or "Confirmed setup").replace("_", " ").title().replace("Ema", "EMA").replace("Vwap", "VWAP")),
         f"{_score_stars(confidence)} {confidence_line}" if confidence_line else None,
+        # Subscribers could not tell a day trade from a multi-day hold. The two
+        # demand completely different behaviour from someone acting on the alert:
+        # a position with an intraday stop that is flattened at 15:55 is not the
+        # same instruction as one meant to be carried overnight. `expected_hold_line`
+        # was already being computed here and then dropped from the message.
+        _holding_profile_line(trade, scanner_context),
+        expected_hold_line,
         "",
         *_option_lifecycle_lines(trade, scanner_context),
         f"Premium: {_money(option_mid)}",

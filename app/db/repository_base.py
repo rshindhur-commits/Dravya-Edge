@@ -28,3 +28,22 @@ class BestEffortRepository:
 
     def _execute(self, statement, params):
         return self._batch_execute(statement, [params])
+
+    def _fetch(self, statement, params=None):
+        """Best-effort read. Returns [] rather than raising.
+
+        Deliberately not gated on `db_writes_enabled()`: that flag governs whether
+        this process may *write*, and a read-only analytics query is safe even when
+        writing is switched off. Callers must treat [] as "no data available", never
+        as "no trades happened" -- the difference matters, because reporting zero
+        completed trades when the query simply failed is how a broken pipeline
+        disguises itself as a quiet day.
+        """
+
+        try:
+            with get_engine().connect() as connection:
+                rows = connection.execute(text(statement), params or {}).mappings().all()
+            return [dict(row) for row in rows]
+        except Exception:
+            logger.warning("Artifact DB read failed; caller falls back to files", exc_info=True)
+            return []
