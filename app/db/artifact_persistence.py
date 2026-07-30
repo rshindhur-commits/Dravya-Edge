@@ -44,6 +44,8 @@ def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output
         scan_id,
         status="FINISHED",
         rows_count=len(records),
+        # The scan's own completion time, not whenever this queued write drains.
+        finished_at=(health_payload or {}).get("timestamp"),
         payload={
             "trading_day": trading_day,
             "output_file": str(output_file) if output_file else None,

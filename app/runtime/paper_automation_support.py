@@ -445,6 +445,53 @@ def _auto_paper_trade_count_today(paper_trades):
     return count
 
 
+def spread_cost_exceeds_risk(row):
+    """True when the option's round trip costs more than the trade risks.
+
+    A stop is set on the underlying; the position is an option. Convert the stop
+    distance into the option move it implies -- distance * delta / premium -- and
+    compare it against the round-trip spread. When the spread is larger, the trade
+    pays more to open and close than it stands to lose being wrong, so it cannot
+    be won by being right about direction.
+
+    Every trade on 2026-07-30 failed this test. PLTR risked a 3.2% option move
+    against a 4.1% spread; ORCL risked 2.6% against 8.0%. Both booked positive R
+    and lost money. R cannot see this, because R is computed entirely on the
+    underlying and never looks at what the contract costs to trade.
+
+    Returns False when delta, premium or spread are missing rather than blocking on
+    absent data: a gate that fires on a missing field silently stops trading
+    altogether, which is a worse failure than the one it prevents.
+    """
+
+    entry = _safe_float(row.get("Candidate Entry Price"), None)
+    stop = _safe_float(row.get("Candidate Stop Price"), None)
+    delta = _safe_float(row.get("Option Delta"), None)
+    premium = _safe_float(row.get("Option Mid Price"), None) or _safe_float(row.get("Option Midpoint"), None)
+    spread_pct = _safe_float(row.get("Option Spread %"), None)
+
+    if None in (entry, stop, delta, premium, spread_pct):
+        return False, None
+
+    if premium <= 0 or spread_pct <= 0:
+        return False, None
+
+    risk_move_pct = abs(entry - stop) * abs(delta) / premium * 100
+
+    if risk_move_pct <= 0:
+        return False, None
+
+    tolerance = _env_float("AUTO_PAPER_MAX_SPREAD_TO_RISK", 1.0)
+
+    if spread_pct > risk_move_pct * tolerance:
+        return True, (
+            f"SPREAD_EXCEEDS_RISK: spread {spread_pct:.1f}% vs "
+            f"{risk_move_pct:.1f}% option move to stop"
+        )
+
+    return False, None
+
+
 def _auto_paper_entry_reason(row, controls, paper_trades):
     now_et = _current_et()
     if not controls["auto_paper_enabled"]:
@@ -480,6 +527,9 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         return False, row.get("Realtime Block Reason") or "realtime not ready"
     if _safe_float(row.get("Option Bid"), 0) <= 0 or _safe_float(row.get("Option Ask"), 0) <= 0:
         return False, "missing option bid/ask"
+    spread_blocked, spread_reason = spread_cost_exceeds_risk(row)
+    if spread_blocked:
+        return False, spread_reason
     if _boolish(row.get("Event Blocked")):
         return False, "event blocked"
     if _boolish(row.get("Regime Blocked")):
