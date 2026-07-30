@@ -15,6 +15,41 @@ SHADOW_STATE_FILE = ROOT_DIR / "app" / "state" / "entry_exit_v2_shadow_state.jso
 SHADOW_ENTRY_BUCKETS = {"OPENING_RANGE", "AUTO_ENTRY_WINDOW"}
 
 
+def _max_shadow_trades_per_direction():
+    """Concurrent V2 shadow positions allowed per direction. 0 disables the cap."""
+
+    from app.config.settings import get_int_env
+
+    return get_int_env("V2_SHADOW_MAX_PER_DIRECTION", 1)
+
+
+def _shadow_friction_r():
+    """Option round-trip cost charged to a shadow trade, in R.
+
+    V2's shadow trades the underlying: no bid/ask, no theta. V1 trades an option
+    and pays both. Comparing their R totals directly flatters V2 by exactly the
+    friction it never paid -- and that comparison is what decides whether V2 gets
+    promoted. On 2026-07-30 V2 showed +2.94R over 14 trades against V1's -1.50R,
+    a gap that fourteen unpaid round trips can account for on its own.
+
+    Charged as a constant in R rather than per contract because V2 never selects a
+    contract: the option is chosen further down the pipeline than the shadow entry
+    runs. Holding contract selection fixed is also the right experiment -- the
+    question V2 exists to answer is whether its entry and exit *timing* is better,
+    and giving it a separately chosen contract would confound that with a second
+    change.
+
+    The default is deliberately conservative. Round-trip spreads of 2.1%-8.0% were
+    observed on 07-30 against stops sized near the 0.50% floor, which puts friction
+    in the region of 0.2R-0.5R per trade; 0.25 sits at the optimistic end, so V2
+    keeps the benefit of the doubt. Set 0 to restore the unadjusted figure.
+    """
+
+    from app.config.settings import get_float_env
+
+    return get_float_env("V2_SHADOW_FRICTION_R", 0.25)
+
+
 def shadow_entry_allowed(opened_at):
     """Whether V2 may open a shadow position at this time.
 
@@ -63,6 +98,17 @@ def save_shadow_trades(state):
     save_json_file(str(SHADOW_STATE_FILE), state)
 
 
+def concurrent_direction_count(state, direction):
+    """Open shadow positions already running in this direction."""
+
+    return sum(
+        1 for trade in (state or {}).values()
+        if isinstance(trade, dict)
+        and trade.get("status") == "OPEN"
+        and trade.get("direction") == direction
+    )
+
+
 def open_shadow_trade(symbol, entry_setup, risk_setup, opened_at):
 
     if not shadow_entry_allowed(opened_at):
@@ -71,12 +117,32 @@ def open_shadow_trade(symbol, entry_setup, risk_setup, opened_at):
         return None
 
     state = load_shadow_trades()
+    direction = entry_setup.get("direction")
+
+    # V1 cannot hold more than one position per direction at a time
+    # (DIRECTION_ALREADY_ACTIVE in paper_automation_support). V2 had no such limit,
+    # so on 2026-07-30 it ran ARM four times, NVDA four times and INTC three times
+    # -- one thesis expressed repeatedly, not fourteen independent results. Summing
+    # those into a single R total overstates V2 against the engine it is measured
+    # against, which is the comparison used to decide whether to promote it.
+    #
+    # Matching V1's constraint is what makes the shadow a comparison rather than a
+    # different strategy. Tunable because the right number is an open question; the
+    # defensible default is the one V1 actually runs under.
+    max_per_direction = _max_shadow_trades_per_direction()
+
+    if max_per_direction > 0 and concurrent_direction_count(state, direction) >= max_per_direction:
+
+        print(f"[V2 SHADOW] {symbol} entry refused: {direction} exposure already at "
+              f"{max_per_direction}")
+        return None
+
     entry_price = risk_setup.get("entry_price")
     state[symbol] = {
         "engine_version": "v2",
         "status": "OPEN",
         "symbol": symbol,
-        "direction": entry_setup.get("direction"),
+        "direction": direction,
         "entry_type": entry_setup.get("entry_type"),
         "entry_reason": entry_setup.get("reason"),
         "entry_efficiency_score": entry_setup.get("entry_efficiency_score"),
@@ -90,6 +156,7 @@ def open_shadow_trade(symbol, entry_setup, risk_setup, opened_at):
         "ema_alignment_score": entry_setup.get("ema_alignment_score"),
         "volume_confirmation_score": entry_setup.get("volume_confirmation_score"),
         "opened_at": opened_at,
+        "entry_friction_r": _shadow_friction_r(),
         "entry_price": entry_price,
         "stop_loss": risk_setup.get("stop_loss"),
         "take_profit": risk_setup.get("take_profit"),
@@ -166,12 +233,29 @@ def close_shadow_trade(symbol, exit_setup, closed_at, close_price):
     trade = state.pop(symbol, None)
     if not trade:
         return None
+    final_r = exit_setup.get("rr_progress")
+    friction_r = trade.get("entry_friction_r")
+
+    if friction_r is None:
+        friction_r = _shadow_friction_r()
+
+    try:
+        net_final_r = round(float(final_r) - float(friction_r), 4)
+    except (TypeError, ValueError):
+        net_final_r = None
+
     trade.update({
         "status": "CLOSED",
         "closed_at": closed_at,
         "close_price": close_price,
         "exit_phase": exit_setup.get("exit_phase"),
-        "final_r": exit_setup.get("rr_progress"),
+        "final_r": final_r,
+        # final_r is the underlying move. net_final_r is what the same trade would
+        # have returned after paying the option friction V1 pays, and is the only
+        # one of the two that is comparable to a V1 result.
+        "final_r_gross": final_r,
+        "entry_friction_r": friction_r,
+        "net_final_r": net_final_r,
         "mfe_r": exit_setup.get("mfe_r", trade.get("mfe_r")),
         "mae_r": exit_setup.get("mae_r", trade.get("mae_r")),
         "trend_health_score": exit_setup.get("trend_health_score"),

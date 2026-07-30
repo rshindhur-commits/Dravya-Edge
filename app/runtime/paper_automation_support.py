@@ -414,6 +414,61 @@ def _persist_auto_paper_decision(entry):
         print(f"[AUTO PAPER DECISION DB WARNING] {entry.get('symbol')}: {exc}")
 
 
+def _gate_counterfactuals(row, controls):
+    """Would this candidate have passed under a different threshold?
+
+    These columns exist in the decision ledger and have never been populated on
+    the scan path: they are produced by _add_shadow_diagnostics(), which runs
+    inside the dashboard's _load_scanner_output() and therefore only ever sees
+    dashboard renders. Every automated decision recorded them blank, which is why
+    "what did the RR gate cost us today" has not been answerable.
+
+    Computed against evaluate_entry_gate() with a substituted threshold rather
+    than by re-deriving the rule, so the counterfactual cannot drift from the gate
+    it is a counterfactual about. Only the threshold is varied -- position caps,
+    cooldowns and the daily limit are deliberately left out, because "would a
+    lower RR floor have allowed this setup" and "was there room in the book" are
+    different questions and answering them in one column makes both useless.
+    """
+
+    if row is None:
+        return {}
+
+    try:
+        gate_row = _paper_gate_row(row)
+    except Exception:
+        return {}
+
+    def passes(min_rr, min_setup):
+        try:
+            allowed, _ = evaluate_entry_gate(
+                gate_row,
+                EntryGateConfig(
+                    min_rr=min_rr,
+                    min_setup_percent=min_setup,
+                    min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY,
+                    max_spread_pct=DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT,
+                ),
+                mode="paper",
+            )
+            return bool(allowed)
+
+        except Exception:
+            return None
+
+    current_rr = controls.get("min_rr", DEFAULT_AUTO_PAPER_MIN_RR)
+    current_setup = controls.get("min_setup", 70.0)
+    action_status = str(row.get("Action Status") or "").strip().upper()
+
+    return {
+        "would_pass_gate_if_rr_1_7": passes(1.7, current_setup),
+        "would_pass_gate_if_setup_65": passes(current_rr, 65.0),
+        "would_pass_gate_if_review_allowed": (
+            action_status == "REVIEW_TV_CHART" and passes(current_rr, current_setup)
+        ),
+    }
+
+
 def write_auto_paper_decision(entry, trading_day):
     """Persist one decision to all three sinks.
 
@@ -510,6 +565,10 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "scanner_blocked_by": scanner_blocked_by,
         "action_status": action_status,
         "action_reason": row.get("Action Reason") if row is not None else None,
+        # Why the stop was or was not compatible with the contract's spread.
+        "stop_viability": row.get("STOP_VIABILITY") if row is not None else None,
+        "stop_spread_multiple": row.get("STOP_SPREAD_MULTIPLE") if row is not None else None,
+        **_gate_counterfactuals(row, controls),
     }
     write_auto_paper_decision(entry, trading_day)
 
