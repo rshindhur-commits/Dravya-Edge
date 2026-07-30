@@ -16,14 +16,14 @@ Two processes, one shared data layer:
 
 | Process | Command | Role |
 | --- | --- | --- |
-| Scanner | `python -m app.main` | Fetches market data, decides, opens/manages paper trades, sends Telegram, writes all artifacts |
-| Dashboard | `streamlit run app/dashboard.py` | Reads artifacts; can also *trigger* a scan and *run* paper automation itself |
+| Scanner | `python -m app.runtime.scan_loop` (loop) or `python -m app.main` (one scan) | Sole owner of the trade lifecycle: market data, decisions, paper open/manage/close, Telegram, all artifacts |
+| Dashboard | `streamlit run app/dashboard.py` | Read-only w.r.t. trade state. Can *trigger* a scan; never opens, updates, or closes a trade |
 
 There is no `streamlit_app.py` — `app/dashboard.py::main()` is the Streamlit entry point.
 
-**Important coupling:** the dashboard is not read-only. It can run the scanner
-(`Run scanner now`, plus auto-refresh in `_maybe_auto_run_scanner`) and it independently invokes
-`run_auto_paper_entries` / `run_auto_paper_exits`. So paper trades can be created by either process.
+**Ownership:** the scanner is the sole owner of the trade lifecycle. The dashboard can
+trigger a scan (`Run scanner now`, auto-refresh) but no longer runs entries, exits, or
+suggestion sync. See the 2026-07-29 section of `Project_state.md` for what moved and why.
 
 ---
 
@@ -108,7 +108,7 @@ daily validation report controls → downloads → **Navigation radio** → `Run
 | **Developer** | Is the system healthy? | `runtime_state.json`, `runtime_health.json`, `runtime_*.csv` | lazy `Load ...` toggles per panel |
 
 Page bodies live in `app/ui/pages/*.py` but **all shared helpers still live in `app/dashboard.py`
-(9,462 lines)**; the page modules import back into it. `dashboard.py` also still holds the
+(~8,870 lines after the 2026-07-29 cleanup)**; the page modules import back into it. `dashboard.py` also still holds the
 `DEPRECATED` renderers (`_render_command_center`, `_render_current_opportunities`,
 `_render_why_no_trade`, `_render_missed_opportunities`, `_render_trading_page*`).
 
@@ -266,7 +266,13 @@ ordering is wrong, spread limit is outside 0–15, or the output dir isn't writa
 
 ---
 
-## 9. Verified observations (as of 2026-07-29) — not changed
+## 9. Verified observations (first audit, 2026-07-29)
+
+> **Status: mostly resolved the same day.** Items 1-8 and 11 were fixed; see the
+> `2026-07-29` section of `Project_state.md`. Kept here as the original findings
+> and because the reasoning explains why several subsystems look the way they do.
+> Still open: item 6 (eight tables have no migration file) and item 10 (doc drift,
+> now corrected).
 
 These are things I confirmed by reading files/DB, worth checking against the issues you saw today.
 

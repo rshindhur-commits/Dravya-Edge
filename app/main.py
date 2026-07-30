@@ -216,6 +216,35 @@ SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
 )
 
 
+def _add_holding_profiles(df):
+    """Stamp INTRADAY/MULTIDAY on every scanner row.
+
+    The profile used to be derived only when a paper trade opened, so candidate
+    artifacts carried no profile at all -- `candidate_evidence.holding_profile` was
+    NULL on all 295 rows for 2026-07-29. That makes "how many intraday candidates
+    did we generate, and where did they die?" unanswerable. Deriving it per row
+    here is observational: `derive_holding_profile` is the same function
+    open_paper_trade uses, and the profile is still frozen at entry.
+    """
+
+    if df is None or df.empty:
+        return df
+
+    from app.state.holding_policy import derive_holding_profile
+
+    df = df.copy()
+    profiles = []
+
+    for _, row in df.iterrows():
+        try:
+            profiles.append(derive_holding_profile(row.to_dict()).value)
+        except Exception:
+            profiles.append("INTRADAY")
+
+    df["Holding Profile"] = profiles
+    return df
+
+
 def _initialize_execution_fields(df):
 
     df = df.copy()
@@ -1820,6 +1849,26 @@ def timeframe_bias(result):
     return 0
 
 
+def stock_data_delay_allowance(market_data_status=None):
+    """Staleness allowance in minutes, never below one candle interval.
+
+    `delay_minutes` counts from the last candle's CLOSE, so it cycles 0 -> interval
+    as the next candle forms. Comparing it against a fixed limit below the interval
+    rejects on clock phase alone. Every gate that judges stock-data freshness must
+    use this, not the raw setting: on 2026-07-29 the settings-based comparisons
+    produced 1028 REALTIME_STOCK_DATA_REQUIRED blocks (the single largest reason)
+    and 277 STALE_STOCK_DATA actions, most of them phase artifacts rather than a
+    genuinely stalled feed.
+    """
+
+    allowance = (market_data_status or {}).get("freshness_allowance_minutes")
+
+    if allowance is None:
+        return settings.max_stock_data_delay_minutes
+
+    return max(allowance, settings.max_stock_data_delay_minutes)
+
+
 def get_market_data_status(df, current_et=None):
 
     current_et = current_et or datetime.now(
@@ -2076,7 +2125,7 @@ def build_action_decision(
     if (
         settings.realtime_market_data_required
         and delay_minutes is not None
-        and delay_minutes > settings.max_stock_data_delay_minutes
+        and delay_minutes > stock_data_delay_allowance(market_data_status)
         and final_signal != "NEUTRAL"
     ):
 
@@ -3586,6 +3635,7 @@ def _finalize_scan_outputs(
             df_results
         )
         df_results = rank_candidates(df_results)
+        df_results = _add_holding_profiles(df_results)
         df_results = _initialize_execution_fields(df_results)
 
     option_freshness = df_results.get("Option Quote Freshness", pd.Series(dtype=object)).astype(str).str.upper()
@@ -3618,9 +3668,15 @@ def _finalize_scan_outputs(
     with stage_timer.stage("Paper position lifecycle"):
 
         from app.runtime.paper_automation_support import load_auto_paper_controls
-        from app.runtime.paper_position_lifecycle import run_paper_position_lifecycle
+        from app.runtime.paper_position_lifecycle import (
+            run_paper_position_lifecycle,
+            sync_scan_suggestions,
+        )
 
         auto_paper_controls = load_auto_paper_controls()
+
+        # Suggestion lifecycle first: promotion/expiry state feeds the artifacts.
+        suggestion_sync = sync_scan_suggestions(df_results)
 
         paper_lifecycle = run_paper_position_lifecycle(
             df_results,
@@ -3686,6 +3742,7 @@ def _finalize_scan_outputs(
         "auto_paper_opened": auto_paper_opened,
         "unaudited_recommendations": unaudited_recommendations,
         "paper_lifecycle": paper_lifecycle,
+        "suggestion_sync": suggestion_sync,
     }
 
     _persist_scan_outputs(
@@ -3902,7 +3959,8 @@ def _run_scanner_impl():
 
             if (
                 market_data_status.get("delay_minutes") is not None
-                and market_data_status["delay_minutes"] > settings.max_stock_data_delay_minutes
+                and market_data_status["delay_minutes"]
+                > stock_data_delay_allowance(market_data_status)
             ):
 
                 refresh_result = process_symbol(symbol, force_refresh=True)
@@ -5155,7 +5213,7 @@ def _run_scanner_impl():
                 settings.realtime_market_data_required
                 and market_data_status.get("delay_minutes") is not None
                 and market_data_status.get("delay_minutes")
-                > settings.max_stock_data_delay_minutes
+                > stock_data_delay_allowance(market_data_status)
                 and final_signal != "NEUTRAL"
             ):
 

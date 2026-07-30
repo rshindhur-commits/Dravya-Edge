@@ -185,6 +185,12 @@ def upsert_paper_trade(trade):
             payload,
             opened_at,
             closed_at,
+            holding_profile,
+            overnight_count,
+            days_held,
+            forced_eod_exit,
+            session_id_open,
+            session_id_close,
             updated_at
         ) VALUES (
             :trade_key,
@@ -202,6 +208,12 @@ def upsert_paper_trade(trade):
             :payload,
             :opened_at,
             :closed_at,
+            :holding_profile,
+            :overnight_count,
+            :days_held,
+            :forced_eod_exit,
+            :session_id_open,
+            :session_id_close,
             now()
         )
         ON CONFLICT (trade_key) DO UPDATE SET
@@ -219,6 +231,12 @@ def upsert_paper_trade(trade):
             payload = EXCLUDED.payload,
             opened_at = EXCLUDED.opened_at,
             closed_at = EXCLUDED.closed_at,
+            holding_profile = EXCLUDED.holding_profile,
+            overnight_count = EXCLUDED.overnight_count,
+            days_held = EXCLUDED.days_held,
+            forced_eod_exit = EXCLUDED.forced_eod_exit,
+            session_id_open = EXCLUDED.session_id_open,
+            session_id_close = EXCLUDED.session_id_close,
             updated_at = now()
     """))
     params = {
@@ -236,7 +254,17 @@ def upsert_paper_trade(trade):
         "r_multiple": trade.get("r_multiple"),
         "payload": _json_safe(trade),
         "opened_at": trade.get("opened_at"),
-        "closed_at": trade.get("closed_at")
+        "closed_at": trade.get("closed_at"),
+        # Migration 012 lifecycle columns. These were never written, so the
+        # holding_profile column kept its default while the payload carried the
+        # real value -- on 2026-07-29 the column read INTRADAY for a MULTIDAY
+        # trade. Reporting queries read the column, so it must be authoritative.
+        "holding_profile": trade.get("holding_profile"),
+        "overnight_count": trade.get("overnight_count"),
+        "days_held": trade.get("days_held"),
+        "forced_eod_exit": bool(trade.get("forced_eod_exit")),
+        "session_id_open": trade.get("session_id_open"),
+        "session_id_close": trade.get("session_id_close"),
     }
 
     if not params["trade_key"] or not params["symbol"]:

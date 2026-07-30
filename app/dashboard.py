@@ -2264,24 +2264,15 @@ def _candidate_rows_for_suggestions(df):
 
 
 def _sync_suggested_trades(df):
+    """DEPRECATED no-op. The scanner owns the suggestion lifecycle.
 
-    try:
+    Advancing suggestion state from a dashboard render meant it depended on a
+    browser tab being open, and mutated shared state from the read-only side.
+    `app/runtime/paper_position_lifecycle.py::sync_scan_suggestions()` now runs it
+    during scan finalization. Retained as a no-op so any remaining caller is inert.
+    """
 
-        from app.state.suggested_trade_manager import (
-            cleanup_old_suggestions,
-            sync_suggestions_from_scan
-        )
-
-        sync_suggestions_from_scan(
-            _candidate_rows_for_suggestions(df)
-        )
-        cleanup_old_suggestions()
-
-    except Exception as exc:
-
-        st.warning(
-            f"Suggested trade sync failed: {exc}"
-        )
+    return None
 
 
 def _real_review_scan_count(row):
@@ -8760,7 +8751,7 @@ def main():
         st.warning("scanner_output.xlsx not found or empty. Run python -m app.main first.")
         return
 
-    _sync_suggested_trades(df)
+    # Suggestion lifecycle is advanced by the scanner, not by rendering a page.
     df = _add_paper_trade_opened(df)
     df = _add_real_trade_readiness(df)
     df = _enrich_with_suggestion_lifecycle(df)

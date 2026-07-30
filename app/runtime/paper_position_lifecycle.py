@@ -278,6 +278,72 @@ def _unmanaged_positions(positions, rows_by_symbol):
     return unmanaged
 
 
+def _suggestion_candidate_rows(df):
+
+    from app.gates import price_geometry_error
+    from app.runtime.paper_automation_support import (
+        _affordability_mask,
+        _env_bool,
+        _is_valid_new_entry_type,
+    )
+
+    if df is None or getattr(df, "empty", True):
+        return []
+
+    required = ["Symbol", "Candidate Direction", "Setup Valid", "Action Status", "Entry"]
+
+    if any(column not in df.columns for column in required):
+        return []
+
+    rows = df[
+        (df["Setup Valid"] == True)  # noqa: E712 - pandas mask, not identity
+        & (df["Candidate Direction"].isin(["CALL", "PUT"]))
+        & (df["Action Status"].isin(["REVIEW_TV_CHART", "ENTER", "ENTER_PAPER"]))
+        & _affordability_mask(df, _env_bool("SUGGESTIONS_IGNORE_AFFORDABILITY", True))
+    ].copy()
+
+    if rows.empty:
+        return []
+
+    rows = rows[rows["Entry"].map(_is_valid_new_entry_type)].copy()
+
+    if rows.empty:
+        return []
+
+    rows = rows[rows.apply(lambda row: price_geometry_error(row) is None, axis=1)]
+
+    return [row for _, row in rows.iterrows()]
+
+
+def sync_scan_suggestions(df):
+    """Advance the suggestion lifecycle from the scan that just completed.
+
+    Previously reachable only from a dashboard render, so a standalone scanner run
+    recorded no suggestions at all: `suggested_trade_state.json` held zero entries
+    for 2026-07-29 despite 884 evaluations. Without it there is no record of a
+    candidate expiring unentered, which makes "how many setups timed out before
+    they could be taken?" unanswerable.
+    """
+
+    from app.state.suggested_trade_manager import (
+        cleanup_old_suggestions,
+        sync_suggestions_from_scan,
+    )
+
+    rows = _suggestion_candidate_rows(df)
+
+    try:
+        sync_suggestions_from_scan(rows)
+        cleanup_old_suggestions()
+
+    except Exception as exc:
+        print(f"[SUGGESTION SYNC WARNING] {exc}")
+        return {"synced": 0, "error": str(exc)}
+
+    print(f"[SUGGESTION SYNC] tracked {len(rows)} candidate suggestion(s)")
+    return {"synced": len(rows), "error": None}
+
+
 def run_paper_position_lifecycle(df, controls=None):
     """Run the non-per-symbol paper lifecycle work after the scanner loop."""
 

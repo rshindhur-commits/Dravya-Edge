@@ -121,6 +121,38 @@ class FreshnessIntegrationTests(unittest.TestCase):
         self.assertEqual(status["delay_minutes"], 8)
         self.assertEqual(status["stock_data_freshness"], "STALE")
 
+    def test_every_gate_shares_the_same_allowance(self):
+        """The label and the blocking gates must not disagree.
+
+        REALTIME_STOCK_DATA_REQUIRED (1028 blocks on 2026-07-29, the single largest
+        reason) and STALE_STOCK_DATA compared against the raw 2-minute setting while
+        the freshness label used the interval-aware allowance. Fixing only the label
+        left the dominant blocker untouched.
+        """
+        from app.main import stock_data_delay_allowance
+
+        live = self._status(8)
+        self.assertEqual(stock_data_delay_allowance(live), 5)
+        self.assertLessEqual(live["delay_minutes"], stock_data_delay_allowance(live))
+        self.assertEqual(live["stock_data_freshness"], "LIVE")
+
+        stale = self._status(13)
+        self.assertGreater(stale["delay_minutes"], stock_data_delay_allowance(stale))
+        self.assertEqual(stale["stock_data_freshness"], "STALE")
+
+    def test_allowance_falls_back_when_status_is_unavailable(self):
+        from app.config.settings import settings
+        from app.main import stock_data_delay_allowance
+
+        self.assertEqual(
+            stock_data_delay_allowance(None),
+            settings.max_stock_data_delay_minutes,
+        )
+        self.assertEqual(
+            stock_data_delay_allowance({}),
+            settings.max_stock_data_delay_minutes,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,11 +6,30 @@ Full architecture and operating notes live in [Project_state.md](Project_state.m
 
 ## Run Scanner
 
+For a live session, run the scan loop. It schedules itself on a session-aware cadence,
+so coverage no longer depends on a browser tab being open:
+
+```powershell
+python -m app.runtime.scan_loop
+```
+
+Cadence: `OPENING_RANGE` 120s, `REGULAR` 300s, `PREMARKET` 600s, `AFTERHOURS` 900s,
+`CLOSED` 1800s. Use `--interval 300` for a fixed cadence, `--skip-closed` to idle
+outside market hours, and `--once` for a single scan. A failing scan is logged and the
+loop continues; Ctrl+C finishes the current scan and exits.
+
+For a single scan:
+
 ```powershell
 python -m app.main
 ```
 
 Run from the workspace root so package imports resolve correctly.
+
+The scanner is the sole owner of the trade lifecycle: entries, management, exits,
+session restore, suggestion lifecycle, and Telegram all run from scan finalization. The
+Streamlit dashboard is read-only with respect to trade state; it can trigger a scan but
+never opens, updates, or closes a paper trade.
 
 Each scanner run also writes normalized candidate snapshots and signal lifecycle observations for research review. Candidate snapshots prefer `data/daily/YYYY-MM-DD/candidate_snapshots.parquet`; if the local environment does not have a parquet engine such as `pyarrow` or `fastparquet`, the writer falls back to `data/daily/YYYY-MM-DD/candidate_snapshots.csv`. Lifecycle observations append to `data/daily/YYYY-MM-DD/signal_lifecycle_events.csv` and state changes append to `data/daily/YYYY-MM-DD/signal_state_transitions.csv`.
 
@@ -97,7 +116,7 @@ Each candidate and paper trade has a `holding_profile`: `INTRADAY` or `MULTIDAY`
 
 Paper-trade state retains `trade_state`, `holding_profile`, `opened_at`, `closed_at`, `days_held`, `overnight_count`, `forced_eod_exit`, `session_id_open`, `session_id_current`, and `session_id_close`. At session startup, `initialize_session_lifecycle()` restores open multi-day positions and archives prior-session candidates unless they are promoted multi-day positions. Suggestions use `ARCHIVED` as their terminal session-cleanup state.
 
-Paper state is the single managed-trade source. `ENTER_PAPER` is a scanner recommendation, not a completed paper entry: auto-paper must still pass the entry window, top-candidate, entry-gate, realtime, bid/ask, event/regime, direction, duplicate, cooldown, capacity, and daily-limit checks. A top-three `Candidate Rank` satisfies the top-candidate execution gate when a presentation tag is missing. Its exact `OPENED`, `BLOCKED`, or `SKIPPED` outcome is written to `auto_paper_decisions.csv`; outside the entry window, logging emits one system-level skip rather than one row per symbol. Scanner finalization and the dashboard both invoke the same auto-paper runtime using persisted controls, so standalone `python -m app.main` scans can create eligible paper trades without a dashboard render. An existing open legacy scanner-state record is promoted once into paper state on first lookup and tagged `LEGACY_SCANNER_STATE_MIGRATION`; this preserves management and lifecycle continuity without sending a retroactive entry alert.
+Paper state is the single managed-trade source. `ENTER_PAPER` is a scanner recommendation, not a completed paper entry: auto-paper must still pass the entry window, top-candidate, entry-gate, realtime, bid/ask, event/regime, direction, duplicate, cooldown, capacity, and daily-limit checks. A top-three `Candidate Rank` satisfies the top-candidate execution gate when a presentation tag is missing. Its exact `OPENED`, `BLOCKED`, or `SKIPPED` outcome is written to `auto_paper_decisions.csv`; outside the entry window, logging emits one system-level skip rather than one row per symbol. Scanner finalization invokes the auto-paper runtime using persisted controls. The dashboard is read-only with respect to trade state and never opens, updates, or closes a paper trade. An existing open legacy scanner-state record is promoted once into paper state on first lookup and tagged `LEGACY_SCANNER_STATE_MIGRATION`; this preserves management and lifecycle continuity without sending a retroactive entry alert.
 
 The Day 2 subscriber message is `POSITION CONTINUES`, not `NEW TRADE`; it identifies when the trade opened, current $R$, trend health, and the hold action. The Trading page shows canonical live positions with holding profile and current action.
 
@@ -105,8 +124,8 @@ The Paper Automation sidebar names its three lifecycle phases explicitly:
 
 | Control | When it acts | Behavior |
 | --- | --- | --- |
-| `Auto Exit (During Market Hours)` | During the session | Evaluates normal stop, target, live-exit, invalidation, and profit-threshold rules. |
-| `Force Close Intraday at Market Close` | At market close | Closes only trades whose current profile is `INTRADAY`, even when Auto Exit is disabled. |
+| *(removed)* `Auto Exit (During Market Hours)` | — | Removed. Exits are always evaluated by `app/exit/exit_engine.py` and are not operator-disablable. |
+| `Force Close Intraday at Market Close` | At market close | Closes only trades whose current profile is `INTRADAY`. |
 | `Restore Multi-day Positions Next Session` | Next market session | Restores eligible multi-day positions without changing candidate archival. |
 
 Multi-day positions remain open unless a normal exit rule fires.
@@ -367,7 +386,7 @@ Current scanner performance implementation:
 - The scanner now queues the noncritical `summarize_telemetry()` step as a low-priority runtime job after table output, reducing foreground scanner tail work without changing trade decisions.
 - Market opportunity audit, option liquidity audit, and candidate funnel file writes now run inside the scheduled scanner persistence job instead of the foreground scanner tail. The foreground path still computes candidate rows, rankings, health, Telegram summary, and prints the funnel, but noncritical audit file I/O is deferred.
 - Scanner finalization now runs as a high-priority non-cancelable runtime job. The foreground scanner queues `finalize_scan_outputs` after raw rows are collected and returns; finalization handles operator table rendering, candidate persistence/ranking, health payload, Telegram dispatch, funnel, persistence, and cache job scheduling.
-- Dashboard paper automation orchestration now lives in `app/runtime/paper_automation.py`, with helper logic in `app/runtime/paper_automation_support.py`. The runtime paper automation path no longer imports `app.dashboard`; dashboard only calls the runtime entry points.
+- Paper automation orchestration lives in `app/runtime/paper_automation.py`, with helper logic in `app/runtime/paper_automation_support.py` and non-per-symbol lifecycle work in `app/runtime/paper_position_lifecycle.py`. Only the scanner calls these; the dashboard does not.
 - Telegram alert DB audit writes and paper-trade DB upserts are also queued through the background worker. Telegram sends, paper JSON state, and paper event CSV writes remain on the foreground path where needed for operator correctness.
 - Gate-decision DB writes remain batched per scan. The same scheduler-only promotion job also batches structured `rule_evaluation` rows, retaining actual versus required values instead of relying on rejected-reason strings later.
 - **RuleEvaluation framework:** native emitters now exist at the Entry, Risk, Option Liquidity, Affordability, Telegram, Paper Automation, and Review decision boundaries. Every emitted record has `scan_id`, `symbol`, `setup`, `rule_name`, `rule_group`, `actual_value`, `required_value`, `passed`, `blocked_trade`, `priority`, and `evaluation_phase`. `ENTRY` is the default; scanner artifacts also emit `ACTIVE` for ongoing trade management, `EXIT` for live exit signals, and `REPLAY` for projection replay outcomes. `aggregate_rule_evaluations()` deduplicates by scan, symbol, setup, phase, rule group, and rule name before persistence. Migration `003_rule_evaluation_phase.sql` adds the persisted column.
