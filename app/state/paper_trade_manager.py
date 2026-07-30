@@ -521,6 +521,77 @@ def _append_trend_capture_for_closed_trade(trade):
         return None
 
 
+def _option_trade_result(trade):
+    """Close-side option pricing and the P&L that actually reaches the account.
+
+    `option_close_mid` is mapped by upsert_paper_trade but nothing ever set it,
+    so every closed trade carried a null exit premium and P&L was computed purely
+    on the underlying. That is the wrong instrument: on 2026-07-30 six trades
+    moved 0.13%-0.36% in the stock while their options carried 2.1%-8.0%
+    round-trip spreads, so trades booked at +1.35R and +0.88R were losses once the
+    spread was paid, and nothing in the numbers showed it.
+
+    Two figures are returned deliberately:
+
+    * `option_pnl_pct`      mid to mid - what the position was theoretically worth
+    * `option_pnl_pct_net`  ask to bid - what a real round trip returns
+
+    The gap between them is the spread cost, which is the number that decides
+    whether a setup is tradeable at all. `update_paper_trade` refreshes the option
+    quote each scan, so the latest bid/ask is already on the trade at close.
+    """
+
+    entry_mid = _safe_float(trade.get("option_mid"))
+    entry_ask = _safe_float(trade.get("option_ask")) or entry_mid
+    close_bid = _safe_float(trade.get("option_bid"))
+    close_ask = _safe_float(trade.get("option_ask"))
+    close_mid = _safe_float(trade.get("option_current_mid"))
+
+    if close_mid is None and close_bid is not None and close_ask is not None:
+        close_mid = (close_bid + close_ask) / 2
+
+    result = {
+        "option_close_bid": close_bid,
+        "option_close_ask": close_ask,
+        "option_close_mid": _round_or_none(close_mid),
+        "option_pnl_pct": None,
+        "option_pnl_pct_net": None,
+        "option_spread_cost_pct": None,
+    }
+
+    if not entry_mid or entry_mid <= 0:
+        return result
+
+    if close_mid is not None:
+        result["option_pnl_pct"] = round(
+            ((close_mid - entry_mid) / entry_mid) * 100,
+            2
+        )
+
+    # A long option is bought at the ask and sold at the bid. Both legs of the
+    # spread are paid by the trade, so this is the honest figure.
+    if close_bid is not None and entry_ask and entry_ask > 0:
+        result["option_pnl_pct_net"] = round(
+            ((close_bid - entry_ask) / entry_ask) * 100,
+            2
+        )
+
+    if (
+        result["option_pnl_pct"] is not None
+        and result["option_pnl_pct_net"] is not None
+    ):
+        result["option_spread_cost_pct"] = round(
+            result["option_pnl_pct"] - result["option_pnl_pct_net"],
+            2
+        )
+
+    return result
+
+
+def _round_or_none(value, digits=4):
+    return None if value is None else round(value, digits)
+
+
 def _paper_trade_result(trade, close_price):
 
     entry_price = _safe_float(
@@ -986,6 +1057,11 @@ def close_paper_trade(
     trade["pnl_pct"] = result["pnl_pct"]
     trade["r_multiple"] = result["r_multiple"]
     trade["outcome"] = result["outcome"]
+
+    # Underlying P&L above is not what the account earns: the position is an
+    # option. Record the exit premium and both the mid-to-mid and the realistic
+    # ask-to-bid return, so the spread cost is visible instead of silent.
+    trade.update(_option_trade_result(trade))
 
     if not trade_key:
 
