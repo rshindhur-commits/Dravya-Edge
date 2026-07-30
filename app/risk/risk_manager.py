@@ -1,3 +1,4 @@
+from app.config.settings import get_float_env
 from app.utils.runtime_logging import debug_print
 from app.gates import validate_price_geometry
 
@@ -376,6 +377,28 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
         # A structure-anchored stop must not be widened back to a full ATR;
         # doing so is what collapsed breakout/breakdown RR below the 1.5 floor.
         minimum_stop_distance = atr * 0.25
+
+    # Absolute floor on stop distance, as a fraction of price.
+    #
+    # The ATR floor above is anchored to short-bar ATR, so a fraction of it can
+    # be an arbitrarily small distance in percentage terms. On 2026-07-30 every
+    # EMA_PULLBACK entry cleared that floor and still got a stop of 0.13%-0.36%
+    # of price, against option round-trip spreads of 2.1%-8.0%. Those trades were
+    # unwinnable by construction: the move required to clear the spread was
+    # several times the distance to the stop, so the R multiples they produced
+    # measured noise rather than edge.
+    #
+    # This floor is in price terms because that is the term the pathology lives
+    # in, and it leaves legitimate structure stops alone -- a stop already wider
+    # than the floor is untouched. It sits below max_stop_distance_pct below, so
+    # the two cannot fight. Tunable so it can be A/B tested against archived days
+    # rather than argued about; raising it means fewer candidates clear the RR
+    # gate, which is the intended trade.
+    minimum_stop_pct = get_float_env("MIN_STOP_DISTANCE_PCT", 0.50)
+    minimum_stop_distance = max(
+        minimum_stop_distance,
+        entry_price * (minimum_stop_pct / 100.0)
+    )
 
     original_stop_loss = stop_loss
     original_risk_per_share = abs(entry_price - stop_loss)
