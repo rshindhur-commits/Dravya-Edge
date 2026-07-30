@@ -414,6 +414,48 @@ def _persist_auto_paper_decision(entry):
         print(f"[AUTO PAPER DECISION DB WARNING] {entry.get('symbol')}: {exc}")
 
 
+def write_auto_paper_decision(entry, trading_day):
+    """Persist one decision to all three sinks.
+
+    Shared because there are two decision recorders -- this module's, used by the
+    scan path, and app.dashboard's, used by manual entries and Telegram entry
+    alerts -- and they had drifted to 53 fields against 29. Only this one gained
+    the Postgres mirror, so every manually entered trade and every
+    TELEGRAM_ENTRY_ALERT would have been missing from auto_paper_decision while
+    the table looked complete.
+
+    Callers keep building their own entry dict: the dashboard genuinely has more
+    context available (affordability, real-trade readiness, the gate
+    counterfactuals) because it reads the enriched frame from
+    _load_scanner_output(), which the scan path never runs. Sharing the write is
+    what matters; forcing a single field set would only manufacture empty columns.
+    """
+
+    try:
+        append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
+
+    except Exception as exc:
+        print(f"[AUTO PAPER LOG WARNING] daily CSV write failed: {exc}")
+
+    try:
+        update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
+
+    except Exception as exc:
+        print(f"[AUTO PAPER LOG WARNING] recent JSON write failed: {exc}")
+
+    # Files first, DB second: the CSV/JSON stay the live artifacts, so a DB outage
+    # degrades to exactly the behaviour that existed before this line.
+    #
+    # Guarded here as well as inside _persist_auto_paper_decision. This function is
+    # called from the entry loop, so "never raises" has to be a property of the
+    # writer itself rather than something inherited from what it happens to call.
+    try:
+        _persist_auto_paper_decision(entry)
+
+    except Exception as exc:
+        print(f"[AUTO PAPER LOG WARNING] decision DB mirror failed: {exc}")
+
+
 def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, controls=None):
     controls = controls or {}
     decision_time = _current_et()
@@ -469,11 +511,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "action_status": action_status,
         "action_reason": row.get("Action Reason") if row is not None else None,
     }
-    append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
-    update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
-    # Files first, DB second: the CSV/JSON stay the live artifacts, so a DB outage
-    # degrades to exactly the behaviour that existed before this line.
-    _persist_auto_paper_decision(entry)
+    write_auto_paper_decision(entry, trading_day)
 
 
 def _closed_paper_trades(paper_trades):

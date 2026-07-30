@@ -2885,6 +2885,14 @@ def _save_auto_paper_decision_log(entries):
 
 def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, controls=None):
 
+    # Imported here rather than at module scope to match how this file already
+    # reaches into the runtime package (see eod_force_close_reason) and to keep
+    # Streamlit's import of the dashboard independent of the runtime package.
+    from app.runtime.paper_automation_support import (
+        _decision_rr,
+        write_auto_paper_decision,
+    )
+
     decision_time = _current_et()
     trading_day = get_trading_day(decision_time)
     scan_timestamp = decision_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -2915,7 +2923,10 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "entry_source": trade.get("entry_source") if trade else None,
         "top_candidate": row.get("Top Candidate") if row is not None else None,
         "setup_percent": row.get("Setup %") if row is not None else None,
-        "rr": row.get("RR") if row is not None else None,
+        # Shared with the scan-path recorder. "RR" exists only on frames that went
+        # through _load_scanner_output(), which synthesises it at line 1245; rows
+        # reaching here from elsewhere carry "Candidate RR" instead.
+        "rr": _decision_rr(row),
         "setup_valid": row.get("Setup Valid") if row is not None else None,
         "execution_ready": row.get("Execution Ready") if row is not None else None,
         "realtime_ready": row.get("Realtime Ready") if row is not None else None,
@@ -2957,21 +2968,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "late_entry_risk": row.get("Late Entry Risk") if row is not None else None,
         "missed_move_type": row.get("Missed Move Type") if row is not None else None
     }
-    try:
-
-        append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
-
-    except Exception as exc:
-
-        print(f"[AUTO PAPER LOG WARNING] daily CSV write failed: {exc}")
-
-    try:
-
-        update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
-
-    except Exception as exc:
-
-        print(f"[AUTO PAPER LOG WARNING] recent JSON write failed: {exc}")
+    write_auto_paper_decision(entry, trading_day)
 
 
 def _current_trading_day():

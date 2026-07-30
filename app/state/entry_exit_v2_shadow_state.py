@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from app.utils.json_store import load_json_file, save_json_file
@@ -7,6 +8,51 @@ from app.utils.json_store import load_json_file, save_json_file
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SHADOW_STATE_FILE = ROOT_DIR / "app" / "state" / "entry_exit_v2_shadow_state.json"
+
+# Buckets in which V1 is permitted to open a new position. A shadow is only
+# evidence if it trades under the same constraints as the engine it is measured
+# against.
+SHADOW_ENTRY_BUCKETS = {"OPENING_RANGE", "AUTO_ENTRY_WINDOW"}
+
+
+def shadow_entry_allowed(opened_at):
+    """Whether V2 may open a shadow position at this time.
+
+    V2 had no clock at all: open_shadow_trade() recorded whatever the scan handed
+    it, at any hour. On 2026-07-30 that produced four entries at or after the
+    bell, including V2's single best result -- INTC at +3.12R opened 17:07 ET, an
+    hour after the market closed and at a price no order could have been filled
+    at. Those trades inflated the V2 side of v2_learning_metrics and the V1/V2
+    comparison, which is the evidence used to decide whether to promote V2.
+
+    Stopping post-close scans removes the current source of these, but that is a
+    cadence setting; SCAN_AFTER_CLOSE_MINUTES can be raised at any time. The
+    constraint belongs on the engine, so it is enforced here rather than relying
+    on nothing ever calling this late.
+    """
+
+    if opened_at is None:
+        return True
+
+    moment = opened_at
+
+    if isinstance(moment, str):
+
+        try:
+            moment = datetime.fromisoformat(moment)
+        except ValueError:
+            # An unparseable timestamp is not evidence of a bad entry time, and
+            # dropping a legitimate shadow trade is the worse error.
+            return True
+
+    if not isinstance(moment, datetime):
+        return True
+
+    from app.storage.auto_paper_decision_store import classify_decision_time
+
+    bucket = classify_decision_time(moment).get("market_session")
+
+    return bucket in SHADOW_ENTRY_BUCKETS
 
 
 def load_shadow_trades():
@@ -18,6 +64,12 @@ def save_shadow_trades(state):
 
 
 def open_shadow_trade(symbol, entry_setup, risk_setup, opened_at):
+
+    if not shadow_entry_allowed(opened_at):
+
+        print(f"[V2 SHADOW] {symbol} entry refused at {opened_at}: outside entry window")
+        return None
+
     state = load_shadow_trades()
     entry_price = risk_setup.get("entry_price")
     state[symbol] = {

@@ -399,50 +399,91 @@ def build_entry_diagnostics(symbol, df, analysis, market_regime=None, selected_e
     return asdict(diagnostic)
 
 
+# The contract between the scanner and the offline replay, in one place.
+#
+# It used to exist only here, as a read side with no writer: nothing in the
+# codebase ever produced an ENTRY_* column, so every replayed row returned
+# "Missing replay indicators: Close, High, Low, ..." and market_opportunity_audit
+# recorded NO_REPLAY for 100% of rows on every day it ever ran. Only the unit
+# test's hand-built fixture satisfied it, which is why the suite stayed green.
+#
+# `build_entry_snapshot_columns()` below is the writer. Both directions read this
+# same dict so they cannot drift apart again.
+ENTRY_SNAPSHOT_COLUMNS = {
+    "ENTRY_OPEN": "Open",
+    "ENTRY_HIGH": "High",
+    "ENTRY_LOW": "Low",
+    "ENTRY_CLOSE": "Close",
+    "ENTRY_EMA9": "EMA9",
+    "ENTRY_EMA20": "EMA20",
+    "ENTRY_VWAP": "VWAP",
+    "ENTRY_RSI": "RSI",
+    "ENTRY_MACD": "MACD",
+    "ENTRY_MACD_SIGNAL": "MACD_SIGNAL",
+    "ENTRY_REL_VOLUME": "REL_VOLUME",
+    "ENTRY_BODY_STRENGTH": "BODY_STRENGTH",
+    "ENTRY_ATR": "ATR",
+    "ENTRY_ADX": "ADX",
+    "ENTRY_OBV": "OBV",
+    "ENTRY_BREAKOUT": "BREAKOUT",
+    "ENTRY_BREAKDOWN": "BREAKDOWN",
+    "ENTRY_LOWER_HIGH": "LOWER_HIGH",
+    "ENTRY_ROLLING_SUPPORT": "ROLLING_SUPPORT",
+    "ENTRY_PREV_LOW": "PREV_LOW",
+    "ENTRY_RECENT_HIGH": "RECENT_HIGH",
+    "ENTRY_RECENT_LOW": "RECENT_LOW",
+}
+
+# Without these nine a setup cannot be re-evaluated at all, so their absence is
+# reported rather than silently replayed against a half-empty bar.
+REQUIRED_REPLAY_INDICATORS = [
+    "Close",
+    "High",
+    "Low",
+    "EMA9",
+    "EMA20",
+    "VWAP",
+    "REL_VOLUME",
+    "BODY_STRENGTH",
+    "ATR",
+]
+
+
+def build_entry_snapshot_columns(latest):
+    """Flatten the evaluated indicator bar into the ENTRY_* replay contract.
+
+    `latest` is the final row of the same 15m indicator frame detect_entry() saw,
+    so the replay reconstructs the bar the decision was actually made on rather
+    than whatever the market looks like at replay time.
+
+    Values go through _json_safe: these columns are written to CSV and JSON, and
+    a raw NaN there is both invalid JSON and indistinguishable from "absent".
+    """
+
+    if latest is None:
+        return {}
+
+    def _get(name):
+        try:
+            return _json_safe(latest.get(name))
+        except Exception:
+            return None
+
+    return {
+        column: _get(source)
+        for column, source in ENTRY_SNAPSHOT_COLUMNS.items()
+    }
+
+
 def build_entry_diagnostics_from_snapshot(row: dict[str, Any]):
 
-    mapping = {
-        "ENTRY_OPEN": "Open",
-        "ENTRY_HIGH": "High",
-        "ENTRY_LOW": "Low",
-        "ENTRY_CLOSE": "Close",
-        "ENTRY_EMA9": "EMA9",
-        "ENTRY_EMA20": "EMA20",
-        "ENTRY_VWAP": "VWAP",
-        "ENTRY_RSI": "RSI",
-        "ENTRY_MACD": "MACD",
-        "ENTRY_MACD_SIGNAL": "MACD_SIGNAL",
-        "ENTRY_REL_VOLUME": "REL_VOLUME",
-        "ENTRY_BODY_STRENGTH": "BODY_STRENGTH",
-        "ENTRY_ATR": "ATR",
-        "ENTRY_ADX": "ADX",
-        "ENTRY_OBV": "OBV",
-        "ENTRY_BREAKOUT": "BREAKOUT",
-        "ENTRY_BREAKDOWN": "BREAKDOWN",
-        "ENTRY_LOWER_HIGH": "LOWER_HIGH",
-        "ENTRY_ROLLING_SUPPORT": "ROLLING_SUPPORT",
-        "ENTRY_PREV_LOW": "PREV_LOW",
-        "ENTRY_RECENT_HIGH": "RECENT_HIGH",
-        "ENTRY_RECENT_LOW": "RECENT_LOW",
-    }
     snapshot = {
         target: row.get(source)
-        for source, target in mapping.items()
+        for source, target in ENTRY_SNAPSHOT_COLUMNS.items()
     }
 
-    required = [
-        "Close",
-        "High",
-        "Low",
-        "EMA9",
-        "EMA20",
-        "VWAP",
-        "REL_VOLUME",
-        "BODY_STRENGTH",
-        "ATR",
-    ]
     missing = [
-        name for name in required
+        name for name in REQUIRED_REPLAY_INDICATORS
         if snapshot.get(name) is None or str(snapshot.get(name)).strip().lower() in {"", "nan", "none"}
     ]
 
