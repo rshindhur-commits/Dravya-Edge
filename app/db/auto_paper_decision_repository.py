@@ -11,6 +11,9 @@ existing file-backed flow and must never delay or block an entry.
 
 from __future__ import annotations
 
+import json
+
+from app.db.persistence import _json_safe
 from app.db.repository_base import BestEffortRepository
 
 
@@ -26,7 +29,7 @@ _INSERT = """
         :is_auto_entry_window, :is_after_close, :minutes_from_open, :minutes_to_close,
         :symbol, :decision, :reason, :trade_key, :top_candidate, :setup_percent,
         :candidate_rr, :min_rr_used, :min_setup_used, :setup_valid, :realtime_ready,
-        :action_status, :blocked_by, :scanner_blocked_by, :payload, now()
+        :action_status, :blocked_by, :scanner_blocked_by, CAST(:payload AS JSONB), now()
     )
 """
 
@@ -139,5 +142,11 @@ class AutoPaperDecisionRepository(BestEffortRepository):
             "scanner_blocked_by": entry.get("scanner_blocked_by"),
             # Everything the columns do not name, so a later question does not
             # need a migration to answer.
-            "payload": entry,
+            #
+            # _json_safe before json.dumps, not instead of it. psycopg2 cannot adapt
+            # a bare dict to jsonb, and json.dumps alone would emit NaN for a float
+            # NaN -- which is not valid JSON and which Postgres rejects, failing the
+            # whole insert. 2026-07-30's suggested_trade_state carried a literal
+            # `top_candidate: NaN`, so this is a live case, not a hypothetical.
+            "payload": json.dumps(_json_safe(entry), default=str),
         }
