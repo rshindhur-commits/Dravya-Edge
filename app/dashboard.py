@@ -3729,10 +3729,14 @@ def _auto_refresh_defaults():
 
     if "auto_paper_eod_close_enabled" not in st.session_state:
 
+        # Default ON, matching app.runtime.paper_automation_support. The settings
+        # file is gitignored, so a deployed container starts with no saved settings
+        # and this default decides whether intraday positions are flattened at
+        # 15:55 ET.
         st.session_state["auto_paper_eod_close_enabled"] = _boolish(
             saved_auto_settings.get(
                 "auto_paper_eod_close_enabled",
-                False
+                True
             )
         )
 

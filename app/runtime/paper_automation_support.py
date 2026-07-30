@@ -72,7 +72,12 @@ def load_auto_paper_controls():
         "min_setup": float(settings.get("auto_paper_min_setup", 70)),
         "min_rr": float(settings.get("auto_paper_min_rr", DEFAULT_AUTO_PAPER_MIN_RR)),
         "direction": settings.get("auto_paper_direction", "Both"),
-        "eod_close_enabled": _boolish(settings.get("auto_paper_eod_close_enabled", False)),
+        # Default ON. `app/state/auto_paper_settings.json` is gitignored, so on
+        # Streamlit Cloud it does not exist after a redeploy and every setting falls
+        # back to its code default. With this defaulted to False, the standing policy
+        # of flattening intraday positions at 15:55 ET silently reverted to OFF on
+        # every deploy, leaving day trades to be carried overnight.
+        "eod_close_enabled": _boolish(settings.get("auto_paper_eod_close_enabled", True)),
         "restore_multiday_positions": _boolish(settings.get("restore_multiday_positions", True)),
     }
 
