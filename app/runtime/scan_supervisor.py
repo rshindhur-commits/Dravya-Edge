@@ -26,6 +26,7 @@ main thread, which is why `scan_loop.run_scan_loop()` cannot simply be reused.
 
 from __future__ import annotations
 
+import os
 import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -35,6 +36,7 @@ from app.utils.json_store import save_json_file
 
 ET = ZoneInfo("America/New_York")
 STATUS_FILENAME = "scanner_run_status.json"
+DEFAULT_AFTER_CLOSE_TAIL_MINUTES = 20.0
 
 _thread = None
 _stop_event = threading.Event()
@@ -102,6 +104,30 @@ def set_interval_override(seconds):
         _state["interval_override_seconds"] = int(seconds) if seconds else None
 
 
+def _after_close_tail_minutes():
+    """Minutes past 16:00 ET to keep scanning. Env-tunable; large values restore
+    the previous behaviour of scanning until AFTERHOURS ends at 20:00."""
+
+    raw = os.getenv("SCAN_AFTER_CLOSE_MINUTES", "").strip()
+
+    if not raw:
+        return DEFAULT_AFTER_CLOSE_TAIL_MINUTES
+
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[SCAN ENGINE WARNING] bad SCAN_AFTER_CLOSE_MINUTES={raw!r}; using default.")
+        return DEFAULT_AFTER_CLOSE_TAIL_MINUTES
+
+
+def _minutes_past_close(now):
+    """Signed minutes relative to the 16:00 ET bell. Negative before the close."""
+
+    close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    return (now - close).total_seconds() / 60.0
+
+
 def _idle_reason(session, now):
     """Why this cycle should not scan, or None to scan.
 
@@ -109,6 +135,19 @@ def _idle_reason(session, now):
     at 10:00 on a Saturday it still returns REGULAR, which would otherwise scan
     every 5 minutes all weekend. Exchange holidays are not modelled anywhere in
     the codebase, so a holiday still scans.
+
+    Scanning also stops shortly after the close. On 2026-07-30, 9 of the day's 26
+    scans ran between 16:01 and 18:01 -- 35% of the day's compute and Polygon
+    option-chain calls -- and every decision in all nine was "outside auto-entry
+    window". They could not open a trade by construction.
+
+    The tail is not zero because the last scan of the day writes the closing
+    archive. It defaults wider than one AFTERHOURS interval (900s) so at least one
+    scan always lands after the bell: the final pre-close scan starts at 15:59 at
+    the latest, putting its successor no later than ~16:14.
+
+    Intraday force-close is unaffected -- AUTO_PAPER_EOD_CLOSE fires at 15:55,
+    before the bell, so it never depended on a post-close scan.
     """
 
     if now.weekday() >= 5:
@@ -116,6 +155,9 @@ def _idle_reason(session, now):
 
     if str(session).upper() == "CLOSED":
         return "SLEEPING_CLOSED"
+
+    if _minutes_past_close(now) > _after_close_tail_minutes():
+        return "SLEEPING_AFTER_CLOSE"
 
     return None
 

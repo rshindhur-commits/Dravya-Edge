@@ -34,6 +34,11 @@ from app.config.settings import (
     settings,
     validate_runtime_settings
 )
+from app.diagnostics import (
+    build_entry_diagnostics,
+    build_entry_snapshot_columns,
+    diagnostics_to_json
+)
 from app.gates import (
     build_entry_gate_diagnostics,
     EntryGateConfig,
@@ -2384,6 +2389,64 @@ def _compute_setup_percent_for_gate(row):
         readiness = min(readiness, 49)
 
     return round(max(0, min(readiness, 100)), 0)
+
+
+def _add_entry_replay_snapshot(row, df_15m, analysis, entry_setup):
+    """Persist what the offline replay needs to re-derive this entry decision.
+
+    Two consumers were reading columns that nothing wrote:
+
+    * `build_entry_diagnostics_from_snapshot()` needs the ENTRY_* indicator bar.
+    * `_load_existing_diagnostics()`, decision_waterfall and the dashboard's
+      diagnostics viewer all read ENTRY_DIAGNOSTICS_JSON. The scanner only ever
+      wrote ENTRY_GATE_DIAGNOSTICS, which is a different payload -- gate
+      thresholds, not entry conditions -- so the name was never satisfied.
+
+    The result was NO_REPLAY on every audited row, which is why "which setups did
+    we miss and why" has never been answerable from the artifacts.
+
+    Both are written here, from the same 15m frame and analysis detect_entry()
+    used, so the replay reconstructs the bar the decision was made on. The
+    diagnostics JSON is the richer record; the ENTRY_* columns are the fallback
+    that lets a replay recompute when the JSON is absent or unparseable.
+
+    Best-effort by design: a diagnostics failure must never cost a scanner row.
+    """
+
+    row = dict(row)
+
+    try:
+        latest = df_15m.iloc[-1] if df_15m is not None and not df_15m.empty else None
+    except Exception:
+        latest = None
+
+    if latest is None:
+        return row
+
+    try:
+        row.update(build_entry_snapshot_columns(latest))
+    except Exception as exc:
+        print(f"[REPLAY SNAPSHOT WARNING] {row.get('Symbol')}: {exc}")
+
+    try:
+        diagnostics = build_entry_diagnostics(
+            row.get("Symbol"),
+            df_15m,
+            {
+                "signal": row.get("Final Signal"),
+                "score": (analysis or {}).get("score"),
+                "category_score": row.get("Category Score"),
+                "entry_timing_ok": row.get("Entry Timing OK", True),
+            },
+            market_regime=row.get("Market Regime"),
+            selected_entry=entry_setup,
+        )
+        row["ENTRY_DIAGNOSTICS_JSON"] = diagnostics_to_json(diagnostics)
+
+    except Exception as exc:
+        print(f"[REPLAY DIAGNOSTICS WARNING] {row.get('Symbol')}: {exc}")
+
+    return row
 
 
 def _add_entry_gate_diagnostics(row):
@@ -6606,6 +6669,12 @@ def _run_scanner_impl():
             )
             result_row = _align_action_status_with_entry_gate(
                 result_row
+            )
+            result_row = _add_entry_replay_snapshot(
+                result_row,
+                df_15m,
+                analysis_15m,
+                entry_setup
             )
             results.append(result_row)
 

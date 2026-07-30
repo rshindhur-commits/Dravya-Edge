@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -67,6 +68,67 @@ def json_default(value):
     return str(value)
 
 
+def scrub_non_finite(value):
+    """Replace NaN and infinity with None, recursively.
+
+    json.dump emits NaN and Infinity as bare literals. Python's own json.load
+    accepts them, so these files round-trip inside the app and look healthy while
+    being invalid JSON to everything else -- strict parsers, jq, and Postgres
+    jsonb, which rejects the document outright rather than the one field.
+
+    2026-07-30's suggested_trade_state.json carried a literal `top_candidate: NaN`
+    for exactly this reason. json_default() cannot catch it: a float NaN is
+    natively serialisable, so `default` is never consulted for it.
+
+    None is the honest encoding. NaN means "no value here", and every consumer
+    already treats null that way, while NaN compares false against every
+    threshold it is tested against.
+    """
+
+    if isinstance(value, float):
+
+        if math.isnan(value) or math.isinf(value):
+
+            return None
+
+        return value
+
+    if isinstance(value, dict):
+
+        return {key: scrub_non_finite(item) for key, item in value.items()}
+
+    if isinstance(value, (list, tuple)):
+
+        return [scrub_non_finite(item) for item in value]
+
+    return value
+
+
+def _dump(data, file):
+    """Serialise with allow_nan=False so invalid JSON cannot be written silently.
+
+    The data is scrubbed first, so this should never trigger. If some exotic
+    numeric type slips past the scrub, fall back to a permissive dump rather than
+    raising: json_default() already establishes that losing fidelity in an audit
+    field beats losing the write, and this function is on the path that persists
+    open trades.
+    """
+
+    try:
+
+        json.dump(scrub_non_finite(data), file, indent=4, default=json_default,
+                  allow_nan=False)
+
+    except ValueError as exc:
+
+        print(f"[STATE WARNING] non-finite value survived scrubbing: {exc}")
+        file.seek(0)
+        file.truncate()
+        json.dump(data, file, indent=4, default=json_default)
+
+    file.write("\n")
+
+
 def save_json_file(file_path, data):
 
     final_path = Path(file_path).resolve()
@@ -90,25 +152,13 @@ def save_json_file(file_path, data):
 
         temp_path = Path(file.name)
 
-        json.dump(
-            data,
-            file,
-            indent=4,
-            default=json_default
-        )
-        file.write("\n")
+        _dump(data, file)
 
     def _write_direct():
 
         with open(final_path, "w", encoding="utf-8") as file:
 
-            json.dump(
-                data,
-                file,
-                indent=4,
-                default=json_default
-            )
-            file.write("\n")
+            _dump(data, file)
 
     try:
 

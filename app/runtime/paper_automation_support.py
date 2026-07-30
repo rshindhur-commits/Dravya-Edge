@@ -370,6 +370,92 @@ def _real_trade_readiness(row):
     return "REVIEW_REQUIRED"
 
 
+def _decision_rr(row):
+    """Planned reward:risk for the decision ledger, or None when unknown.
+
+    None must stay None rather than becoming 0.0: "no RR was computed" and "the RR
+    was zero" mean opposite things when you are asking why a candidate was rejected.
+    """
+
+    if row is None:
+        return None
+
+    for column in ("Candidate RR", "RR", "Risk Reward"):
+        value = row.get(column)
+
+        if value is None or value == "":
+            continue
+
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+
+        if number == number:  # not NaN
+            return number
+
+    return None
+
+
+def _persist_auto_paper_decision(entry):
+    """Mirror one decision into Postgres. Never allowed to disturb the trade path.
+
+    BestEffortRepository already swallows database errors, but an import failure or
+    a mapping bug would propagate into the entry loop and could block a trade over a
+    bookkeeping problem. Diagnostics are worth less than the trade they describe.
+    """
+
+    try:
+        from app.db.auto_paper_decision_repository import AutoPaperDecisionRepository
+
+        AutoPaperDecisionRepository().insert(entry)
+
+    except Exception as exc:
+        print(f"[AUTO PAPER DECISION DB WARNING] {entry.get('symbol')}: {exc}")
+
+
+def write_auto_paper_decision(entry, trading_day):
+    """Persist one decision to all three sinks.
+
+    Shared because there are two decision recorders -- this module's, used by the
+    scan path, and app.dashboard's, used by manual entries and Telegram entry
+    alerts -- and they had drifted to 53 fields against 29. Only this one gained
+    the Postgres mirror, so every manually entered trade and every
+    TELEGRAM_ENTRY_ALERT would have been missing from auto_paper_decision while
+    the table looked complete.
+
+    Callers keep building their own entry dict: the dashboard genuinely has more
+    context available (affordability, real-trade readiness, the gate
+    counterfactuals) because it reads the enriched frame from
+    _load_scanner_output(), which the scan path never runs. Sharing the write is
+    what matters; forcing a single field set would only manufacture empty columns.
+    """
+
+    try:
+        append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
+
+    except Exception as exc:
+        print(f"[AUTO PAPER LOG WARNING] daily CSV write failed: {exc}")
+
+    try:
+        update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
+
+    except Exception as exc:
+        print(f"[AUTO PAPER LOG WARNING] recent JSON write failed: {exc}")
+
+    # Files first, DB second: the CSV/JSON stay the live artifacts, so a DB outage
+    # degrades to exactly the behaviour that existed before this line.
+    #
+    # Guarded here as well as inside _persist_auto_paper_decision. This function is
+    # called from the entry loop, so "never raises" has to be a property of the
+    # writer itself rather than something inherited from what it happens to call.
+    try:
+        _persist_auto_paper_decision(entry)
+
+    except Exception as exc:
+        print(f"[AUTO PAPER LOG WARNING] decision DB mirror failed: {exc}")
+
+
 def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, controls=None):
     controls = controls or {}
     decision_time = _current_et()
@@ -405,7 +491,11 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "trade_key": trade.get("trade_key") if trade else None,
         "top_candidate": row.get("Top Candidate") if row is not None else None,
         "setup_percent": row.get("Setup %") if row is not None else None,
-        "rr": row.get("RR") if row is not None else None,
+        # The scanner column is "Candidate RR"; a bare "RR" key does not exist on
+        # scanner rows, so this recorded None for all 96 decisions on 2026-07-30 and
+        # the ledger's rr column has never been populated. Same fallback order as
+        # persistence._gate_decision_params, which always had it right.
+        "rr": _decision_rr(row),
         "setup_valid": row.get("Setup Valid") if row is not None else None,
         "execution_ready": row.get("Execution Ready") if row is not None else None,
         "scanner_recommendation": row.get("Scanner Recommendation") if row is not None else action_status,
@@ -421,8 +511,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "action_status": action_status,
         "action_reason": row.get("Action Reason") if row is not None else None,
     }
-    append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
-    update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
+    write_auto_paper_decision(entry, trading_day)
 
 
 def _closed_paper_trades(paper_trades):
