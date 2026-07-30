@@ -32,6 +32,41 @@ def load_json_file(file_path, default):
         return default
 
 
+def json_default(value):
+    """Encode values json.dump cannot serialise on its own.
+
+    Without this, a single pandas Timestamp anywhere in the payload made
+    json.dump raise `TypeError: Object of type Timestamp is not JSON
+    serializable`. Timestamps reach paper trade state through `scanner_context`,
+    which is built from a DataFrame row, so `open_paper_trade()` raised and
+    app/runtime/paper_automation.py recorded the candidate as
+    PAPER_OPEN_FAILED -- a qualifying setup dropped with no trade and no
+    subscriber alert. On 2026-07-30 that silently cost five setups, including
+    NVDA at setup score 100 / RR 2.97.
+
+    Timestamps, datetimes and dates all expose isoformat(); numpy scalars expose
+    item(). Anything else degrades to str() rather than taking down a state write,
+    because losing type fidelity in an audit field is always better than losing
+    the trade.
+    """
+
+    if hasattr(value, "isoformat"):
+
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+
+    if hasattr(value, "item"):
+
+        try:
+            return value.item()
+        except Exception:
+            return str(value)
+
+    return str(value)
+
+
 def save_json_file(file_path, data):
 
     final_path = Path(file_path).resolve()
@@ -58,7 +93,8 @@ def save_json_file(file_path, data):
         json.dump(
             data,
             file,
-            indent=4
+            indent=4,
+            default=json_default
         )
         file.write("\n")
 
@@ -69,7 +105,8 @@ def save_json_file(file_path, data):
             json.dump(
                 data,
                 file,
-                indent=4
+                indent=4,
+                default=json_default
             )
             file.write("\n")
 
