@@ -370,6 +370,50 @@ def _real_trade_readiness(row):
     return "REVIEW_REQUIRED"
 
 
+def _decision_rr(row):
+    """Planned reward:risk for the decision ledger, or None when unknown.
+
+    None must stay None rather than becoming 0.0: "no RR was computed" and "the RR
+    was zero" mean opposite things when you are asking why a candidate was rejected.
+    """
+
+    if row is None:
+        return None
+
+    for column in ("Candidate RR", "RR", "Risk Reward"):
+        value = row.get(column)
+
+        if value is None or value == "":
+            continue
+
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+
+        if number == number:  # not NaN
+            return number
+
+    return None
+
+
+def _persist_auto_paper_decision(entry):
+    """Mirror one decision into Postgres. Never allowed to disturb the trade path.
+
+    BestEffortRepository already swallows database errors, but an import failure or
+    a mapping bug would propagate into the entry loop and could block a trade over a
+    bookkeeping problem. Diagnostics are worth less than the trade they describe.
+    """
+
+    try:
+        from app.db.auto_paper_decision_repository import AutoPaperDecisionRepository
+
+        AutoPaperDecisionRepository().insert(entry)
+
+    except Exception as exc:
+        print(f"[AUTO PAPER DECISION DB WARNING] {entry.get('symbol')}: {exc}")
+
+
 def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, controls=None):
     controls = controls or {}
     decision_time = _current_et()
@@ -405,7 +449,11 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "trade_key": trade.get("trade_key") if trade else None,
         "top_candidate": row.get("Top Candidate") if row is not None else None,
         "setup_percent": row.get("Setup %") if row is not None else None,
-        "rr": row.get("RR") if row is not None else None,
+        # The scanner column is "Candidate RR"; a bare "RR" key does not exist on
+        # scanner rows, so this recorded None for all 96 decisions on 2026-07-30 and
+        # the ledger's rr column has never been populated. Same fallback order as
+        # persistence._gate_decision_params, which always had it right.
+        "rr": _decision_rr(row),
         "setup_valid": row.get("Setup Valid") if row is not None else None,
         "execution_ready": row.get("Execution Ready") if row is not None else None,
         "scanner_recommendation": row.get("Scanner Recommendation") if row is not None else action_status,
@@ -423,6 +471,9 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
     }
     append_daily_auto_paper_decision(entry, get_daily_dir(trading_day))
     update_recent_auto_paper_log(entry, AUTO_PAPER_DECISION_LOG_FILE)
+    # Files first, DB second: the CSV/JSON stay the live artifacts, so a DB outage
+    # degrades to exactly the behaviour that existed before this line.
+    _persist_auto_paper_decision(entry)
 
 
 def _closed_paper_trades(paper_trades):
