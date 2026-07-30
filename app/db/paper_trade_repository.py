@@ -62,6 +62,26 @@ class PaperTradeRepository(BestEffortRepository):
     def batch_insert(self, trades): return sum(bool(self.upsert(t)) for t in (trades or []))
     def get(self, *_args, **_kwargs): return None
 
+    def fetch_open(self):
+        """Every position the database still believes is open.
+
+        Not filtered by trading day on purpose: a MULTIDAY position opened days ago
+        is exactly the one worth recovering, and filtering by date would silently
+        drop it.
+        """
+
+        return [
+            {"trade_key": row.get("trade_key"), "payload": row.get("payload") or {}}
+            for row in self._fetch(
+                """
+                SELECT trade_key, payload
+                FROM paper_trades
+                WHERE UPPER(status) IN ('OPEN', 'PAUSED')
+                ORDER BY opened_at
+                """
+            )
+        ]
+
     def fetch_closed(self, trading_day):
         """Closed trades for a trading day, flattened for the analytics layer.
 

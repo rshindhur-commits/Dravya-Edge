@@ -81,6 +81,68 @@ def save_paper_trades(state):
     )
 
 
+def restore_open_trades_from_db():
+    """Re-adopt open positions the local state file has lost.
+
+    `paper_trade_state.json` is the live source of truth, but on Streamlit Cloud it
+    sits on an ephemeral filesystem that is wiped whenever the container restarts.
+    Postgres survives, and nothing ever read it back. Two failures on 2026-07-30
+    came from that gap:
+
+    * an NVDA put opened at 14:23 vanished from state. A *second* NVDA position
+      opened at 14:42 -- impossible while the first was visible, because
+      open_paper_trade() returns the existing trade instead. The first was left
+      open in the database forever, with no exit and no subscriber alert.
+    * `_auto_paper_trade_count_today()` counts trades in the state file, so the
+      daily cap reset with it. A limit of 3 produced 6 trades.
+
+    The local file always wins for keys it already has: the database copy is a
+    best-effort mirror written through a background queue and can lag. Only keys
+    absent locally are re-adopted, so a restore can never overwrite fresher state
+    or resurrect a position that was closed while the mirror was behind.
+    """
+
+    try:
+        from app.db.paper_trade_repository import PaperTradeRepository
+
+        open_rows = PaperTradeRepository().fetch_open()
+    except Exception as exc:
+        print(f"[PAPER STATE RESTORE WARNING] {exc}")
+        return []
+
+    if not open_rows:
+        return []
+
+    state = load_paper_trades()
+    restored = []
+
+    for row in open_rows:
+        trade_key = row.get("trade_key")
+        payload = row.get("payload") or {}
+
+        if not trade_key or trade_key in state or not payload.get("symbol"):
+            continue
+
+        # A symbol already held locally under a different key means local state is
+        # ahead; re-adopting would double the position.
+        if active_symbol_trade(state, payload.get("symbol"))[1] is not None:
+            continue
+
+        payload.setdefault("trade_key", trade_key)
+        state[trade_key] = payload
+        restored.append(payload)
+
+    if restored:
+        save_paper_trades(state)
+        print(
+            "[PAPER STATE RESTORE] re-adopted "
+            f"{len(restored)} open position(s) the state file had lost: "
+            + ", ".join(str(trade.get("symbol")) for trade in restored)
+        )
+
+    return restored
+
+
 def _initial_risk_per_share(entry_price, stop_loss):
 
     try:
