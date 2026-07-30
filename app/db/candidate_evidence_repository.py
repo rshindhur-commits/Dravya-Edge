@@ -24,6 +24,7 @@ class CandidateEvidenceRepository(BestEffortRepository):
         return self._batch_execute("""
             INSERT INTO candidate_evidence (
                 candidate_id, trading_day, symbol, direction, setup, rr, setup_score,
+                holding_profile,
                 option_quality, trend_health, regime, top_candidate, quote_freshness, rule_evaluation, decision,
                 scanner_recommendation, execution_eligibility, execution_outcome, execution_reason,
                 trade_status, telegram_status, telegram_reason,
@@ -35,6 +36,7 @@ class CandidateEvidenceRepository(BestEffortRepository):
             ) VALUES (
                 :candidate_id, CAST(:trading_day AS DATE), :symbol, :direction, :setup,
                 CAST(:rr AS DOUBLE PRECISION), CAST(:setup_score AS DOUBLE PRECISION),
+                :holding_profile,
                 CAST(:option_quality AS DOUBLE PRECISION), :trend_health,
                 :regime, :top_candidate, :quote_freshness, :rule_evaluation, :decision,
                 :scanner_recommendation, :execution_eligibility, :execution_outcome, :execution_reason,
@@ -49,6 +51,7 @@ class CandidateEvidenceRepository(BestEffortRepository):
             ) ON CONFLICT (candidate_id) DO UPDATE SET
                 rr = EXCLUDED.rr,
                 setup_score = EXCLUDED.setup_score,
+                holding_profile = EXCLUDED.holding_profile,
                 option_quality = EXCLUDED.option_quality,
                 trend_health = EXCLUDED.trend_health,
                 regime = EXCLUDED.regime,

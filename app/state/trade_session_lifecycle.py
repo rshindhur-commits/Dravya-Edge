@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from app.state.holding_policy import HoldingProfile, holding_policy
+from app.state.holding_policy import holding_policy
 from app.state.paper_trade_manager import load_paper_trades, save_paper_trades
 from app.state.suggested_trade_manager import (
     PAPER_PROMOTED_STATUSES,
@@ -130,24 +130,3 @@ def initialize_session_lifecycle(trading_day=None, restore_multiday_positions=Tr
         "carried_intraday_positions": restore_carried_intraday_positions(trading_day),
         "archived_candidates": archive_prior_session_candidates(trading_day),
     }
-
-
-def apply_end_of_day_policy(close_trade, close_price_by_symbol=None):
-    close_price_by_symbol = close_price_by_symbol or {}
-    closed = []
-    held = []
-    for trade in load_paper_trades().values():
-        if str(trade.get("status")).upper() != "OPEN":
-            continue
-        policy = holding_policy(trade.get("holding_profile"))
-        if policy.force_eod_exit:
-            symbol = trade.get("symbol")
-            close_trade(
-                symbol,
-                close_price_by_symbol.get(symbol, trade.get("entry_price")),
-                exit_reason="Auto paper exit: end-of-day close",
-            )
-            closed.append(symbol)
-        else:
-            held.append(trade.get("symbol"))
-    return {"closed": closed, "held": held}

@@ -30,6 +30,23 @@ class RuleEvaluation:
         return asdict(self)
 
 
+def resolve_blocked_trade(rule_group, passed, blocked_trade=None):
+    """Only a TRADING rule can block a trade.
+
+    Telegram, Paper, Review, Trade Lifecycle, and Replay are operational
+    outcomes, not entry gates: Telegram is a notification transport that
+    "does not block an alertable action", and Paper/Review describe what
+    happened *after* the decision. Recording blocked_trade=True on them
+    misattributes the cause of a no-trade -- on 2026-07-29 the Telegram rule
+    claimed to have blocked all 884 rows, including the one trade that opened.
+    """
+
+    if rule_domain(rule_group) == "OPERATIONAL":
+        return False
+
+    return not bool(passed) if blocked_trade is None else bool(blocked_trade)
+
+
 def _evaluation(scan_id, row, name, group, actual, required, passed, priority=100, evaluation_phase="ENTRY", blocked_trade=None):
     return RuleEvaluation(
         scan_id=scan_id,
@@ -40,7 +57,7 @@ def _evaluation(scan_id, row, name, group, actual, required, passed, priority=10
         actual_value=actual,
         required_value=required,
         passed=bool(passed),
-        blocked_trade=not bool(passed) if blocked_trade is None else bool(blocked_trade),
+        blocked_trade=resolve_blocked_trade(group, passed, blocked_trade),
         priority=priority,
         evaluation_phase=evaluation_phase,
     )

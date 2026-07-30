@@ -39,5 +39,8 @@ def test_exit_message_includes_trend_capture_when_available():
     )
 
     assert "TRADE CLOSED" in message
-    assert "WIN: 1.1R" in message
+    # The result block renders the outcome and the R multiple on separate lines,
+    # so assert on the parts rather than a single "WIN: 1.1R" string.
+    assert "WIN" in message
+    assert "1.1R" in message
     assert "Trend Capture: 71.4%" in message

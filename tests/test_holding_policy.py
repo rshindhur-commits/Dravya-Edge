@@ -8,7 +8,7 @@ from app.alerts.telegram_alerts import (
     build_trade_cancelled_alert_message,
     build_trade_exit_alert_message,
 )
-from app.runtime.paper_automation_support import _auto_exit_reason
+from app.runtime.paper_automation_support import eod_force_close_reason
 from app.gates.entry_gate import has_active_symbol_trade
 from app.state.holding_policy import HoldingProfile, derive_holding_profile
 from app.state.paper_trade_manager import (
@@ -52,42 +52,56 @@ def test_defaults_to_intraday_profile():
 
 
 def test_eod_exit_respects_holding_policy():
-    controls = {"auto_exit_enabled": False, "eod_close_enabled": True, "profit_r": 10}
-    with patch(
-        "app.runtime.paper_automation_support._current_et",
-        return_value=datetime(2026, 7, 24, 16, 0),
-    ):
-        intraday_reason = _auto_exit_reason(
-            {"holding_profile": "INTRADAY", "entry_price": 100, "stop_loss": 98},
-            100,
-            None,
-            controls,
-        )
-        multiday_reason = _auto_exit_reason(
-            {"holding_profile": "MULTIDAY", "entry_price": 100, "stop_loss": 98},
-            100,
-            None,
-            controls,
-        )
+    controls = {"eod_close_enabled": True}
+    now = datetime(2026, 7, 24, 16, 0)
+
+    intraday_reason = eod_force_close_reason(
+        {"holding_profile": "INTRADAY", "entry_price": 100, "stop_loss": 98},
+        controls,
+        now=now,
+    )
+    multiday_reason = eod_force_close_reason(
+        {"holding_profile": "MULTIDAY", "entry_price": 100, "stop_loss": 98},
+        controls,
+        now=now,
+    )
 
     assert intraday_reason == "Auto paper exit: end-of-day close"
     assert multiday_reason is None
 
 
 def test_eod_uses_the_trade_current_holding_profile():
-    controls = {"auto_exit_enabled": False, "eod_close_enabled": True}
+    controls = {"eod_close_enabled": True}
     with patch(
         "app.runtime.paper_automation_support._current_et",
         return_value=datetime(2026, 7, 24, 16, 0),
     ):
-        reason = _auto_exit_reason(
+        reason = eod_force_close_reason(
             {"holding_profile": "INTRADAY", "entry_price": 100, "stop_loss": 98},
-            100,
-            None,
             controls,
         )
 
     assert reason == "Auto paper exit: end-of-day close"
+
+
+def test_eod_close_does_not_fire_before_the_close_window():
+    reason = eod_force_close_reason(
+        {"holding_profile": "INTRADAY", "entry_price": 100, "stop_loss": 98},
+        {"eod_close_enabled": True},
+        now=datetime(2026, 7, 24, 11, 0),
+    )
+
+    assert reason is None
+
+
+def test_eod_close_does_not_fire_when_disabled():
+    reason = eod_force_close_reason(
+        {"holding_profile": "INTRADAY", "entry_price": 100, "stop_loss": 98},
+        {"eod_close_enabled": False},
+        now=datetime(2026, 7, 24, 16, 0),
+    )
+
+    assert reason is None
 
 
 def test_paused_trade_blocks_reentry_and_can_resume():

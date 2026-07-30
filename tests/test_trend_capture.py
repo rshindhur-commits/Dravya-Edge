@@ -219,7 +219,11 @@ class TrendCaptureTests(unittest.TestCase):
 
             result = _append_trend_capture_for_closed_trade(trade)
 
-        self.assertEqual(result, "trend_capture_analysis.csv")
+        # Returns the trend-capture row, not a filename: the production caller
+        # (paper_trade_manager.close_paper_trade) binds it as `trend_capture_row`
+        # and reads its metrics. This assertion used to expect the filename.
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["Trend Capture %"], 60)
         append_snapshot.assert_called_once()
         append_trend_capture.assert_called_once()
         self.assertEqual(

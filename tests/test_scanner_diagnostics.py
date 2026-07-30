@@ -97,13 +97,22 @@ class ScannerDiagnosticsTests(unittest.TestCase):
 
         self.assertEqual(funnel["ema_rejection_short"], 1)
 
-    def test_telegram_dispatch_returns_enter_paper_and_sent_counts(self):
+    def test_telegram_dispatch_holds_enter_paper_and_sends_review(self):
+        """Scanner-level dispatch only handles REVIEW_TV_CHART.
+
+        ENTER / ENTER_PAPER are deliberately held here: they publish a single
+        NEW TRADE from the paper-open path once a trade actually exists, so they
+        are counted in enter_paper_count but never attempted at scanner level.
+        The previous version of this test asserted the pre-refactor behaviour,
+        where the rejection happened inside maybe_send_scanner_entry_alert
+        instead of in this pre-filter.
+        """
 
         df_results = pd.DataFrame([
             {
                 "Symbol": "NVDA",
                 "Final Signal": "HIGH CONVICTION BULLISH",
-                "Action Status": "ENTER_PAPER",
+                "Action Status": "REVIEW_TV_CHART",
                 "Entry": "BREAKOUT_LONG",
                 "Risk Reward": 2.4,
                 "Option Ticker": "NVDA_CALL",
@@ -123,14 +132,14 @@ class ScannerDiagnosticsTests(unittest.TestCase):
             {
                 "Symbol": "AAPL",
                 "Final Signal": "BULLISH",
-                "Action Status": "WAIT",
-                "Entry": "NO_ENTRY",
-                "Risk Reward": 0,
-                "Option Ticker": None,
-                "Candidate Direction": "NONE",
-                "Option Quality Score": None,
-                "Option Spread %": None,
-                "Option Quote Freshness": None,
+                "Action Status": "ENTER_PAPER",
+                "Entry": "EMA_PULLBACK",
+                "Risk Reward": 2.1,
+                "Option Ticker": "AAPL_CALL",
+                "Candidate Direction": "CALL",
+                "Option Quality Score": 85,
+                "Option Spread %": 3,
+                "Option Quote Freshness": "LIVE_QUOTE",
                 "15m Score": 50,
                 "Alignment Score": 1,
                 "RS Rank Score": 0,
@@ -140,39 +149,35 @@ class ScannerDiagnosticsTests(unittest.TestCase):
 
         with patch(
             "app.main.maybe_send_scanner_entry_alert",
-            side_effect=[
-                {"sent": True, "reason": "SENT"},
-                {"sent": False, "reason": "NOT_ACTIONABLE_STATUS"},
-            ],
+            side_effect=[{"sent": True, "reason": "SENT"}],
         ) as send_alert:
 
             summary = _dispatch_telegram_entry_alerts(df_results)
 
+        # AAPL is the only ENTER_PAPER row; it is counted but never dispatched.
         self.assertEqual(summary["enter_paper_count"], 1)
-        self.assertEqual(summary["attempted_count"], 2)
+        self.assertEqual(summary["attempted_count"], 1)
         self.assertEqual(summary["sent_count"], 1)
         self.assertEqual(summary["blocked_count"], 1)
         self.assertEqual(summary["reasons"]["SENT"], 1)
-        self.assertEqual(summary["reasons"]["NOT_ACTIONABLE_STATUS"], 1)
-        nvda_call = next(
-            call
-            for call in send_alert.call_args_list
-            if call.kwargs["symbol"] == "NVDA"
-        )
-        self.assertEqual(
-            nvda_call.kwargs["setup_score"],
-            87
-        )
+        self.assertEqual(summary["reasons"]["NOT_LIFECYCLE_EVENT"], 1)
+
+        # Only the review candidate reached the alert function.
+        self.assertEqual(len(send_alert.call_args_list), 1)
+        nvda_call = send_alert.call_args_list[0]
+        self.assertEqual(nvda_call.kwargs["symbol"], "NVDA")
+        self.assertEqual(nvda_call.kwargs["setup_score"], 87)
+
         self.assertEqual(df_results.loc[0, "Telegram Eligibility"], "SENT")
         self.assertIsNone(df_results.loc[0, "Telegram Block Reason"])
         self.assertTrue(df_results.loc[0, "Telegram Sent"])
         self.assertEqual(
             df_results.loc[1, "Telegram Eligibility"],
-            "NOT_ACTIONABLE_STATUS"
+            "NOT_LIFECYCLE_EVENT"
         )
         self.assertEqual(
             df_results.loc[1, "Telegram Block Reason"],
-            "NOT_ACTIONABLE_STATUS"
+            "NOT_LIFECYCLE_EVENT"
         )
         self.assertFalse(df_results.loc[1, "Telegram Sent"])
 

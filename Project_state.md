@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-07-28
+Last updated: 2026-07-29
 
 ## Project Purpose
 
@@ -104,8 +104,8 @@ At a high level, each scan does this per symbol:
 - `derive_holding_profile()` runs before the shared decision adapter returns a `TradeDecision`. It prefers an explicit candidate value and otherwise derives a multi-day profile from expected-hold intent or an eligible 14-30+ DTE, high-quality setup; it uses `Setup %` and falls back to `15m Score` when that normalized field is absent. All other candidates default to `INTRADAY`.
 - `app/state/trade_session_lifecycle.py` restores open multi-day paper positions, refreshes `days_held` and `overnight_count`, marks an overnight transition, and archives stale prior-session suggestions. A promoted multi-day suggestion remains available; non-promoted or intraday candidates are set to `ARCHIVED`.
 - Paper trades persist `trade_state`, `holding_profile`, `opened_at`, `closed_at`, `days_held`, `overnight_count`, `forced_eod_exit`, `session_id_open`, `session_id_current`, and `session_id_close`. `status` remains the backward-compatible open/closed field.
-- `paper_trade_state.json` is the sole managed-trade state. Auto-paper is the only new-entry owner; scanner management reads, updates, and closes that same paper record. Scanner finalization and the dashboard both invoke the same auto-paper entry runtime using persisted `auto_paper_settings.json` controls, so standalone `python -m app.main` scans do not depend on a dashboard render to create eligible paper trades. The deprecated direct scanner-state opening path no longer creates `SCANNER_TRACKED` trades. When an existing open legacy `trade_state.json` record is first encountered, it is promoted once into paper state with `entry_source=LEGACY_SCANNER_STATE_MIGRATION`, an `OPEN` paper event, and removal of the duplicate legacy record. It does not emit a retroactive entry alert.
-- `Auto Exit (During Market Hours)` owns only normal stop, target, live-exit, invalidation, and profit-threshold checks. `Force Close Intraday at Market Close` is a separate, final holding-policy consumer: it closes only the trade's current `INTRADAY` profile and leaves `MULTIDAY` positions open. A manual profile change is therefore honored at EOD without mutating the frozen entry thesis.
+- `paper_trade_state.json` is the sole managed-trade state. Auto-paper is the only new-entry owner; scanner management reads, updates, and closes that same paper record. **The scanner is the sole owner of the paper trade lifecycle.** Scanner finalization invokes auto-paper entries, the paper position lifecycle sweep, and the suggestion lifecycle using persisted `auto_paper_settings.json` controls. The dashboard is read-only with respect to trade state: it no longer runs entries, exits, or suggestion sync. The deprecated direct scanner-state opening path no longer creates `SCANNER_TRACKED` trades. When an existing open legacy `trade_state.json` record is first encountered, it is promoted once into paper state with `entry_source=LEGACY_SCANNER_STATE_MIGRATION`, an `OPEN` paper event, and removal of the duplicate legacy record. It does not emit a retroactive entry alert.
+- The `Auto Exit (During Market Hours)` toggle and the `Auto Profit Exit R` control have been **removed**. All market exit decisions (stop, target, EMA, VWAP, MACD, failed breakout, time, multiday profit protection) belong to `app/exit/exit_engine.py::evaluate_exit()` and cannot be disabled from the UI. `Force Close Intraday at Market Close` remains a separate, final holding-policy consumer: it closes only the trade's current `INTRADAY` profile and leaves `MULTIDAY` positions open. A manual profile change is therefore honored at EOD without mutating the frozen entry thesis.
 - Disabling `Force Close Intraday at Market Close` never changes the frozen profile. An open intraday trade carried overnight is restored for management as `INTRADAY`, marked `overnight_intraday_carry`, and emits an operational warning. It is not promoted, does not send `POSITION CONTINUES`, and remains excluded from multi-day restoration semantics.
 - `Restore Multi-day Positions Next Session` defaults to on. When disabled, it skips multi-day restoration and continuation-alert setup but still archives stale candidates at session start.
 - A holding profile is frozen at entry. `override_paper_trade_holding_profile()` accepts only `MANUAL_OVERRIDE` and future `BROKER_SYNC` sources; scanner, exit engine, Telegram, and ranking paths cannot alter it. This preserves the entry thesis while allowing an explicit operator decision to be honored by the EOD policy.
@@ -171,7 +171,7 @@ The Daily Validation Report is the post-market artifact for the Validation page.
 - `run_scanner()` now queues `summarize_telemetry()` as a low-priority runtime job after console table output, trimming noncritical foreground scanner tail work.
 - Market opportunity audit, option liquidity audit, and candidate funnel file writes moved into `_persist_scan_outputs()` under `RuntimeScheduler`. Foreground scanner execution still computes rows/rankings/health/Telegram summary and prints the funnel, but noncritical audit file I/O is deferred.
 - Scanner finalization is now a high-priority non-cancelable `RuntimeJob` named `finalize_scan_outputs`. Foreground scanner execution queues finalization after raw rows are collected and returns. Finalization performs operator table rendering, candidate persistence/ranking, health calculation, Telegram dispatch, funnel calculation, persistence, and cache job scheduling.
-- Dashboard paper automation orchestration now lives in `app/runtime/paper_automation.py`, with helper logic in `app/runtime/paper_automation_support.py`. The runtime paper automation path no longer imports `app.dashboard`; dashboard only calls the runtime entry points.
+- Paper automation orchestration lives in `app/runtime/paper_automation.py`, with helper logic in `app/runtime/paper_automation_support.py` and non-per-symbol lifecycle work in `app/runtime/paper_position_lifecycle.py`. Only the scanner calls these; the dashboard does not.
 - After `df_results` and the health payload are built, `run_scanner()` queues `_persist_scan_outputs()` through `RuntimeScheduler` as a high-priority `RuntimeJob`. That job writes dashboard state, engine health history, candidate snapshots, signal lifecycle rows, scanner output files, and scanner stage profiles. It then queues a separate normal-priority `persist_scan_artifacts_db` job, so DB work cannot delay file-backed persistence.
 - Telegram alert audit DB writes and paper-trade DB upserts also use `run_background()`, so slow or failed Neon writes should not block Telegram sending, paper state JSON/CSV updates, or scanner output.
 - `persist_scan_artifacts_db` promotes candidate snapshots, structured rule evaluations, and existing gate-decision summaries as best-effort database batches. The completed RuleEvaluation framework provides native emitters for Entry, Risk, Option Liquidity, Affordability, Telegram, Paper Automation, and Review. Every record has scan/symbol/setup identity, rule name/group, actual/required values, pass/fail, blocked state, priority, and `evaluation_phase`. `ENTRY` is the default phase; scanner rows emit `ACTIVE` for ongoing trade management, `EXIT` for live exit signals, and `REPLAY` for projection replay outcomes. Migration `003_rule_evaluation_phase.sql` adds the database column. `aggregate_rule_evaluations()` merges and deduplicates native outputs by scan, symbol, setup, phase, group, and name before persistence.
@@ -247,7 +247,7 @@ The Daily Validation Report is the post-market artifact for the Validation page.
 - **Version 1.0 Evidence Freeze:** do not add or loosen V1 strategy behavior until 100-200 completed paper trades span at least 20 trading days and multiple market regimes. New logic must remain shadow-only until persisted evidence supports a human-controlled promotion review.
 - Migration `011_analytics_completion.sql` adds `analytics_summary` for resolved setup, regime/market, and lifecycle/decision aggregates plus `promotion_review` for timestamped human review history. Learning writes repository/Neon state first, then exports the same daily/live JSON payload as a resilient cache; aggregate/review failures cannot alter V1 behavior.
 - `LearningEngineRepository` exposes database-backed daily/lifetime summaries, feature statistics, aggregate statistics, and promotion candidates. Learning, Validation, and Reports prefer available warehouse memory for historical context while retaining file/cache fallback.
-- Final validation baseline: `python -m unittest discover tests` ran 134 tests successfully. The expected background-worker exception in `test_background_queue.py` verifies isolation and does not fail the suite.
+- Final validation baseline: `python -m unittest discover -t . -s tests` runs 174 tests. The `-t . -s tests` form is required so `tests/__init__.py` runs and redirects storage roots to a sandbox; bare `discover tests` skips it and pollutes real `data/` and `app/state/` files. The expected background-worker exception in `test_background_queue.py` verifies isolation and does not fail the suite.
 
 ### Production Entry Diagnostics
 
@@ -331,7 +331,7 @@ The Daily Validation Report is the post-market artifact for the Validation page.
 - Fallback attempts are visible in runtime logs with `[LIQUIDITY FALLBACK] Try ...`, failure, and accepted messages. Scanner rows include `Option Liquidity Attempts` as JSON for the attempted source/ticker/code/reason/spread chain.
 - `app/main.py` appends `option_liquidity_attempts.csv` daily rows for every liquidity attempt, including symbol, selected option ticker, attempt source/ticker/code/reason/spread, liquid flag, and accepted flag.
 - `app/main.py` prints and appends a permanent `candidate_funnel.jsonl` summary with scanned, directional, entry-ready, risk-passed, option-selected, liquidity-passed, affordability-passed, `EMA_REJECTION_SHORT`, `ENTER_PAPER`, Telegram attempted/sent/blocked, and Telegram reasons. `EMA_REJECTION_SHORT_WARNING_THRESHOLD` defaults to `10` and prints a warning if the recent rejection window appears too permissive.
-- Validation commands used for this slice: `d:/Dravya_Trade_Works/.venv/Scripts/python.exe -m unittest tests.test_option_liquidity_fallback` and `d:/Dravya_Trade_Works/.venv/Scripts/python.exe -m unittest discover tests`.
+- Validation commands used for this slice: `d:/Dravya_Trade_Works/.venv/Scripts/python.exe -m unittest tests.test_option_liquidity_fallback` and `d:/Dravya_Trade_Works/.venv/Scripts/python.exe -m unittest discover -t . -s tests`.
 - `app/main.py` marks high-quality unaffordable setups as `QUALITY_BUT_TOO_EXPENSIVE` instead of `ENTER_PAPER`. Cheap contracts that fail the minimum cost/delta affordability rules can surface as `NO_TRADE_LOW_OPTION_QUALITY`.
 - Dashboard suggested-trade lifecycle and paper-validation candidate lists can ignore affordability for research visibility through `SUGGESTIONS_IGNORE_AFFORDABILITY=true` and `PAPER_IGNORE_AFFORDABILITY=true`, while preserving original affordability metadata and keeping real-trade readiness affordability-gated by default.
 
@@ -1046,3 +1046,132 @@ Before live deployment:
 - Run 5-day, 20-day, 60-day, then 6-12 month no-lookahead backtests
 - Add option P/L approximation or historical option quote replay
 - Add persistent DB telemetry storage
+
+## 2026-07-29 Ownership, Measurement, And Correctness Changes
+
+### Single ownership of the trade lifecycle
+
+The dashboard is now read-only with respect to trade state. It previously ran
+`run_auto_paper_entries` / `run_auto_paper_exits` from a page render, using a possibly
+hours-old `scanner_output.xlsx`, with a second exit rule set (`_auto_exit_reason`)
+that bypassed the exit engine and a `profit_r` control that closed at +1R whatever
+the engine intended. That path only executed on the Trading and Developer pages, so
+lifecycle work depended on which page happened to be open.
+
+- Removed the automation block from `app/dashboard.py::main()`, plus ~465 lines of
+  dead duplicate automation (`_run_auto_paper_entries`, `_run_auto_paper_exits`,
+  `_legacy_auto_exit_reason`, `_render_paper_trade_controls`,
+  `_is_swing_hold_eligible`, `_paper_automation_active`).
+- `run_auto_paper_exits` and `_auto_exit_reason` are deleted. `eod_force_close_reason()`
+  owns the single end-of-day holding-policy decision, and the unused third EOD path
+  `apply_end_of_day_policy` is gone.
+- New `app/runtime/paper_position_lifecycle.py` holds the scanner-owned lifecycle work
+  that has no home in the per-symbol loop: session restore/archival, one-per-session
+  `POSITION CONTINUES` alerts, holding-policy EOD force close, visibility for open
+  positions the scan could not manage, and `sync_scan_suggestions()`. It contains no
+  stop/target/profit-R rules by design.
+- The `Auto Exit (During Market Hours)` toggle and `Auto Profit Exit R` input are
+  removed from the sidebar and from `load_auto_paper_controls()`.
+- `_exit_now_alerts` reads the exit engine's persisted `Live Exit Signal` /
+  `Live Exit Reason` instead of re-deriving exits.
+- The dashboard still *triggers* scans; that is delegation to the owner, not a
+  competing decision.
+
+### R is measured against the risk frozen at entry
+
+`_calculate_rr_progress` derived risk from the *current* stop. When the engine moved a
+stop to breakeven at +1R, `abs(entry - stop)` became 0, so `rr_progress` and `mfe_r`
+collapsed to 0 permanently and never recovered. That silently disabled partial profit,
+the ATR trailing stop, and multiday profit protection, all gated on R thresholds. The
+2026-07-29 NVDA trade reached roughly +1.4R, lost all upside management, and closed
+flat with `r_multiple` NULL and trend capture -36.21%.
+
+- `resolve_risk_per_share()` is the single R denominator. `initial_stop_loss` and
+  `initial_risk_per_share` are persisted at open and backfilled before any stop move.
+- `evaluate_exit()` returns `mfe_r` and `risk_per_share`, so V1's own R is observable
+  instead of borrowed from the V2 shadow.
+- The active-trade direction fallback uses the entry stop; the current stop would
+  infer LONG for a short whose stop had moved to breakeven.
+
+### Data freshness is interval-aware
+
+`delay_minutes` counts from the last candle's close, so it cycles from 0 to one full
+interval as the next candle forms. A fixed 2-minute allowance against 5-minute candles
+is unsatisfiable for 3 of every 5 minutes. On 2026-07-29 that produced 1028
+`REALTIME_STOCK_DATA_REQUIRED` blocks (the single largest reason) and 277
+`STALE_STOCK_DATA` actions, mostly clock-phase artifacts rather than a stalled feed.
+
+`stock_data_delay_allowance()` returns the larger of `MAX_STOCK_DATA_DELAY_MINUTES` and
+the candle interval, and **all three** gates use it, so the freshness label and the
+blocking gates can no longer disagree. A genuinely missing bar is still `STALE`.
+
+### Audit and observability invariants
+
+- `audit_unrecorded_entry_recommendations()` guarantees every `ENTRY_RECOMMENDED`
+  candidate carries an execution verdict; an unreached gate records
+  `NO_GATE_VERDICT_RECORDED` instead of leaving the miss undiagnosable.
+- Operational rule groups (`Telegram`, `Paper`, `Review`, `Trade Lifecycle`, `Replay`)
+  can never report `blocked_trade=True`. The Telegram rule previously claimed to have
+  blocked all 884 rows, including the one trade that opened. `resolve_blocked_trade()`
+  derives it from `rule_domain()` so it cannot regress.
+- `_add_holding_profiles()` stamps `INTRADAY`/`MULTIDAY` on every scanner row and
+  `candidate_evidence.holding_profile` is populated. It was NULL on all 295 rows for
+  2026-07-29, making intraday-versus-multiday funnel analysis impossible.
+- `upsert_paper_trade` writes the migration `012` lifecycle columns. They were never
+  written, so `holding_profile` kept its `DEFAULT 'INTRADAY'` while the payload held
+  the real value.
+- `tools/reconcile_learning_memory.py --ledgers` compares `paper_trades` (live state
+  mirror) against `trade` (completed-trade facts). They must agree; on 2026-07-29
+  eleven completed facts had no live-state row. The tool now also loads `.env`, which
+  its database checks always required and never did.
+
+### The scanner schedules itself
+
+`python -m app.main` is single-shot and nothing else looped, so repeated scanning
+depended on Streamlit auto-refresh. On 2026-07-29 only 32 scans were archived between
+08:01 and 17:09 ET, including an 86-minute blind hole from 11:09 to 12:35, roughly 38%
+of a 5-minute cadence.
+
+`app/runtime/scan_loop.py` owns cadence only and makes no trading decision:
+
+```powershell
+python -m app.runtime.scan_loop                 # session-aware cadence
+python -m app.runtime.scan_loop --interval 300  # fixed 5-minute cadence
+python -m app.runtime.scan_loop --skip-closed   # idle while the session is CLOSED
+```
+
+Cadence: `OPENING_RANGE` 120s, `REGULAR` 300s, `PREMARKET` 600s, `AFTERHOURS` 900s,
+`CLOSED` 1800s. A failing scan is logged and the loop continues; SIGINT/SIGTERM finish
+the current scan and exit.
+
+### Stop anchoring is measurable but NOT adopted
+
+`calculate_risk(..., stop_anchor="SWING")` defaults to current behaviour. `"STRUCTURE"`
+anchors breakout/breakdown stops to local structure with the 0.25x ATR floor, the
+treatment `EMA_PULLBACK` already receives. Motivation: on 2026-07-29 `BREAKDOWN_SHORT`
+averaged RR 1.13 with 6 of 64 clearing the 1.5 floor and `BREAKOUT` averaged 1.33,
+because both anchor to `recent_high`/`recent_low` at the far end of the swing just
+travelled; the three local-structure setups averaged 1.52 to 3.05. Raw logs show the
+ATR floor cutting RR from 4.89 to 1.8 in 35 rows.
+
+`tools/regression_ab.py --all` runs both arms over archived days, recomputing
+indicators, entry, and risk from `scanner_snapshot.market_payload` so both arms
+exercise the real `calculate_risk`. It is read-only and compares the arms to each
+other, not to the frozen baseline, which was built with the replay evaluator and would
+measure the evaluator swap instead of the code change.
+
+**Not adopted.** The 2026-07-29 result was +6.03R but average R was identical (1.26 vs
+1.26), win rate -0.5pt, and profit factor 5.21 to 5.13: more trades of the same
+quality, not better trades. Adopt only if average R or profit factor improves across
+multiple days and regimes. The reconstruction's exit model is crude (scan-time price
+against target/stop between snapshots 5-15 minutes apart, full planned RR on a win and
+exactly -1.0 on a loss, target checked before stop), so treat its absolute numbers as a
+relative instrument only, never as P/L.
+
+### Test isolation
+
+`python -m unittest discover -t . -s tests` is now required. Only the
+package-importing form runs `tests/__init__.py`, which redirects `DRAVYA_DATA_DIR` and
+`DRAVYA_STATE_DIR` to a sandbox. Bare `discover tests` imports test modules top-level,
+skips the bootstrap, and writes into the real `data/` and `app/state/` artifacts.
+`pytest tests` is isolated either way via `tests/conftest.py`.

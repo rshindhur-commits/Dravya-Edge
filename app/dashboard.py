@@ -161,9 +161,6 @@ SCANNER_FILE = ROOT_DIR / "scanner_output.xlsx"
 LIVE_SCANNER_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.xlsx"
 LIVE_SCANNER_CSV_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.csv"
 LIVE_DASHBOARD_STATE_FILE = ROOT_DIR / "data" / "live" / "dashboard_state.json"
-SCANNER_LOCK_FILE = ROOT_DIR / "data" / "live" / "scanner_run.lock"
-SCANNER_STATUS_FILE = ROOT_DIR / "data" / "live" / "scanner_run_status.json"
-SCANNER_LOCK_STALE_MINUTES = 10
 TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "trade_state.json"
 TELEMETRY_FILE = ROOT_DIR / "telemetry" / "trade_telemetry.csv"
 PAPER_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "paper_trade_state.json"
@@ -181,6 +178,7 @@ REFRESH_INTERVALS = {
 }
 
 SCANNER_CADENCE_INTERVALS = {
+    "Session-aware (2/5/10 min)": None,
     "5 min": 5,
     "15 min": 15
 }
@@ -2264,24 +2262,15 @@ def _candidate_rows_for_suggestions(df):
 
 
 def _sync_suggested_trades(df):
+    """DEPRECATED no-op. The scanner owns the suggestion lifecycle.
 
-    try:
+    Advancing suggestion state from a dashboard render meant it depended on a
+    browser tab being open, and mutated shared state from the read-only side.
+    `app/runtime/paper_position_lifecycle.py::sync_scan_suggestions()` now runs it
+    during scan finalization. Retained as a no-op so any remaining caller is inert.
+    """
 
-        from app.state.suggested_trade_manager import (
-            cleanup_old_suggestions,
-            sync_suggestions_from_scan
-        )
-
-        sync_suggestions_from_scan(
-            _candidate_rows_for_suggestions(df)
-        )
-        cleanup_old_suggestions()
-
-    except Exception as exc:
-
-        st.warning(
-            f"Suggested trade sync failed: {exc}"
-        )
+    return None
 
 
 def _real_review_scan_count(row):
@@ -3672,187 +3661,11 @@ def _scanner_output_age_minutes():
     )
 
 
-def _load_scanner_run_status():
-
-    return load_json_file(
-        str(SCANNER_STATUS_FILE),
-        {}
-    )
-
-
-def _save_scanner_run_status(status):
-
-    save_json_file(
-        str(SCANNER_STATUS_FILE),
-        status
-    )
-
-
-def _scanner_status_timestamp_age_minutes(field):
-
-    status = _load_scanner_run_status()
-    value = status.get(field)
-
-    if not value:
-
-        return None
-
-    try:
-
-        timestamp = datetime.fromisoformat(value)
-
-        if timestamp.tzinfo is None:
-
-            timestamp = timestamp.replace(
-                tzinfo=ZoneInfo("America/New_York")
-            )
-
-        current_et = datetime.now(
-            ZoneInfo("America/New_York")
-        )
-
-        return round(
-            (current_et - timestamp.astimezone(ZoneInfo("America/New_York"))).total_seconds() / 60,
-            2
-        )
-
-    except Exception:
-
-        return None
-
-
-def _scanner_recently_attempted(cadence_minutes):
-
-    ages = [
-        age for age in [
-            _scanner_status_timestamp_age_minutes("last_started_at"),
-            _scanner_status_timestamp_age_minutes("last_completed_at")
-        ]
-        if age is not None
-    ]
-
-    if not ages:
-
-        return False
-
-    return min(ages) < cadence_minutes
-
-
-def _mark_scanner_started():
-
-    status = _load_scanner_run_status()
-    status.update({
-        "status": "RUNNING",
-        "last_started_at": datetime.now(ZoneInfo("America/New_York")).isoformat()
-    })
-    _save_scanner_run_status(status)
-
-
-def _mark_scanner_completed(result_status="COMPLETED"):
-
-    status = _load_scanner_run_status()
-    status.update({
-        "status": result_status,
-        "last_completed_at": datetime.now(ZoneInfo("America/New_York")).isoformat()
-    })
-    _save_scanner_run_status(status)
-
-
-def _scanner_lock_age_minutes():
-
-    if not SCANNER_LOCK_FILE.exists():
-
-        return None
-
-    modified_at = datetime.fromtimestamp(
-        SCANNER_LOCK_FILE.stat().st_mtime,
-        tz=ZoneInfo("America/New_York")
-    )
-    current_et = datetime.now(
-        ZoneInfo("America/New_York")
-    )
-
-    return round(
-        (current_et - modified_at).total_seconds() / 60,
-        2
-    )
-
-
-def _scanner_is_running():
-
-    lock_age = _scanner_lock_age_minutes()
-
-    if lock_age is None:
-
-        return False
-
-    if lock_age > SCANNER_LOCK_STALE_MINUTES:
-
-        try:
-
-            SCANNER_LOCK_FILE.unlink()
-
-        except Exception:
-
-            pass
-
-        return False
-
-    return True
-
-
-def _acquire_scanner_lock():
-
-    SCANNER_LOCK_FILE.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    try:
-
-        lock_handle = os.open(
-            str(SCANNER_LOCK_FILE),
-            os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        )
-
-    except FileExistsError:
-
-        if _scanner_is_running():
-
-            return False
-
-        try:
-
-            SCANNER_LOCK_FILE.unlink()
-
-        except Exception:
-
-            return False
-
-        return _acquire_scanner_lock()
-
-    with os.fdopen(lock_handle, "w", encoding="utf-8") as file:
-
-        file.write(
-            datetime.now(ZoneInfo("America/New_York")).isoformat()
-        )
-
-    return True
-
-
-def _release_scanner_lock():
-
-    try:
-
-        SCANNER_LOCK_FILE.unlink()
-
-    except FileNotFoundError:
-
-        pass
-
-    except Exception:
-
-        pass
+# The `scanner_run_status.json` polling helpers that used to live here are gone
+# with the browser-triggered scan they served. One of them also deleted the scan
+# lock after 10 minutes, while the lock's own reclaim threshold is 15, so it could
+# unlink a lock a live scan still held. app.runtime.scan_supervisor.status() is now
+# the single source of scan-engine state.
 
 
 def _auto_refresh_defaults():
@@ -3869,11 +3682,7 @@ def _auto_refresh_defaults():
 
     if "scanner_cadence_label" not in st.session_state:
 
-        st.session_state["scanner_cadence_label"] = "5 min"
-
-    if "last_auto_run_marker" not in st.session_state:
-
-        st.session_state["last_auto_run_marker"] = None
+        st.session_state["scanner_cadence_label"] = "Session-aware (2/5/10 min)"
 
     if "auto_paper_enabled" not in st.session_state:
 
@@ -3918,21 +3727,16 @@ def _auto_refresh_defaults():
             "Both"
         )
 
-    if "auto_paper_exit_enabled" not in st.session_state:
-
-        st.session_state["auto_paper_exit_enabled"] = bool(
-            saved_auto_settings.get(
-                "auto_paper_exit_enabled",
-                True
-            )
-        )
-
     if "auto_paper_eod_close_enabled" not in st.session_state:
 
+        # Default ON, matching app.runtime.paper_automation_support. The settings
+        # file is gitignored, so a deployed container starts with no saved settings
+        # and this default decides whether intraday positions are flattened at
+        # 15:55 ET.
         st.session_state["auto_paper_eod_close_enabled"] = _boolish(
             saved_auto_settings.get(
                 "auto_paper_eod_close_enabled",
-                False
+                True
             )
         )
 
@@ -3942,15 +3746,6 @@ def _auto_refresh_defaults():
             saved_auto_settings.get(
                 "restore_multiday_positions",
                 True
-            )
-        )
-
-    if "auto_paper_profit_r" not in st.session_state:
-
-        st.session_state["auto_paper_profit_r"] = float(
-            saved_auto_settings.get(
-                "auto_paper_profit_r",
-                1.0
             )
         )
 
@@ -3990,10 +3785,6 @@ def _render_auto_paper_controls():
         options=["Both", "Calls", "Puts"],
         key="auto_paper_direction"
     )
-    auto_exit_enabled = st.sidebar.toggle(
-        "Auto Exit (During Market Hours)",
-        key="auto_paper_exit_enabled"
-    )
     eod_close_enabled = st.sidebar.toggle(
         "Force Close Intraday at Market Close",
         key="auto_paper_eod_close_enabled"
@@ -4003,16 +3794,9 @@ def _render_auto_paper_controls():
         key="restore_multiday_positions"
     )
 
-    profit_r = st.sidebar.number_input(
-        "Auto Profit Exit R",
-        min_value=0.5,
-        max_value=5.0,
-        step=0.25,
-        key="auto_paper_profit_r"
-    )
-
     st.sidebar.caption(
-        "Paper only. Real orders remain manual."
+        "Paper only. Real orders remain manual. Exits are owned by the scanner's "
+        "exit engine and cannot be disabled here."
     )
 
     controls = {
@@ -4021,10 +3805,8 @@ def _render_auto_paper_controls():
         "min_setup": float(min_setup),
         "min_rr": float(min_rr),
         "direction": direction,
-        "auto_exit_enabled": auto_exit_enabled,
         "eod_close_enabled": eod_close_enabled,
         "restore_multiday_positions": restore_multiday_positions,
-        "profit_r": float(profit_r)
     }
 
     _save_auto_paper_settings({
@@ -4033,14 +3815,77 @@ def _render_auto_paper_controls():
         "auto_paper_min_setup": controls["min_setup"],
         "auto_paper_min_rr": controls["min_rr"],
         "auto_paper_direction": controls["direction"],
-        "auto_paper_exit_enabled": controls["auto_exit_enabled"],
         "auto_paper_eod_close_enabled": controls["eod_close_enabled"],
         "restore_multiday_positions": controls["restore_multiday_positions"],
-        "auto_paper_profit_r": controls["profit_r"]
     })
 
     return controls
 
+
+
+def _render_scan_engine_status(cadence_override_minutes):
+    """Start the in-process scan engine and report it in the sidebar.
+
+    Scanning is no longer triggered by a browser rerun or by an operator button:
+    `app.runtime.scan_supervisor` owns cadence on a daemon thread, so scans
+    continue with no tab open and nothing to click. This panel is read-only
+    status, and it is the panel to check when the page looks stale.
+    """
+
+    from app.runtime.scan_supervisor import ensure_started
+
+    _prime_scanner_environment()
+
+    engine = ensure_started(
+        interval_override=(
+            cadence_override_minutes * 60
+            if cadence_override_minutes
+            else None
+        )
+    )
+
+    st.sidebar.subheader("Scan Engine")
+
+    if not engine.get("thread_alive"):
+
+        st.sidebar.error(
+            "Scan engine thread is not running. Restart Streamlit; no scans are happening."
+        )
+
+    engine_status = str(engine.get("status") or "IDLE")
+    scans = engine.get("scans") or 0
+    failures = engine.get("failures") or 0
+    interval_seconds = engine.get("interval_seconds")
+
+    st.sidebar.caption(
+        f"{engine_status} | session {engine.get('session') or '-'} | "
+        + (f"every {int(interval_seconds) // 60} min" if interval_seconds else "cadence pending")
+    )
+    st.sidebar.caption(
+        f"Scans since engine start: {scans} | failures: {failures}"
+    )
+
+    last_completed = engine.get("last_completed_at")
+
+    if last_completed:
+
+        duration = engine.get("last_duration_seconds")
+        st.sidebar.caption(
+            f"Last scan finished {str(last_completed)[11:19]} ET"
+            + (f" in {duration}s" if duration else "")
+        )
+
+    next_due = engine.get("next_due_at")
+
+    if next_due:
+
+        st.sidebar.caption(f"Next scan due {str(next_due)[11:19]} ET")
+
+    if failures and engine.get("last_error"):
+
+        st.sidebar.warning(f"Last scan error: {engine['last_error']}")
+
+    return engine
 
 
 def _render_auto_refresh_controls():
@@ -4068,7 +3913,7 @@ def _render_auto_refresh_controls():
         options=list(SCANNER_CADENCE_INTERVALS.keys()),
         key="scanner_cadence_label"
     )
-    scanner_cadence_minutes = SCANNER_CADENCE_INTERVALS[
+    cadence_override_minutes = SCANNER_CADENCE_INTERVALS[
         scanner_cadence_label
     ]
     age_minutes = _scanner_output_age_minutes()
@@ -4081,6 +3926,9 @@ def _render_auto_refresh_controls():
 
     st.sidebar.caption(
         f"Market hours: {session_label}"
+    )
+    st.sidebar.caption(
+        "Auto Refresh redraws the page only. Scans are run by the scan engine below."
     )
 
     if age_minutes is None:
@@ -4110,86 +3958,35 @@ def _render_auto_refresh_controls():
             key="scanner_refresh"
         )
 
-    should_run_scanner = (
-        auto_refresh_enabled
-        and not _scanner_is_running()
-        and not _scanner_recently_attempted(scanner_cadence_minutes)
-        and (
-            age_minutes is None
-            or age_minutes >= scanner_cadence_minutes
-        )
-    )
+    engine = _render_scan_engine_status(cadence_override_minutes)
+    engine_interval_seconds = engine.get("interval_seconds")
 
     return {
         "enabled": auto_refresh_enabled,
         "interval_minutes": interval_minutes,
-        "scanner_cadence_minutes": scanner_cadence_minutes,
+        "scanner_cadence_minutes": (
+            cadence_override_minutes
+            or (int(engine_interval_seconds) // 60 if engine_interval_seconds else 5)
+        ),
         "age_minutes": age_minutes,
         "refresh_count": refresh_count,
-        "should_run_scanner": should_run_scanner
+        "engine": engine
     }
 
 
-def _maybe_auto_run_scanner(refresh_state):
+def _prime_scanner_environment():
+    """Publish Streamlit secrets into the environment before the engine starts.
 
-    if not refresh_state["should_run_scanner"]:
+    The scan engine runs on a background thread, and `st.secrets` is only reliably
+    reachable from the script thread, so credentials are resolved here once per
+    process. This ran inside the old per-scan trigger; the engine scans without a
+    trigger, so it has to happen at dashboard start instead or scans would run
+    with no Polygon key.
+    """
 
-        return
-
-    scanner_file = (
-        LIVE_SCANNER_CSV_FILE
-        if LIVE_SCANNER_CSV_FILE.exists()
-        else LIVE_SCANNER_FILE
-        if LIVE_SCANNER_FILE.exists()
-        else SCANNER_FILE
-    )
-    marker = (
-        scanner_file.stat().st_mtime
-        if scanner_file.exists()
-        else "missing"
-    )
-
-    if st.session_state.get("last_auto_run_marker") == marker:
+    if st.session_state.get("scanner_environment_primed"):
 
         return
-
-    st.session_state["last_auto_run_marker"] = marker
-
-    with st.spinner("Auto-running scanner..."):
-
-        try:
-
-            result = _run_scanner_once()
-
-            if result.get("ran"):
-
-                st.sidebar.success(
-                    "Scanner auto-run completed."
-                )
-
-            else:
-
-                st.sidebar.info(
-                    "Scanner already running; showing latest available results."
-                )
-
-        except Exception as exc:
-
-            st.sidebar.error(
-                f"Scanner auto-run failed: {exc}"
-            )
-
-
-def _run_scanner_once():
-
-    if not _acquire_scanner_lock():
-
-        return {
-            "ran": False,
-            "reason": "SCANNER_ALREADY_RUNNING"
-        }
-
-    _mark_scanner_started()
 
     try:
 
@@ -4214,25 +4011,11 @@ def _run_scanner_once():
 
             pass
 
-        from app.main import run_scanner
+        st.session_state["scanner_environment_primed"] = True
 
-        run_scanner()
+    except Exception as exc:
 
-        _mark_scanner_completed("COMPLETED")
-
-        return {
-            "ran": True,
-            "reason": "COMPLETED"
-        }
-
-    except Exception:
-
-        _mark_scanner_completed("FAILED")
-        raise
-
-    finally:
-
-        _release_scanner_lock()
+        st.sidebar.error(f"Could not load scanner credentials: {exc}")
 
 
 def _scanner_context_from_row(row):
@@ -4770,454 +4553,24 @@ def _decision_log_rows(df):
     return output
 
 
-def _run_auto_paper_entries(df, controls):
-    try:
+def _live_exit_reason(scanner_row, trade, controls):
+    """Read the exit engine's own verdict for an open trade. Display only.
 
-        from app.state.paper_trade_manager import load_paper_trades
+    The dashboard does not evaluate exits. Market exit decisions come from
+    app/exit/exit_engine.py via the scanner's persisted `Live Exit Signal` /
+    `Live Exit Reason` columns; the end-of-day case is holding policy.
+    """
 
-        paper_trades = load_paper_trades()
+    from app.runtime.paper_automation_support import eod_force_close_reason
 
-    except Exception:
+    if scanner_row is not None and _boolish(scanner_row.get("Live Exit Signal")):
 
-        paper_trades = {}
-
-    candidates = _paper_trade_candidates(df)
-
-    if candidates.empty:
-
-        log_rows = _decision_log_rows(df)
-
-        if controls["auto_paper_enabled"]:
-
-            if df.empty:
-
-                _record_auto_paper_decision(
-                    "SYSTEM",
-                    "SKIPPED",
-                    "auto paper enabled; scanner output empty",
-                    controls=controls
-                )
-
-                return []
-
-            market_closed_rows = pd.DataFrame()
-            if "Action Status" in df.columns:
-
-                market_closed_rows = df[
-                    df["Action Status"].isin([
-                        "NO_TRADE_MARKET_CLOSED",
-                        "OPTION_MARKET_CLOSED"
-                    ])
-                ]
-
-            if not market_closed_rows.empty:
-
-                market_log_rows = _decision_log_rows(
-                    market_closed_rows
-                )
-
-                if market_log_rows.empty:
-
-                    market_log_rows = log_rows
-
-                if not market_log_rows.empty:
-
-                    for _, row in market_log_rows.iterrows():
-
-                        _record_auto_paper_decision(
-                            row.get("Symbol"),
-                            "SKIPPED",
-                            "market closed",
-                            row,
-                            controls=controls
-                        )
-
-                else:
-
-                    _record_auto_paper_decision(
-                        "SYSTEM",
-                        "SKIPPED",
-                        "auto paper enabled; market closed but no symbol rows found",
-                        controls=controls
-                    )
-
-                return []
-
-            if not log_rows.empty:
-
-                for _, row in log_rows.iterrows():
-
-                    _record_auto_paper_decision(
-                        row.get("Symbol"),
-                        "SKIPPED",
-                        _scanner_block_reason(row),
-                        row,
-                        controls=controls
-                    )
-
-                return []
-
-            _record_auto_paper_decision(
-                "SYSTEM",
-                "SKIPPED",
-                "auto paper enabled; no eligible entry candidates and no symbol rows found",
-                controls=controls
-            )
-
-            return []
-
-        if not log_rows.empty:
-
-            for _, row in log_rows.iterrows():
-
-                _record_auto_paper_decision(
-                    row.get("Symbol"),
-                    "SKIPPED",
-                    "auto paper disabled",
-                    row,
-                    controls=controls
-                )
-
-            return []
-
-        _record_auto_paper_decision(
-            "SYSTEM",
-            "SKIPPED",
-            "auto paper disabled; no current candidates and no symbol rows found",
-            controls=controls
+        return str(
+            scanner_row.get("Live Exit Reason")
+            or "Exit engine signalled an exit"
         )
 
-        return []
-
-    if not controls["auto_paper_enabled"]:
-
-        for _, row in candidates.iterrows():
-
-            _record_auto_paper_decision(
-                row.get("Symbol"),
-                "SKIPPED",
-                "auto paper disabled",
-                row,
-                controls=controls
-            )
-
-        return []
-
-    opened = []
-
-    for _, row in candidates.iterrows():
-
-        allowed, reason = _auto_paper_entry_reason(
-            row,
-            controls,
-            paper_trades
-        )
-
-        if not allowed:
-
-            _record_auto_paper_decision(
-                row.get("Symbol"),
-                "BLOCKED",
-                reason,
-                row,
-                controls=controls
-            )
-
-            continue
-
-        from app.state.paper_trade_manager import open_paper_trade
-        from app.alerts.telegram_alerts import maybe_send_paper_entry_alert
-
-        try:
-
-            from app.state.suggested_trade_manager import promote_suggestion_to_paper_trade
-
-        except Exception:
-
-            promote_suggestion_to_paper_trade = None
-
-        row_for_trade = _annotate_paper_affordability_override(row)
-        scanner_context = _scanner_context_from_row(row_for_trade)
-        is_review_validation = (
-            str(row_for_trade.get("Action Status") or "").strip().upper() == "REVIEW_TV_CHART"
-            and _allow_review_tv_chart_auto_paper()
-        )
-        entry_source = (
-            "AUTO_PAPER_REVIEW_VALIDATION"
-            if is_review_validation
-            else "AUTO_PAPER"
-        )
-        notes_prefix = (
-            "Auto paper review validation entry"
-            if is_review_validation
-            else "Auto paper entry"
-        )
-        spread_note = (
-            "; missing spread allowed for paper"
-            if _safe_float(row.get("Option Spread %"), None) is None
-            else ""
-        )
-        opened_trade = open_paper_trade(
-            symbol=row_for_trade.get("Symbol"),
-            direction=row_for_trade.get("Candidate Direction"),
-            entry_price=row_for_trade.get("Candidate Entry Price"),
-            stop_loss=row_for_trade.get("Candidate Stop Price"),
-            take_profit=row_for_trade.get("Candidate Target Price"),
-            entry_type=row_for_trade.get("Entry"),
-            option_ticker=row_for_trade.get("Option Ticker"),
-            option_bid=row_for_trade.get("Option Bid"),
-            option_ask=row_for_trade.get("Option Ask"),
-            notes=f"{notes_prefix}: {reason}{spread_note}",
-            scanner_context=scanner_context,
-            entry_source=entry_source,
-            trade_mode="PAPER",
-            include_in_strategy_stats=not is_review_validation
-        )
-        paper_trades = load_paper_trades()
-        opened.append(row.get("Symbol"))
-
-        if promote_suggestion_to_paper_trade:
-
-            promote_suggestion_to_paper_trade(
-                symbol=row_for_trade.get("Symbol"),
-                direction=row_for_trade.get("Candidate Direction"),
-                setup_type=row_for_trade.get("Entry"),
-                option_ticker=row_for_trade.get("Option Ticker"),
-                opened_at=opened_trade.get("opened_at"),
-                trade_key=opened_trade.get("trade_key")
-            )
-
-        telegram_entry_result = maybe_send_paper_entry_alert(
-            opened_trade,
-            scanner_context,
-            reason=f"{notes_prefix}: {reason}"
-        )
-        opened_log_row = row_for_trade.copy()
-        opened_log_row["Paper Trade Opened"] = True
-        opened_log_row["Real Trade Readiness"] = _real_trade_readiness(opened_log_row)
-        opened_log_row["Real Entry Checklist"] = _real_entry_checklist(opened_log_row)
-
-        _record_auto_paper_decision(
-            row.get("Symbol"),
-            "TELEGRAM_ENTRY_ALERT",
-            telegram_entry_result.get("reason"),
-            opened_log_row,
-            controls=controls
-        )
-
-        _record_auto_paper_decision(
-            row.get("Symbol"),
-            "OPENED",
-            reason,
-            opened_log_row,
-            trade=opened_trade,
-            controls=controls
-        )
-
-        if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
-
-            break
-
-    return opened
-
-
-def _is_swing_hold_eligible(trade, scanner_row):
-
-    if scanner_row is None:
-
-        return False
-
-    expiration_bucket = str(scanner_row.get("Expiration Bucket") or "").upper()
-    setup = _safe_float(scanner_row.get("Setup %"), 0)
-    rr = _safe_float(scanner_row.get("RR"), 0)
-    option_quality = _safe_float(scanner_row.get("Option Quality Score"), 0)
-
-    if expiration_bucket not in ["PREFERRED_14_30", "LONGER_DTE"]:
-
-        return False
-
-    if setup < 80 or rr < 1.8 or option_quality < 75:
-
-        return False
-
-    if str(scanner_row.get("Late Entry Risk") or "").upper() == "LATE_CHASE_RISK":
-
-        return False
-
-    missed_move = str(scanner_row.get("Missed Move Type") or "").strip()
-    if missed_move and missed_move.lower() not in ["nan", "none"]:
-
-        return False
-
-    if _boolish(scanner_row.get("Live Exit Signal")):
-
-        return False
-
-    return True
-
-
-def _legacy_auto_exit_reason(trade, current_price, scanner_row, controls):
-
-    if not controls["auto_exit_enabled"]:
-
-        return None
-
-    entry = _safe_float(trade.get("entry_price"), None)
-    stop = _safe_float(trade.get("stop_loss"), None)
-    target = _safe_float(trade.get("take_profit"), None)
-    current = _safe_float(current_price, None)
-
-    if entry is None or current is None:
-
-        return None
-
-    direction = _infer_trade_direction(
-        trade.get("direction")
-        or trade.get("entry_type")
-    )
-
-    if direction == "SHORT":
-
-        if stop is not None and current >= stop:
-
-            return "Auto paper exit: stop hit"
-
-        if target is not None and current <= target:
-
-            return "Auto paper exit: target hit"
-
-    else:
-
-        if stop is not None and current <= stop:
-
-            return "Auto paper exit: stop hit"
-
-        if target is not None and current >= target:
-
-            return "Auto paper exit: target hit"
-
-    if scanner_row is not None:
-
-        if _boolish(scanner_row.get("Live Exit Signal")):
-
-            return "Auto paper exit: live exit signal"
-
-        live_exit_reason = str(scanner_row.get("Live Exit Reason") or "")
-        if any(
-            token in live_exit_reason.lower()
-            for token in [
-                "momentum",
-                "vwap",
-                "ema20",
-                "failed breakout",
-                "breakdown"
-            ]
-        ):
-
-            return f"Auto paper exit: {live_exit_reason}"
-
-    if _calculate_trade_r_progress(trade, current) >= controls.get(
-        "profit_r",
-        1.0
-    ):
-
-        return "Auto paper exit: profit threshold reached"
-
-    if (
-        controls["eod_close_enabled"]
-        and _current_et().time() >= AUTO_PAPER_EOD_CLOSE
-    ):
-
-        if _is_swing_hold_eligible(trade, scanner_row):
-
-            return None
-
-        return "Auto paper exit: end-of-day close"
-
-    return None
-
-
-def _auto_exit_reason(trade, current_price, scanner_row, controls):
-
-    from app.runtime.paper_automation_support import _auto_exit_reason as runtime_auto_exit_reason
-
-    return runtime_auto_exit_reason(
-        trade,
-        current_price,
-        scanner_row,
-        controls,
-    )
-
-
-def _run_auto_paper_exits(df, controls):
-
-    if not controls["auto_exit_enabled"]:
-
-        return []
-
-    try:
-
-        from app.state.paper_trade_manager import load_paper_trades
-
-        paper_trades = load_paper_trades()
-
-    except Exception:
-
-        paper_trades = {}
-
-    current_prices = {}
-    if not df.empty and "Symbol" in df.columns:
-
-        current_prices = df.set_index("Symbol")["Price"].to_dict()
-
-    closed = []
-
-    for _, trade in paper_trades.items():
-
-        symbol = trade.get("symbol")
-
-        if trade.get("status") != "OPEN":
-
-            continue
-
-        current_price = current_prices.get(
-            symbol,
-            trade.get("entry_price")
-        )
-        scanner_row = None
-
-        if not df.empty and "Symbol" in df.columns:
-
-            matching_rows = df[df["Symbol"] == symbol]
-            if not matching_rows.empty:
-
-                scanner_row = matching_rows.iloc[0]
-
-        reason = _auto_exit_reason(
-            trade,
-            current_price,
-            scanner_row,
-            controls
-        )
-
-        if not reason:
-
-            continue
-
-        scanner_context = (
-            _scanner_context_from_row(scanner_row)
-            if scanner_row is not None
-            else None
-        )
-        _close_paper_trade(
-            symbol,
-            current_price,
-            scanner_context=scanner_context,
-            exit_reason=reason
-        )
-        closed.append(symbol)
-
-    return closed
+    return eod_force_close_reason(trade, controls)
 
 
 def _render_auto_paper_decision_log(show_full_expander=True):
@@ -5530,10 +4883,9 @@ def _exit_now_alerts(df, controls):
                 scanner_row = matching.iloc[0]
 
         current_price = current_prices.get(symbol, trade.get("entry_price"))
-        reason = _auto_exit_reason(
-            trade,
-            current_price,
+        reason = _live_exit_reason(
             scanner_row,
+            trade,
             controls
         )
 
@@ -6767,17 +6119,6 @@ def _render_trading_page_from_state(state, refresh_state):
     _render_today_performance(state)
     _render_why_no_trade(state)
     _render_missed_opportunities(state)
-
-
-def _paper_automation_active(auto_paper_controls):
-
-    auto_paper_controls = auto_paper_controls or {}
-
-    return bool(
-        auto_paper_controls.get("auto_paper_enabled")
-        or auto_paper_controls.get("auto_exit_enabled")
-        or auto_paper_controls.get("eod_close_enabled")
-    )
 
 
 def _render_validation_page(df):
@@ -8908,121 +8249,6 @@ def _render_last_seen_candidates(df):
     )
 
 
-def _render_paper_trade_controls(df):
-
-    manual_entries_enabled = _manual_paper_entries_enabled()
-    show_manual_buttons = _show_manual_paper_buttons()
-
-    candidates = _paper_trade_candidates(df)
-
-    if candidates.empty:
-
-        st.info("No auto-paper candidates requiring review right now.")
-        return
-
-    st.caption(
-        "System validation path is Auto Paper + Telegram alerts. "
-        "Manual paper entry is hidden by default to keep telemetry clean."
-    )
-
-    age_minutes = _scanner_output_age_minutes()
-
-    if age_minutes is not None:
-
-        st.caption(
-            f"Current scanner output age: {age_minutes} minutes"
-        )
-
-    for _, row in candidates.iterrows():
-
-        symbol = row.get("Symbol")
-        confirm_key = f"confirm_{symbol}"
-        button_key = f"paper_enter_{symbol}"
-
-        with st.expander(
-            f"{symbol} {row.get('Candidate Direction')} candidate"
-        ):
-
-            ai_eligible, ai_reason = _ai_candidate_eligibility(row)
-
-            st.write(
-                {
-                    "Entry": row.get("Candidate Entry Price"),
-                    "Stop": row.get("Candidate Stop Price"),
-                    "Target": row.get("Candidate Target Price"),
-                    "RR": row.get("Candidate RR"),
-                    "Setup": row.get("Entry"),
-                    "Next": row.get("Next Condition"),
-                    "Recommended Option": row.get("Recommended Option"),
-                    "Alternate Short DTE": row.get("Short DTE Option"),
-                    "Alternate Longer DTE": row.get("Longer DTE Option"),
-                    "Option Ticker": row.get("Option Ticker"),
-                    "Option Expiration": row.get("Option Expiration"),
-                    "Option Strike": row.get("Option Strike"),
-                    "Option Moneyness": row.get("Option Moneyness"),
-                    "Expiration Bucket": row.get("Expiration Bucket"),
-                    "Expiration Risk": row.get("Expiration Risk"),
-                    "Option Mid": row.get("Option Mid Price"),
-                    "Option Spread %": row.get("Option Spread %"),
-                    "Option Quality": row.get("Option Liquidity Grade"),
-                    "Quote Freshness": row.get("Option Quote Freshness")
-                }
-            )
-            st.caption(row.get("Live Chart Checklist"))
-
-            ai_button_key = f"ai_explain_{symbol}"
-
-            if st.button(
-                "Explain this candidate with AI",
-                key=ai_button_key,
-                disabled=not ai_eligible
-            ):
-
-                summary, from_cache = _generate_candidate_ai_summary(row)
-                cache_note = (
-                    "cached"
-                    if from_cache
-                    else "new"
-                )
-                st.info(
-                    f"AI summary ({cache_note}):\n\n{summary}"
-                )
-
-            if not ai_eligible:
-
-                st.caption(
-                    f"AI explanation disabled: {ai_reason}"
-                )
-
-            if not show_manual_buttons:
-
-                continue
-
-            if not manual_entries_enabled:
-
-                st.caption(
-                    "Manual paper entry is disabled. Set "
-                    "ENABLE_MANUAL_PAPER_ENTRIES=true and "
-                    "SHOW_MANUAL_PAPER_BUTTONS=true for debug-only use."
-                )
-                continue
-
-            live_confirmed = st.checkbox(
-                "I manually confirmed this setup on the live chart",
-                key=confirm_key
-            )
-
-            if st.button(
-                "Paper enter",
-                key=button_key,
-                disabled=not live_confirmed
-            ):
-
-                _open_paper_trade_from_row(row)
-                st.success(f"Opened paper trade for {symbol}")
-                st.rerun()
-
-
 def _render_paper_exit_controls(df):
 
     if not _allow_manual_paper_close():
@@ -9265,33 +8491,12 @@ def main():
         ],
         key="dashboard_page",
     )
-    _maybe_auto_run_scanner(refresh_state)
 
-    if st.button("Run scanner now"):
+    # No scan trigger here. Scanning is owned by app.runtime.scan_supervisor,
+    # started from the sidebar's Scan Engine panel, so cadence does not depend on
+    # a rerun, a page, or an operator remembering to click anything.
 
-        with st.spinner("Running scanner..."):
-
-            try:
-
-                result = _run_scanner_once()
-
-                if result.get("ran"):
-
-                    st.success("Scanner completed. Dashboard refreshed.")
-
-                else:
-
-                    st.info("Scanner already running; showing latest available results.")
-
-            except Exception as exc:
-
-                st.error(f"Scanner failed: {exc}")
-
-    if (
-        TRADING_DASHBOARD_STATE_ONLY
-        and page == "Trading"
-        and not _paper_automation_active(auto_paper_controls)
-    ):
+    if TRADING_DASHBOARD_STATE_ONLY and page == "Trading":
 
         cached_state = _load_cached_state("dashboard_state.json", profile="trading")
 
@@ -9354,7 +8559,7 @@ def main():
         st.warning("scanner_output.xlsx not found or empty. Run python -m app.main first.")
         return
 
-    _sync_suggested_trades(df)
+    # Suggestion lifecycle is advanced by the scanner, not by rendering a page.
     df = _add_paper_trade_opened(df)
     df = _add_real_trade_readiness(df)
     df = _enrich_with_suggestion_lifecycle(df)
@@ -9367,36 +8572,11 @@ def main():
         latest_scanner_run = latest_time.iloc[0]
         st.caption(f"Last scanner run: {latest_scanner_run}")
 
-    from app.runtime.paper_automation import (
-        run_auto_paper_entries,
-        run_auto_paper_exits
-    )
-
-    auto_closed = run_auto_paper_exits(
-        df,
-        auto_paper_controls
-    )
-
-    if auto_closed:
-
-        st.success(
-            "Auto-closed paper trades: "
-            + ", ".join(auto_closed)
-        )
-        st.rerun()
-
-    auto_opened = run_auto_paper_entries(
-        df,
-        auto_paper_controls
-    )
-
-    if auto_opened:
-
-        st.success(
-            "Auto-opened paper trades: "
-            + ", ".join(auto_opened)
-        )
-        st.rerun()
+    # Paper trade entries, management, and exits are owned exclusively by the
+    # scanner (app/main.py). The dashboard never opens, updates, or closes a
+    # paper trade automatically: it read the stale scanner_output.xlsx, applied a
+    # second exit rule set that bypassed the exit engine, and only ran on the
+    # Trading/Developer pages. Trigger a scan instead; the scanner decides.
 
     dashboard_state = _load_dashboard_state(df)
 

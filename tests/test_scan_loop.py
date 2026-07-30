@@ -1,0 +1,110 @@
+"""The scanner must schedule itself rather than depend on a browser tab.
+
+`python -m app.main` is single-shot, so before this the only thing driving repeated
+scans was Streamlit auto-refresh. On 2026-07-29 that produced 32 archived scans with
+an 86-minute blind hole (11:09-12:35 ET), about 38% of a 5-minute cadence.
+"""
+
+import unittest
+from datetime import datetime
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
+
+from app.runtime import scan_loop
+
+ET = ZoneInfo("America/New_York")
+
+
+class IntervalTests(unittest.TestCase):
+
+    def test_regular_session_is_denser_than_after_hours(self):
+
+        self.assertLess(
+            scan_loop.interval_for_session("REGULAR"),
+            scan_loop.interval_for_session("AFTERHOURS"),
+        )
+
+    def test_opening_range_is_the_densest(self):
+
+        intervals = {
+            name: scan_loop.interval_for_session(name)
+            for name in scan_loop.SESSION_INTERVALS
+        }
+        self.assertEqual(min(intervals, key=intervals.get), "OPENING_RANGE")
+
+    def test_override_wins_and_is_floored(self):
+
+        self.assertEqual(scan_loop.interval_for_session("REGULAR", 60), 60)
+        self.assertEqual(scan_loop.interval_for_session("REGULAR", 1), 30)
+
+    def test_unknown_session_falls_back_to_the_default(self):
+
+        self.assertEqual(
+            scan_loop.interval_for_session("NOT_A_SESSION"),
+            scan_loop.DEFAULT_INTERVAL,
+        )
+
+    def test_session_is_read_from_the_scanner(self):
+
+        session = scan_loop.current_session(datetime(2026, 7, 30, 10, 30, tzinfo=ET))
+        self.assertEqual(session, "REGULAR")
+
+
+class LoopTests(unittest.TestCase):
+
+    def setUp(self):
+        scan_loop._stopping = False
+        self.addCleanup(setattr, scan_loop, "_stopping", False)
+
+    def test_loop_runs_the_requested_number_of_scans(self):
+
+        with patch("app.main.run_scanner") as run_scanner, \
+             patch("app.runtime.scan_loop._sleep"), \
+             patch("app.runtime.scan_loop.signal.signal"):
+
+            result = scan_loop.run_scan_loop(interval_override=30, max_scans=3)
+
+        self.assertEqual(run_scanner.call_count, 3)
+        self.assertEqual(result, {"scans": 3, "failures": 0})
+
+    def test_a_failing_scan_does_not_stop_the_loop(self):
+        """A bad cycle must not end the session's coverage."""
+
+        with patch("app.main.run_scanner",
+                   side_effect=[RuntimeError("polygon down"), None, None]) as run_scanner, \
+             patch("app.runtime.scan_loop._sleep"), \
+             patch("app.runtime.scan_loop.signal.signal"):
+
+            result = scan_loop.run_scan_loop(interval_override=30, max_scans=3)
+
+        self.assertEqual(run_scanner.call_count, 3)
+        self.assertEqual(result["scans"], 3)
+        self.assertEqual(result["failures"], 1)
+
+    def test_skip_closed_does_not_scan_while_closed(self):
+
+        with patch("app.main.run_scanner") as run_scanner, \
+             patch("app.runtime.scan_loop.current_session", return_value="CLOSED"), \
+             patch("app.runtime.scan_loop._sleep",
+                   side_effect=lambda _s: setattr(scan_loop, "_stopping", True)), \
+             patch("app.runtime.scan_loop.signal.signal"):
+
+            scan_loop.run_scan_loop(skip_closed=True)
+
+        run_scanner.assert_not_called()
+
+    def test_stop_signal_ends_the_loop(self):
+
+        scan_loop._request_stop(15, None)
+
+        with patch("app.main.run_scanner") as run_scanner, \
+             patch("app.runtime.scan_loop.signal.signal"):
+
+            result = scan_loop.run_scan_loop(interval_override=30)
+
+        run_scanner.assert_not_called()
+        self.assertEqual(result["scans"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

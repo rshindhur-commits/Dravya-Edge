@@ -47,6 +47,35 @@ MAX_DELAY_REGULAR = 20
 
 MAX_DELAY_EXTENDED = 25
 
+# =====================================
+# Minimum candles required per interval
+# =====================================
+# compute_indicators() returns an EMPTY frame below these counts, so a caller
+# that needs a usable higher timeframe must fetch enough 5m history to satisfy
+# the resampled interval too. Keep this the single source of truth.
+
+INTERVAL_MIN_CANDLES = {
+
+    "5m": 25,
+
+    "15m": 10,
+
+    "1h": 5
+
+}
+
+DEFAULT_MIN_CANDLES = 20
+
+# 5m bars needed before the 15m frame can build indicators. The exit engine runs
+# on 15m, so this is the bar count an open position needs to be exit-evaluated.
+# 15m needs 3 five-minute bars per candle; the buffer absorbs bucket alignment.
+# Deliberately excludes the 1h requirement: 1h feeds the multi-timeframe signal,
+# not the exit, and including it would force a refetch for most of the morning.
+MIN_5M_BARS_FOR_15M_INDICATORS = max(
+    INTERVAL_MIN_CANDLES["5m"],
+    INTERVAL_MIN_CANDLES["15m"] * 3 + 3,
+)
+
 
 def get_polygon_data(
     symbol,
@@ -624,20 +653,9 @@ def compute_indicators(
     if df.empty:
         return df
 
-    # Minimum candles required
-    interval_minimums = {
-
-        "5m": 25,
-
-        "15m": 10,
-
-        "1h": 5
-
-    }
-
-    MIN_CANDLES = interval_minimums.get(
+    MIN_CANDLES = INTERVAL_MIN_CANDLES.get(
         interval,
-        20
+        DEFAULT_MIN_CANDLES
     )
 
     if len(df) < MIN_CANDLES:
