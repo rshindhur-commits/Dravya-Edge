@@ -66,14 +66,48 @@ def _get_timestamp_et(latest):
         return None
 
 
+def resolve_risk_per_share(entry_price, initial_stop_loss, current_stop_loss):
+    """Risk per share as fixed at entry — the only valid R denominator.
+
+    R must be measured against the risk the trade was opened with. Deriving it
+    from the *current* stop breaks the moment a stop is moved: a breakeven move
+    makes `abs(entry - stop)` zero, so rr_progress and mfe_r collapse to 0 and
+    never recover. That silently disables partial profit, the ATR trailing stop,
+    and multiday profit protection, all of which are gated on R thresholds.
+
+    Falls back to the current stop for trades opened before `initial_stop_loss`
+    was persisted.
+    """
+
+    for candidate in (initial_stop_loss, current_stop_loss):
+
+        if candidate is None or entry_price is None:
+            continue
+
+        try:
+            risk = abs(float(entry_price) - float(candidate))
+        except (TypeError, ValueError):
+            continue
+
+        if risk > 0:
+            return risk
+
+    return 0.0
+
+
 def _calculate_rr_progress(
     current_price,
     entry_price,
     stop_loss,
-    is_short
+    is_short,
+    risk_per_share=None
 ):
 
-    risk = abs(entry_price - stop_loss)
+    risk = (
+        risk_per_share
+        if risk_per_share is not None
+        else abs(entry_price - stop_loss)
+    )
 
     if risk <= 0:
 
@@ -202,6 +236,18 @@ def evaluate_exit(
         "take_profit"
     )
 
+    # The protective stop may have been moved to breakeven or trailed. R is
+    # always measured against the risk frozen at entry, never the moved stop.
+    initial_stop_loss = (
+        risk_setup.get("initial_stop_loss")
+        or (trade_state or {}).get("initial_stop_loss")
+    )
+    risk_per_share = resolve_risk_per_share(
+        entry_price,
+        initial_stop_loss,
+        stop_loss
+    )
+
     current_price = latest["Close"]
     atr = latest.get("ATR", 0) or 0
 
@@ -249,7 +295,8 @@ def evaluate_exit(
         current_price=current_price,
         entry_price=entry_price,
         stop_loss=stop_loss,
-        is_short=is_short
+        is_short=is_short,
+        risk_per_share=risk_per_share
     )
     direction = "PUT" if is_short else "CALL"
     trend_health = evaluate_live_trend_health(latest, direction)
@@ -258,6 +305,7 @@ def evaluate_exit(
         entry_price,
         stop_loss,
         is_short,
+        risk_per_share=risk_per_share,
     )
     exit_confidence = evaluate_exit_confidence(
         latest,
@@ -359,7 +407,7 @@ def evaluate_exit(
 
     if not exit_signal and holding_profile == "MULTIDAY" and mfe_r >= profit_lock_mfe_r:
 
-        risk = abs(entry_price - stop_loss)
+        risk = risk_per_share
         profit_lock_stop = (
             entry_price - (risk * profit_lock_r)
             if is_short
@@ -566,6 +614,11 @@ def evaluate_exit(
         "trailing_stop": _round_float(trailing_stop),
         "updated_stop": _round_float(updated_stop),
         "rr_progress": _round_float(rr_progress),
+        # V1's own R measurements, against the risk frozen at entry. Exposed so
+        # callers no longer have to borrow MFE from the V2 shadow, which carries
+        # its own independent risk denominator.
+        "mfe_r": _round_float(mfe_r),
+        "risk_per_share": _round_float(risk_per_share),
         "highest_price": _round_float(highest_price),
         "lowest_price": _round_float(lowest_price),
         "bars_in_trade": int(bars_in_trade),

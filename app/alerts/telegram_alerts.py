@@ -15,11 +15,12 @@ from app.gates import (
 )
 from app.runtime import measure_runtime
 from app.runtime.telegram_dispatcher import dispatch_telegram_message
+from app.storage.daily_paths import state_path
 from app.utils.json_store import load_json_file, save_json_file
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-ALERT_STATE_FILE = ROOT_DIR / "app" / "state" / "telegram_alert_state.json"
+ALERT_STATE_FILE = state_path("telegram_alert_state.json")
 MAX_SENT_ALERTS = 1000
 ENTRY_EVENT_TYPE = "ENTRY"
 REVIEW_EVENT_TYPE = "REVIEW"
@@ -1895,8 +1896,11 @@ def build_telegram_rule_evaluations(scanner_context, result, scan_id, symbol, se
     result = result or {}
     reason = result.get("reason")
     sent = bool(result.get("sent"))
+    eligible = sent or reason == "ELIGIBLE"
     return [
-        RuleEvaluation(scan_id, symbol, setup, "Telegram Eligibility", "Telegram", reason, "ELIGIBLE", sent or reason == "ELIGIBLE", not (sent or reason == "ELIGIBLE"), 60)
+        # blocked_trade is always False: Telegram is a delivery transport, not an
+        # entry gate. A failed send is not a trade-decision failure.
+        RuleEvaluation(scan_id, symbol, setup, "Telegram Eligibility", "Telegram", reason, "ELIGIBLE", eligible, False, 60)
     ]
 
 

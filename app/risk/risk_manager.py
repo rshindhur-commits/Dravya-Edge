@@ -50,7 +50,43 @@ def _risk_direction(analysis, entry_type):
     return "UNKNOWN"
 
 
-def calculate_risk(df, analysis, entry_setup):
+STRUCTURE_STOP_SETUPS = {
+    "BREAKOUT",
+    "BREAKOUT_LONG",
+    "COILED_BREAKOUT",
+    "BREAKDOWN_SHORT",
+}
+
+
+def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
+    """Size risk for a candidate setup.
+
+    `stop_anchor` selects where a breakout/breakdown stop is anchored:
+
+    * "SWING"     - current production behaviour. The stop is the wider of the
+                    recent swing extreme and an ATR stop, then floored at a full
+                    ATR. On 2026-07-29 this put BREAKDOWN_SHORT at an average RR
+                    of 1.13 (6 of 64 clearing the 1.5 floor) and BREAKOUT at 1.33,
+                    because `recent_high`/`recent_low` sit at the far end of the
+                    swing price just travelled.
+    * "STRUCTURE" - candidate change under evaluation. Anchors the stop to local
+                    structure and applies the 0.25 x ATR floor, i.e. the treatment
+                    EMA_PULLBACK already gets (average RR 3.05).
+
+    "SWING" is the default so nothing changes until a measured comparison
+    supports the switch. tools/regression_ab.py runs both arms over an archived
+    day and reports the R difference.
+    """
+
+    entry_type_for_anchor = (
+        (entry_setup or {}).get("entry_type")
+        if isinstance(entry_setup, dict)
+        else None
+    )
+    structure_stops = (
+        str(stop_anchor or "SWING").upper() == "STRUCTURE"
+        and str(entry_type_for_anchor or "").upper() in STRUCTURE_STOP_SETUPS
+    )
 
     recent_high = (
         df["High"]
@@ -227,6 +263,21 @@ def calculate_risk(df, analysis, entry_setup):
                 entry_price - (atr * 2.0)
             )
 
+        elif structure_stops:
+
+            # Local-structure stop, mirroring EMA_REJECTION_SHORT/VWAP_REJECTION.
+            stop_loss = max(
+                latest["High"] + (atr * 0.15),
+                latest["EMA9"] + (atr * 0.10)
+            )
+
+            take_profit = min(
+                recent_low - (atr * 0.20),
+                entry_price - (
+                    atr * target_atr_multiplier
+                )
+            )
+
         else:
 
             stop_loss = max(
@@ -272,10 +323,18 @@ def calculate_risk(df, analysis, entry_setup):
             "COILED_BREAKOUT"
         ]:
 
-            stop_loss = min(
-                recent_low,
-                entry_price - (
-                    atr * stop_atr_multiplier
+            stop_loss = (
+                # Local-structure stop, mirroring the EMA_PULLBACK treatment.
+                min(
+                    latest["Low"] - (atr * 0.15),
+                    latest["EMA9"] - (atr * 0.10)
+                )
+                if structure_stops
+                else min(
+                    recent_low,
+                    entry_price - (
+                        atr * stop_atr_multiplier
+                    )
                 )
             )
 
@@ -312,8 +371,10 @@ def calculate_risk(df, analysis, entry_setup):
 
     minimum_stop_distance = atr
 
-    if entry_type == "EMA_PULLBACK":
+    if entry_type == "EMA_PULLBACK" or structure_stops:
 
+        # A structure-anchored stop must not be widened back to a full ATR;
+        # doing so is what collapsed breakout/breakdown RR below the 1.5 floor.
         minimum_stop_distance = atr * 0.25
 
     original_stop_loss = stop_loss

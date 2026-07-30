@@ -396,11 +396,26 @@ def _risk_alerts(positions):
     return alerts
 
 
+def _unmanaged_position_alerts(state):
+    """Open positions the last scan could not exit-evaluate.
+
+    The scanner retries market data for held symbols; anything still listed here
+    went a whole scan without an exit evaluation and needs operator attention.
+    """
+    unmanaged = (
+        ((state or {}).get("scanner_health") or {}).get("paper_lifecycle") or {}
+    ).get("unmanaged") or []
+    return [
+        (str(symbol), "Not managed last scan", "No market data for exit evaluation")
+        for symbol in unmanaged
+    ]
+
+
 def _render_risk_monitor(state):
     import streamlit as st
 
     st.subheader("Active Risk Monitor")
-    alerts = _risk_alerts(_active_positions())
+    alerts = _unmanaged_position_alerts(state) + _risk_alerts(_active_positions())
     if not alerts:
         st.success("No active risks")
         return

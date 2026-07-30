@@ -6,14 +6,13 @@ import pandas as pd
 
 from app.gates import price_geometry_error
 from app.state.holding_policy import derive_holding_profile
+from app.storage.daily_paths import state_path
 from app.storage.signal_lifecycle_store import record_signal_expiry_transition
 from app.utils.json_store import load_json_file, save_json_file
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-SUGGESTED_TRADE_STATE_FILE = str(
-    ROOT_DIR / "app" / "state" / "suggested_trade_state.json"
-)
+SUGGESTED_TRADE_STATE_FILE = str(state_path("suggested_trade_state.json"))
 ET = ZoneInfo("America/New_York")
 
 ACTIVE_STATUSES = {

@@ -3,6 +3,89 @@ from __future__ import annotations
 import pandas as pd
 
 
+NO_GATE_VERDICT = "NO_GATE_VERDICT_RECORDED"
+
+
+def _is_blank(value):
+
+    if value is None:
+        return True
+
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    return str(value).strip() == ""
+
+
+def audit_unrecorded_entry_recommendations(df, controls=None):
+    """Guarantee every scanner entry recommendation carries an execution verdict.
+
+    run_auto_paper_entries() accounts for every actionable row it sees, on every
+    return path. But it is only reachable from scan finalization, so if it never
+    runs -- a lost runtime job, an exception raised before it, or an older code
+    path -- an ENTRY_RECOMMENDED candidate reaches the artifacts with no recorded
+    gate verdict at all.
+
+    That is exactly what happened to the 2026-07-29 PUT recommendations: three
+    candidates passed every quality gate, never opened, and left no row in
+    auto_paper_decisions.csv explaining why. Recording an explicit verdict keeps
+    the gap diagnosable instead of silent.
+    """
+
+    from app.runtime.paper_automation_support import (
+        _auto_paper_actionable_rows,
+        _record_auto_paper_decision,
+    )
+
+    if df is None or df.empty or "Action Status" not in df.columns:
+        return []
+
+    actionable = _auto_paper_actionable_rows(df)
+
+    if actionable.empty:
+        return []
+
+    unrecorded = []
+
+    for _, row in actionable.iterrows():
+
+        if "Execution Outcome" in row.index and not _is_blank(row.get("Execution Outcome")):
+            continue
+
+        symbol = row.get("Symbol")
+
+        try:
+            _record_auto_paper_decision(
+                symbol,
+                "SKIPPED",
+                NO_GATE_VERDICT,
+                row,
+                controls=controls or {},
+            )
+        except Exception as exc:
+            print(f"[AUTO PAPER AUDIT WARNING] {symbol}: {exc}")
+
+        if row.name in df.index:
+            df.loc[row.name, "Execution Eligibility"] = "NOT_EXECUTED"
+            df.loc[row.name, "Execution Outcome"] = "SKIPPED"
+            df.loc[row.name, "Execution Reason"] = NO_GATE_VERDICT
+            df.loc[row.name, "Trade Status"] = "NOT_CREATED"
+
+        unrecorded.append(symbol)
+
+    if unrecorded:
+        print(
+            "[AUTO PAPER AUDIT] no gate verdict was recorded for "
+            f"{len(unrecorded)} entry recommendation(s): "
+            + ", ".join(str(symbol) for symbol in unrecorded)
+        )
+
+    return unrecorded
+
+
 def run_auto_paper_entries(df, controls):
 
     from app.alerts.telegram_alerts import maybe_send_paper_entry_alert
@@ -318,102 +401,3 @@ def run_auto_paper_entries(df, controls):
 
     report_accounting()
     return opened
-
-
-def run_auto_paper_exits(df, controls):
-    from app.runtime.paper_automation_support import (
-        _auto_exit_reason,
-        _close_paper_trade,
-        _scanner_context_from_row,
-    )
-    from app.alerts.telegram_alerts import (
-        maybe_send_multiday_position_continue_alert,
-        maybe_send_paper_trade_update_alert,
-    )
-    from app.state.paper_trade_manager import load_paper_trades
-    from app.state.trade_session_lifecycle import initialize_session_lifecycle
-
-    try:
-
-        session_lifecycle = initialize_session_lifecycle(
-            restore_multiday_positions=controls.get("restore_multiday_positions", True),
-        )
-        for carried_trade in session_lifecycle.get("carried_intraday_positions", []):
-            print(
-                "[INTRADAY OVERNIGHT CARRY] "
-                f"{carried_trade.get('symbol')}: "
-                f"{carried_trade.get('overnight_carry_warning')}"
-            )
-        paper_trades = load_paper_trades()
-
-    except Exception:
-
-        paper_trades = {}
-
-    current_prices = {}
-
-    if not df.empty and "Symbol" in df.columns:
-
-        current_prices = df.set_index("Symbol")["Price"].to_dict()
-
-    closed = []
-
-    for _, trade in paper_trades.items():
-
-        symbol = trade.get("symbol")
-
-        if trade.get("status") != "OPEN":
-
-            continue
-
-        current_price = current_prices.get(symbol, trade.get("entry_price"))
-        scanner_row = None
-
-        if not df.empty and "Symbol" in df.columns:
-
-            matching_rows = df[df["Symbol"] == symbol]
-
-            if not matching_rows.empty:
-
-                scanner_row = matching_rows.iloc[0]
-
-        scanner_context = (
-            _scanner_context_from_row(scanner_row)
-            if scanner_row is not None
-            else None
-        )
-        reason = _auto_exit_reason(trade, current_price, scanner_row, controls)
-
-        if not reason:
-
-            try:
-
-                maybe_send_multiday_position_continue_alert(
-                    trade,
-                    current_price,
-                    scanner_context,
-                )
-                maybe_send_paper_trade_update_alert(
-                    trade,
-                    current_price,
-                    scanner_context,
-                )
-
-            except Exception as exc:
-
-                print(
-                    f"[PAPER TELEGRAM UPDATE ALERT ERROR] "
-                    f"{symbol}: {exc}"
-                )
-
-            continue
-
-        _close_paper_trade(
-            symbol,
-            current_price,
-            scanner_context=scanner_context,
-            exit_reason=reason
-        )
-        closed.append(symbol)
-
-    return closed

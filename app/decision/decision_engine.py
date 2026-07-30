@@ -220,7 +220,8 @@ def build_review_rule_evaluations(candidate, decision, scan_id):
             decision.action,
             ACTION_ENTER_PAPER,
             review_ready,
-            not review_ready,
+            # Operational outcome, not an entry gate.
+            False,
             40,
         )
     ]

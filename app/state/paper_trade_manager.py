@@ -13,7 +13,7 @@ from app.gates import (
     build_trade_key
 )
 from app.state.holding_policy import derive_holding_profile, holding_policy
-from app.storage.daily_paths import daily_path
+from app.storage.daily_paths import daily_path, state_path
 from app.storage.session_manager import (
     get_or_create_session_manifest,
     get_scan_id,
@@ -24,12 +24,8 @@ from app.config.settings import get_int_env
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-PAPER_TRADE_STATE_FILE = str(
-    ROOT_DIR / "app" / "state" / "paper_trade_state.json"
-)
-LEGACY_TRADE_STATE_FILE = str(
-    ROOT_DIR / "app" / "state" / "trade_state.json"
-)
+PAPER_TRADE_STATE_FILE = str(state_path("paper_trade_state.json"))
+LEGACY_TRADE_STATE_FILE = str(state_path("trade_state.json"))
 ET_TZ = ZoneInfo("America/New_York")
 PROFILE_OVERRIDE_SOURCES = {"MANUAL_OVERRIDE", "BROKER_SYNC"}
 
@@ -83,6 +79,35 @@ def save_paper_trades(state):
         PAPER_TRADE_STATE_FILE,
         state
     )
+
+
+def _initial_risk_per_share(entry_price, stop_loss):
+
+    try:
+        risk = abs(float(entry_price) - float(stop_loss))
+    except (TypeError, ValueError):
+        return None
+
+    return risk if risk > 0 else None
+
+
+def _backfill_initial_stop(trade):
+    """Adopt the current stop as the initial stop for pre-existing trades.
+
+    Only safe while the stop has not yet been moved. Once `initial_stop_loss`
+    exists it is never rewritten, so a later breakeven or trailing move cannot
+    corrupt the R denominator.
+    """
+
+    if trade.get("initial_stop_loss") is not None:
+        return trade
+
+    trade["initial_stop_loss"] = trade.get("stop_loss")
+    trade["initial_risk_per_share"] = _initial_risk_per_share(
+        trade.get("entry_price"),
+        trade.get("stop_loss")
+    )
+    return trade
 
 
 def _queue_paper_trade_upsert(trade):
@@ -185,6 +210,8 @@ def update_paper_trade(
     trade["current_price"] = current_price if current_price is not None else trade.get("current_price")
     trade["current_price_updated_at"] = _now_et().isoformat()
     trade["rr_progress"] = rr_progress
+    # Capture the entry risk before the protective stop is allowed to move.
+    _backfill_initial_stop(trade)
     trade["stop_loss"] = updated_stop
     if bars_in_trade is not None:
         trade["bars_in_trade"] = bars_in_trade
@@ -815,6 +842,10 @@ def open_paper_trade(
         "entry_type": entry_type,
         "entry_price": entry_price,
         "stop_loss": stop_loss,
+        # Frozen at entry. `stop_loss` moves (breakeven, trailing, profit lock);
+        # this stays put because it is the denominator for every R measurement.
+        "initial_stop_loss": stop_loss,
+        "initial_risk_per_share": _initial_risk_per_share(entry_price, stop_loss),
         "take_profit": take_profit,
         "option_ticker": option_ticker,
         "option_bid": option_bid,

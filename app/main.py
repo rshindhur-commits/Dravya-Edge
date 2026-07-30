@@ -39,7 +39,10 @@ from app.gates import (
     EntryGateConfig,
     evaluate_entry_gate
 )
-from app.indicators.technical_indicators import compute_indicators
+from app.indicators.technical_indicators import (
+    MIN_5M_BARS_FOR_15M_INDICATORS,
+    compute_indicators
+)
 from app.strategies.momentum_strategy import analyze_setup
 from app.ai.trade_analyzer import generate_trade_summary
 #from app.options.options_recommender import recommend_option
@@ -54,6 +57,7 @@ from app.exit.exit_engine_v2 import evaluate_shadow_exit_v2
 from app.utils.timeframe_resampler import (
     resample_timeframe
 )
+from app.runtime.paper_position_lifecycle import EXIT_NOT_EVALUATED_MARKER
 
 # from app.indicators.indicator_engine import (
 #     apply_indicators
@@ -275,8 +279,16 @@ SCANNER_MAX_WORKERS = max(
     _env_int("SCANNER_MAX_WORKERS", 5)
 )
 
+# Lookback used only when re-fetching a symbol that holds an open position and
+# whose 5m history is too short to build the 15m frame the exit engine needs.
+# Wide enough to clear weekends and holidays.
+HELD_POSITION_LOOKBACK_DAYS = max(
+    1,
+    _env_int("HELD_POSITION_LOOKBACK_DAYS", 3)
+)
 
-def process_symbol(symbol, force_refresh=False):
+
+def process_symbol(symbol, force_refresh=False, days_back=1):
 
     start = time.perf_counter()
 
@@ -286,7 +298,7 @@ def process_symbol(symbol, force_refresh=False):
             symbol,
             5,
             "minute",
-            1,
+            days_back,
             force_refresh=force_refresh,
         )
 
@@ -307,6 +319,126 @@ def process_symbol(symbol, force_refresh=False):
             "success": False,
             "error": str(exc),
         }
+
+
+def _open_position_symbols():
+    """Symbols with an open paper position, upper-cased."""
+
+    try:
+
+        from app.state.paper_trade_manager import load_paper_trades
+
+        trades = load_paper_trades()
+
+    except Exception as exc:
+
+        print(f"[PAPER STATE WARNING] could not load paper trades: {exc}")
+        return set()
+
+    return {
+        str(trade.get("symbol") or "").strip().upper()
+        for trade in trades.values()
+        if str(trade.get("status") or "").upper() == "OPEN"
+    } - {""}
+
+
+def _include_open_position_symbols(watchlist, held_symbols):
+    """Ensure every open position is scanned, even if it left the watchlist.
+
+    An open position whose symbol is never scanned reaches no trade-management
+    block and therefore receives no exit evaluation at all.
+    """
+
+    seen = {str(symbol).strip().upper() for symbol in watchlist}
+    added = [symbol for symbol in sorted(held_symbols) if symbol not in seen]
+
+    if added:
+
+        print(
+            "[WATCHLIST] added held position symbols: "
+            + ", ".join(added)
+        )
+
+    return list(watchlist) + added
+
+
+def _market_data_unusable(result):
+
+    if not result or not result.get("success"):
+        return True
+
+    data = result.get("data")
+
+    return data is None or data.empty
+
+
+def _held_symbol_data_shortfall(result):
+    """Why a held symbol's market data cannot drive a full exit evaluation.
+
+    Returns None when the data is fine, otherwise a short reason. Two distinct
+    problems need two distinct remedies:
+
+    * unusable  - the fetch failed or returned nothing; a forced refresh may fix it.
+    * too short - enough 5m bars for 5m indicators but not enough for the resampled
+      15m frame, which compute_indicators() then returns EMPTY. The exit engine
+      runs on 15m, so the position silently escapes exit evaluation. A refresh
+      cannot fix this; only a longer lookback can.
+    """
+
+    if _market_data_unusable(result):
+        return "unusable"
+
+    if len(result.get("data")) < MIN_5M_BARS_FOR_15M_INDICATORS:
+        return "too short for 15m indicators"
+
+    return None
+
+
+def _market_data_for_held_symbol(symbol, result):
+    """Re-fetch market data for a symbol holding an open position.
+
+    Open positions are the highest-priority work in a scan, so one extra fetch
+    is worth spending to keep them inside the normal 15m exit path rather than
+    evaluating them on a lower timeframe or skipping them.
+    """
+
+    shortfall = _held_symbol_data_shortfall(result)
+
+    if not shortfall:
+        return result
+
+    print(
+        f"[HELD POSITION REFETCH] {symbol}: market data {shortfall} for an open "
+        f"position, refetching {HELD_POSITION_LOOKBACK_DAYS} day(s) of 5m history"
+    )
+
+    retry_result = process_symbol(
+        symbol,
+        force_refresh=True,
+        days_back=HELD_POSITION_LOOKBACK_DAYS,
+    )
+    retry_shortfall = _held_symbol_data_shortfall(retry_result)
+
+    if not retry_shortfall:
+
+        print(
+            f"[HELD POSITION REFETCH] {symbol}: recovered "
+            f"({len(retry_result.get('data'))} 5m bars)"
+        )
+        return retry_result
+
+    # Keep whichever result has usable data at all, so downstream still sees a
+    # price even when the higher timeframe cannot be built.
+    if _market_data_unusable(result) and not _market_data_unusable(retry_result):
+        result = retry_result
+
+    print(
+        f"[HELD POSITION REFETCH] {symbol}: still {retry_shortfall} "
+        f"({retry_result.get('error') or 'no usable history'}); "
+        "exit evaluation will be reported as not evaluated"
+    )
+
+    return result
 
 
 def _prefetch_watchlist_market_data(watchlist):
@@ -1688,9 +1820,9 @@ def timeframe_bias(result):
     return 0
 
 
-def get_market_data_status(df):
+def get_market_data_status(df, current_et=None):
 
-    current_et = datetime.now(
+    current_et = current_et or datetime.now(
         ZoneInfo("America/New_York")
     )
 
@@ -1706,6 +1838,7 @@ def get_market_data_status(df):
             "delay_minutes": None,
             "raw_delay_minutes": None,
             "aggregate_interval_minutes": None,
+            "freshness_allowance_minutes": None,
             "stock_data_freshness": "NO_DATA",
             "market_session": market_session,
             "market_closed": (
@@ -1738,15 +1871,28 @@ def get_market_data_status(df):
         raw_delay_minutes - aggregate_interval_minutes
     )
 
+    # `delay_minutes` is time since the last candle CLOSED, so it cycles from 0 up
+    # to one full interval as the next candle forms. A fixed allowance below the
+    # interval therefore fails purely on clock phase: with 5-minute candles and a
+    # 2-minute allowance, every symbol reads STALE for 3 of every 5 minutes, which
+    # discarded 31% of all evaluations on 2026-07-29 with no relation to setup
+    # quality. Allowing one interval keeps the real protection -- a missing bar,
+    # i.e. a genuinely stalled feed -- while removing the phase penalty.
+    freshness_allowance_minutes = max(
+        settings.max_stock_data_delay_minutes,
+        aggregate_interval_minutes
+    )
+
     return {
         "data_timestamp_et": data_timestamp_et,
         "current_et": current_et,
         "delay_minutes": round(delay_minutes, 2),
         "raw_delay_minutes": round(raw_delay_minutes, 2),
         "aggregate_interval_minutes": aggregate_interval_minutes,
+        "freshness_allowance_minutes": freshness_allowance_minutes,
         "stock_data_freshness": (
             "LIVE"
-            if delay_minutes <= settings.max_stock_data_delay_minutes
+            if delay_minutes <= freshness_allowance_minutes
             else "STALE"
         ),
         "market_session": market_session,
@@ -3469,14 +3615,34 @@ def _finalize_scan_outputs(
     )
     health.health_score = calculate_health_score(health)
 
+    with stage_timer.stage("Paper position lifecycle"):
+
+        from app.runtime.paper_automation_support import load_auto_paper_controls
+        from app.runtime.paper_position_lifecycle import run_paper_position_lifecycle
+
+        auto_paper_controls = load_auto_paper_controls()
+
+        paper_lifecycle = run_paper_position_lifecycle(
+            df_results,
+            auto_paper_controls,
+        )
+
     with stage_timer.stage("Auto paper entries"):
 
-        from app.runtime.paper_automation import run_auto_paper_entries
-        from app.runtime.paper_automation_support import load_auto_paper_controls
+        from app.runtime.paper_automation import (
+            audit_unrecorded_entry_recommendations,
+            run_auto_paper_entries,
+        )
 
         auto_paper_opened = run_auto_paper_entries(
             df_results,
-            load_auto_paper_controls(),
+            auto_paper_controls,
+        )
+
+        # Invariant: every entry recommendation carries an execution verdict.
+        unaudited_recommendations = audit_unrecorded_entry_recommendations(
+            df_results,
+            auto_paper_controls,
         )
 
     if auto_paper_opened:
@@ -3518,6 +3684,8 @@ def _finalize_scan_outputs(
         "candidate_funnel": candidate_funnel,
         "telegram_summary": telegram_summary,
         "auto_paper_opened": auto_paper_opened,
+        "unaudited_recommendations": unaudited_recommendations,
+        "paper_lifecycle": paper_lifecycle,
     }
 
     _persist_scan_outputs(
@@ -3611,6 +3779,16 @@ def _run_scanner_impl():
         )
     )
 
+    from app.runtime.paper_automation_support import load_auto_paper_controls
+    from app.runtime.paper_position_lifecycle import initialize_paper_session
+
+    with stage_timer.stage("Paper session lifecycle"):
+
+        initialize_paper_session(
+            load_auto_paper_controls(),
+            trading_day=trading_day
+        )
+
     table = Table(
         title="AI Trading Copilot Scanner",
         expand=False
@@ -3626,7 +3804,11 @@ def _run_scanner_impl():
     table.add_column("Entry")
     table.add_column("Why")
     table.add_column("Next")
-    scanner_watchlist = get_scanner_watchlist()
+    held_position_symbols = _open_position_symbols()
+    scanner_watchlist = _include_open_position_symbols(
+        get_scanner_watchlist(),
+        held_position_symbols
+    )
     print(
         "[WATCHLIST] "
         f"scanning {len(scanner_watchlist)} symbols: "
@@ -3657,6 +3839,14 @@ def _run_scanner_impl():
             # =====================================
 
             prefetch_result = market_data_prefetch.get(symbol) or process_symbol(symbol)
+
+            if symbol.strip().upper() in held_position_symbols:
+
+                prefetch_result = _market_data_for_held_symbol(
+                    symbol,
+                    prefetch_result
+                )
+
             symbol_runtimes[symbol] = prefetch_result.get("runtime")
 
             if not prefetch_result.get("success"):
@@ -4278,16 +4468,37 @@ def _run_scanner_impl():
                 }
 
             # Default exit state
+            #
+            # Overwritten by evaluate_exit() whenever the exit engine can run.
+            # When it cannot, the reason must stay truthful: an open position
+            # that could not be evaluated is not "No active trade", and the
+            # paper position lifecycle sweep detects the difference.
+
+            _manageable_trade = bool(
+                active_trade
+                and str(active_trade.get("status") or "").upper() == "OPEN"
+                and not opened_trade_this_scan
+            )
+
+            if opened_trade_this_scan:
+
+                _default_exit_reason = (
+                    "Entry opened this scan; exit evaluation starts next scan"
+                )
+
+            elif _manageable_trade and (df_15m is None or df_15m.empty):
+
+                _default_exit_reason = EXIT_NOT_EVALUATED_MARKER
+
+            else:
+
+                _default_exit_reason = "No active trade"
 
             exit_setup = {
 
                 "exit_signal": False,
 
-                "exit_reason": (
-                    "Entry opened this scan; exit evaluation starts next scan"
-                    if opened_trade_this_scan
-                    else "No active trade"
-                )
+                "exit_reason": _default_exit_reason
 
             }
 
@@ -4350,6 +4561,13 @@ def _run_scanner_impl():
                                 active_trade["stop_loss"]
                             ),
 
+                            # Frozen entry risk. `stop_loss` above may already
+                            # have been moved to breakeven or trailed.
+                            "initial_stop_loss": (
+                                active_trade.get("initial_stop_loss")
+                                or active_trade.get("stop_loss")
+                            ),
+
                             "take_profit": (
                                 active_trade["take_profit"]
                             ),
@@ -4362,16 +4580,21 @@ def _run_scanner_impl():
                             )
 
                         },
-                    
-                        # For active trades, infer direction
-                        # from stop_loss vs entry_price
+
+                        # For active trades, infer direction from the ENTRY
+                        # stop vs entry price. The current stop is unusable
+                        # here: a short whose stop moved to breakeven would
+                        # infer LONG and flip every exit comparison.
                         {
                             "entry_type": (
                                 active_trade.get("entry_type")
                                 or (
                                     "BREAKDOWN_SHORT"
                                     if (
-                                        active_trade.get("stop_loss", 0)
+                                        (
+                                            active_trade.get("initial_stop_loss")
+                                            or active_trade.get("stop_loss", 0)
+                                        )
                                         > active_trade.get("entry_price", 0)
                                     )
                                     else "BREAKOUT_LONG"

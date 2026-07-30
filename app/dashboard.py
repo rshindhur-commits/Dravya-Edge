@@ -3918,15 +3918,6 @@ def _auto_refresh_defaults():
             "Both"
         )
 
-    if "auto_paper_exit_enabled" not in st.session_state:
-
-        st.session_state["auto_paper_exit_enabled"] = bool(
-            saved_auto_settings.get(
-                "auto_paper_exit_enabled",
-                True
-            )
-        )
-
     if "auto_paper_eod_close_enabled" not in st.session_state:
 
         st.session_state["auto_paper_eod_close_enabled"] = _boolish(
@@ -3942,15 +3933,6 @@ def _auto_refresh_defaults():
             saved_auto_settings.get(
                 "restore_multiday_positions",
                 True
-            )
-        )
-
-    if "auto_paper_profit_r" not in st.session_state:
-
-        st.session_state["auto_paper_profit_r"] = float(
-            saved_auto_settings.get(
-                "auto_paper_profit_r",
-                1.0
             )
         )
 
@@ -3990,10 +3972,6 @@ def _render_auto_paper_controls():
         options=["Both", "Calls", "Puts"],
         key="auto_paper_direction"
     )
-    auto_exit_enabled = st.sidebar.toggle(
-        "Auto Exit (During Market Hours)",
-        key="auto_paper_exit_enabled"
-    )
     eod_close_enabled = st.sidebar.toggle(
         "Force Close Intraday at Market Close",
         key="auto_paper_eod_close_enabled"
@@ -4003,16 +3981,9 @@ def _render_auto_paper_controls():
         key="restore_multiday_positions"
     )
 
-    profit_r = st.sidebar.number_input(
-        "Auto Profit Exit R",
-        min_value=0.5,
-        max_value=5.0,
-        step=0.25,
-        key="auto_paper_profit_r"
-    )
-
     st.sidebar.caption(
-        "Paper only. Real orders remain manual."
+        "Paper only. Real orders remain manual. Exits are owned by the scanner's "
+        "exit engine and cannot be disabled here."
     )
 
     controls = {
@@ -4021,10 +3992,8 @@ def _render_auto_paper_controls():
         "min_setup": float(min_setup),
         "min_rr": float(min_rr),
         "direction": direction,
-        "auto_exit_enabled": auto_exit_enabled,
         "eod_close_enabled": eod_close_enabled,
         "restore_multiday_positions": restore_multiday_positions,
-        "profit_r": float(profit_r)
     }
 
     _save_auto_paper_settings({
@@ -4033,10 +4002,8 @@ def _render_auto_paper_controls():
         "auto_paper_min_setup": controls["min_setup"],
         "auto_paper_min_rr": controls["min_rr"],
         "auto_paper_direction": controls["direction"],
-        "auto_paper_exit_enabled": controls["auto_exit_enabled"],
         "auto_paper_eod_close_enabled": controls["eod_close_enabled"],
         "restore_multiday_positions": controls["restore_multiday_positions"],
-        "auto_paper_profit_r": controls["profit_r"]
     })
 
     return controls
@@ -4770,454 +4737,24 @@ def _decision_log_rows(df):
     return output
 
 
-def _run_auto_paper_entries(df, controls):
-    try:
+def _live_exit_reason(scanner_row, trade, controls):
+    """Read the exit engine's own verdict for an open trade. Display only.
 
-        from app.state.paper_trade_manager import load_paper_trades
+    The dashboard does not evaluate exits. Market exit decisions come from
+    app/exit/exit_engine.py via the scanner's persisted `Live Exit Signal` /
+    `Live Exit Reason` columns; the end-of-day case is holding policy.
+    """
 
-        paper_trades = load_paper_trades()
+    from app.runtime.paper_automation_support import eod_force_close_reason
 
-    except Exception:
+    if scanner_row is not None and _boolish(scanner_row.get("Live Exit Signal")):
 
-        paper_trades = {}
-
-    candidates = _paper_trade_candidates(df)
-
-    if candidates.empty:
-
-        log_rows = _decision_log_rows(df)
-
-        if controls["auto_paper_enabled"]:
-
-            if df.empty:
-
-                _record_auto_paper_decision(
-                    "SYSTEM",
-                    "SKIPPED",
-                    "auto paper enabled; scanner output empty",
-                    controls=controls
-                )
-
-                return []
-
-            market_closed_rows = pd.DataFrame()
-            if "Action Status" in df.columns:
-
-                market_closed_rows = df[
-                    df["Action Status"].isin([
-                        "NO_TRADE_MARKET_CLOSED",
-                        "OPTION_MARKET_CLOSED"
-                    ])
-                ]
-
-            if not market_closed_rows.empty:
-
-                market_log_rows = _decision_log_rows(
-                    market_closed_rows
-                )
-
-                if market_log_rows.empty:
-
-                    market_log_rows = log_rows
-
-                if not market_log_rows.empty:
-
-                    for _, row in market_log_rows.iterrows():
-
-                        _record_auto_paper_decision(
-                            row.get("Symbol"),
-                            "SKIPPED",
-                            "market closed",
-                            row,
-                            controls=controls
-                        )
-
-                else:
-
-                    _record_auto_paper_decision(
-                        "SYSTEM",
-                        "SKIPPED",
-                        "auto paper enabled; market closed but no symbol rows found",
-                        controls=controls
-                    )
-
-                return []
-
-            if not log_rows.empty:
-
-                for _, row in log_rows.iterrows():
-
-                    _record_auto_paper_decision(
-                        row.get("Symbol"),
-                        "SKIPPED",
-                        _scanner_block_reason(row),
-                        row,
-                        controls=controls
-                    )
-
-                return []
-
-            _record_auto_paper_decision(
-                "SYSTEM",
-                "SKIPPED",
-                "auto paper enabled; no eligible entry candidates and no symbol rows found",
-                controls=controls
-            )
-
-            return []
-
-        if not log_rows.empty:
-
-            for _, row in log_rows.iterrows():
-
-                _record_auto_paper_decision(
-                    row.get("Symbol"),
-                    "SKIPPED",
-                    "auto paper disabled",
-                    row,
-                    controls=controls
-                )
-
-            return []
-
-        _record_auto_paper_decision(
-            "SYSTEM",
-            "SKIPPED",
-            "auto paper disabled; no current candidates and no symbol rows found",
-            controls=controls
+        return str(
+            scanner_row.get("Live Exit Reason")
+            or "Exit engine signalled an exit"
         )
 
-        return []
-
-    if not controls["auto_paper_enabled"]:
-
-        for _, row in candidates.iterrows():
-
-            _record_auto_paper_decision(
-                row.get("Symbol"),
-                "SKIPPED",
-                "auto paper disabled",
-                row,
-                controls=controls
-            )
-
-        return []
-
-    opened = []
-
-    for _, row in candidates.iterrows():
-
-        allowed, reason = _auto_paper_entry_reason(
-            row,
-            controls,
-            paper_trades
-        )
-
-        if not allowed:
-
-            _record_auto_paper_decision(
-                row.get("Symbol"),
-                "BLOCKED",
-                reason,
-                row,
-                controls=controls
-            )
-
-            continue
-
-        from app.state.paper_trade_manager import open_paper_trade
-        from app.alerts.telegram_alerts import maybe_send_paper_entry_alert
-
-        try:
-
-            from app.state.suggested_trade_manager import promote_suggestion_to_paper_trade
-
-        except Exception:
-
-            promote_suggestion_to_paper_trade = None
-
-        row_for_trade = _annotate_paper_affordability_override(row)
-        scanner_context = _scanner_context_from_row(row_for_trade)
-        is_review_validation = (
-            str(row_for_trade.get("Action Status") or "").strip().upper() == "REVIEW_TV_CHART"
-            and _allow_review_tv_chart_auto_paper()
-        )
-        entry_source = (
-            "AUTO_PAPER_REVIEW_VALIDATION"
-            if is_review_validation
-            else "AUTO_PAPER"
-        )
-        notes_prefix = (
-            "Auto paper review validation entry"
-            if is_review_validation
-            else "Auto paper entry"
-        )
-        spread_note = (
-            "; missing spread allowed for paper"
-            if _safe_float(row.get("Option Spread %"), None) is None
-            else ""
-        )
-        opened_trade = open_paper_trade(
-            symbol=row_for_trade.get("Symbol"),
-            direction=row_for_trade.get("Candidate Direction"),
-            entry_price=row_for_trade.get("Candidate Entry Price"),
-            stop_loss=row_for_trade.get("Candidate Stop Price"),
-            take_profit=row_for_trade.get("Candidate Target Price"),
-            entry_type=row_for_trade.get("Entry"),
-            option_ticker=row_for_trade.get("Option Ticker"),
-            option_bid=row_for_trade.get("Option Bid"),
-            option_ask=row_for_trade.get("Option Ask"),
-            notes=f"{notes_prefix}: {reason}{spread_note}",
-            scanner_context=scanner_context,
-            entry_source=entry_source,
-            trade_mode="PAPER",
-            include_in_strategy_stats=not is_review_validation
-        )
-        paper_trades = load_paper_trades()
-        opened.append(row.get("Symbol"))
-
-        if promote_suggestion_to_paper_trade:
-
-            promote_suggestion_to_paper_trade(
-                symbol=row_for_trade.get("Symbol"),
-                direction=row_for_trade.get("Candidate Direction"),
-                setup_type=row_for_trade.get("Entry"),
-                option_ticker=row_for_trade.get("Option Ticker"),
-                opened_at=opened_trade.get("opened_at"),
-                trade_key=opened_trade.get("trade_key")
-            )
-
-        telegram_entry_result = maybe_send_paper_entry_alert(
-            opened_trade,
-            scanner_context,
-            reason=f"{notes_prefix}: {reason}"
-        )
-        opened_log_row = row_for_trade.copy()
-        opened_log_row["Paper Trade Opened"] = True
-        opened_log_row["Real Trade Readiness"] = _real_trade_readiness(opened_log_row)
-        opened_log_row["Real Entry Checklist"] = _real_entry_checklist(opened_log_row)
-
-        _record_auto_paper_decision(
-            row.get("Symbol"),
-            "TELEGRAM_ENTRY_ALERT",
-            telegram_entry_result.get("reason"),
-            opened_log_row,
-            controls=controls
-        )
-
-        _record_auto_paper_decision(
-            row.get("Symbol"),
-            "OPENED",
-            reason,
-            opened_log_row,
-            trade=opened_trade,
-            controls=controls
-        )
-
-        if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
-
-            break
-
-    return opened
-
-
-def _is_swing_hold_eligible(trade, scanner_row):
-
-    if scanner_row is None:
-
-        return False
-
-    expiration_bucket = str(scanner_row.get("Expiration Bucket") or "").upper()
-    setup = _safe_float(scanner_row.get("Setup %"), 0)
-    rr = _safe_float(scanner_row.get("RR"), 0)
-    option_quality = _safe_float(scanner_row.get("Option Quality Score"), 0)
-
-    if expiration_bucket not in ["PREFERRED_14_30", "LONGER_DTE"]:
-
-        return False
-
-    if setup < 80 or rr < 1.8 or option_quality < 75:
-
-        return False
-
-    if str(scanner_row.get("Late Entry Risk") or "").upper() == "LATE_CHASE_RISK":
-
-        return False
-
-    missed_move = str(scanner_row.get("Missed Move Type") or "").strip()
-    if missed_move and missed_move.lower() not in ["nan", "none"]:
-
-        return False
-
-    if _boolish(scanner_row.get("Live Exit Signal")):
-
-        return False
-
-    return True
-
-
-def _legacy_auto_exit_reason(trade, current_price, scanner_row, controls):
-
-    if not controls["auto_exit_enabled"]:
-
-        return None
-
-    entry = _safe_float(trade.get("entry_price"), None)
-    stop = _safe_float(trade.get("stop_loss"), None)
-    target = _safe_float(trade.get("take_profit"), None)
-    current = _safe_float(current_price, None)
-
-    if entry is None or current is None:
-
-        return None
-
-    direction = _infer_trade_direction(
-        trade.get("direction")
-        or trade.get("entry_type")
-    )
-
-    if direction == "SHORT":
-
-        if stop is not None and current >= stop:
-
-            return "Auto paper exit: stop hit"
-
-        if target is not None and current <= target:
-
-            return "Auto paper exit: target hit"
-
-    else:
-
-        if stop is not None and current <= stop:
-
-            return "Auto paper exit: stop hit"
-
-        if target is not None and current >= target:
-
-            return "Auto paper exit: target hit"
-
-    if scanner_row is not None:
-
-        if _boolish(scanner_row.get("Live Exit Signal")):
-
-            return "Auto paper exit: live exit signal"
-
-        live_exit_reason = str(scanner_row.get("Live Exit Reason") or "")
-        if any(
-            token in live_exit_reason.lower()
-            for token in [
-                "momentum",
-                "vwap",
-                "ema20",
-                "failed breakout",
-                "breakdown"
-            ]
-        ):
-
-            return f"Auto paper exit: {live_exit_reason}"
-
-    if _calculate_trade_r_progress(trade, current) >= controls.get(
-        "profit_r",
-        1.0
-    ):
-
-        return "Auto paper exit: profit threshold reached"
-
-    if (
-        controls["eod_close_enabled"]
-        and _current_et().time() >= AUTO_PAPER_EOD_CLOSE
-    ):
-
-        if _is_swing_hold_eligible(trade, scanner_row):
-
-            return None
-
-        return "Auto paper exit: end-of-day close"
-
-    return None
-
-
-def _auto_exit_reason(trade, current_price, scanner_row, controls):
-
-    from app.runtime.paper_automation_support import _auto_exit_reason as runtime_auto_exit_reason
-
-    return runtime_auto_exit_reason(
-        trade,
-        current_price,
-        scanner_row,
-        controls,
-    )
-
-
-def _run_auto_paper_exits(df, controls):
-
-    if not controls["auto_exit_enabled"]:
-
-        return []
-
-    try:
-
-        from app.state.paper_trade_manager import load_paper_trades
-
-        paper_trades = load_paper_trades()
-
-    except Exception:
-
-        paper_trades = {}
-
-    current_prices = {}
-    if not df.empty and "Symbol" in df.columns:
-
-        current_prices = df.set_index("Symbol")["Price"].to_dict()
-
-    closed = []
-
-    for _, trade in paper_trades.items():
-
-        symbol = trade.get("symbol")
-
-        if trade.get("status") != "OPEN":
-
-            continue
-
-        current_price = current_prices.get(
-            symbol,
-            trade.get("entry_price")
-        )
-        scanner_row = None
-
-        if not df.empty and "Symbol" in df.columns:
-
-            matching_rows = df[df["Symbol"] == symbol]
-            if not matching_rows.empty:
-
-                scanner_row = matching_rows.iloc[0]
-
-        reason = _auto_exit_reason(
-            trade,
-            current_price,
-            scanner_row,
-            controls
-        )
-
-        if not reason:
-
-            continue
-
-        scanner_context = (
-            _scanner_context_from_row(scanner_row)
-            if scanner_row is not None
-            else None
-        )
-        _close_paper_trade(
-            symbol,
-            current_price,
-            scanner_context=scanner_context,
-            exit_reason=reason
-        )
-        closed.append(symbol)
-
-    return closed
+    return eod_force_close_reason(trade, controls)
 
 
 def _render_auto_paper_decision_log(show_full_expander=True):
@@ -5530,10 +5067,9 @@ def _exit_now_alerts(df, controls):
                 scanner_row = matching.iloc[0]
 
         current_price = current_prices.get(symbol, trade.get("entry_price"))
-        reason = _auto_exit_reason(
-            trade,
-            current_price,
+        reason = _live_exit_reason(
             scanner_row,
+            trade,
             controls
         )
 
@@ -6767,17 +6303,6 @@ def _render_trading_page_from_state(state, refresh_state):
     _render_today_performance(state)
     _render_why_no_trade(state)
     _render_missed_opportunities(state)
-
-
-def _paper_automation_active(auto_paper_controls):
-
-    auto_paper_controls = auto_paper_controls or {}
-
-    return bool(
-        auto_paper_controls.get("auto_paper_enabled")
-        or auto_paper_controls.get("auto_exit_enabled")
-        or auto_paper_controls.get("eod_close_enabled")
-    )
 
 
 def _render_validation_page(df):
@@ -8908,121 +8433,6 @@ def _render_last_seen_candidates(df):
     )
 
 
-def _render_paper_trade_controls(df):
-
-    manual_entries_enabled = _manual_paper_entries_enabled()
-    show_manual_buttons = _show_manual_paper_buttons()
-
-    candidates = _paper_trade_candidates(df)
-
-    if candidates.empty:
-
-        st.info("No auto-paper candidates requiring review right now.")
-        return
-
-    st.caption(
-        "System validation path is Auto Paper + Telegram alerts. "
-        "Manual paper entry is hidden by default to keep telemetry clean."
-    )
-
-    age_minutes = _scanner_output_age_minutes()
-
-    if age_minutes is not None:
-
-        st.caption(
-            f"Current scanner output age: {age_minutes} minutes"
-        )
-
-    for _, row in candidates.iterrows():
-
-        symbol = row.get("Symbol")
-        confirm_key = f"confirm_{symbol}"
-        button_key = f"paper_enter_{symbol}"
-
-        with st.expander(
-            f"{symbol} {row.get('Candidate Direction')} candidate"
-        ):
-
-            ai_eligible, ai_reason = _ai_candidate_eligibility(row)
-
-            st.write(
-                {
-                    "Entry": row.get("Candidate Entry Price"),
-                    "Stop": row.get("Candidate Stop Price"),
-                    "Target": row.get("Candidate Target Price"),
-                    "RR": row.get("Candidate RR"),
-                    "Setup": row.get("Entry"),
-                    "Next": row.get("Next Condition"),
-                    "Recommended Option": row.get("Recommended Option"),
-                    "Alternate Short DTE": row.get("Short DTE Option"),
-                    "Alternate Longer DTE": row.get("Longer DTE Option"),
-                    "Option Ticker": row.get("Option Ticker"),
-                    "Option Expiration": row.get("Option Expiration"),
-                    "Option Strike": row.get("Option Strike"),
-                    "Option Moneyness": row.get("Option Moneyness"),
-                    "Expiration Bucket": row.get("Expiration Bucket"),
-                    "Expiration Risk": row.get("Expiration Risk"),
-                    "Option Mid": row.get("Option Mid Price"),
-                    "Option Spread %": row.get("Option Spread %"),
-                    "Option Quality": row.get("Option Liquidity Grade"),
-                    "Quote Freshness": row.get("Option Quote Freshness")
-                }
-            )
-            st.caption(row.get("Live Chart Checklist"))
-
-            ai_button_key = f"ai_explain_{symbol}"
-
-            if st.button(
-                "Explain this candidate with AI",
-                key=ai_button_key,
-                disabled=not ai_eligible
-            ):
-
-                summary, from_cache = _generate_candidate_ai_summary(row)
-                cache_note = (
-                    "cached"
-                    if from_cache
-                    else "new"
-                )
-                st.info(
-                    f"AI summary ({cache_note}):\n\n{summary}"
-                )
-
-            if not ai_eligible:
-
-                st.caption(
-                    f"AI explanation disabled: {ai_reason}"
-                )
-
-            if not show_manual_buttons:
-
-                continue
-
-            if not manual_entries_enabled:
-
-                st.caption(
-                    "Manual paper entry is disabled. Set "
-                    "ENABLE_MANUAL_PAPER_ENTRIES=true and "
-                    "SHOW_MANUAL_PAPER_BUTTONS=true for debug-only use."
-                )
-                continue
-
-            live_confirmed = st.checkbox(
-                "I manually confirmed this setup on the live chart",
-                key=confirm_key
-            )
-
-            if st.button(
-                "Paper enter",
-                key=button_key,
-                disabled=not live_confirmed
-            ):
-
-                _open_paper_trade_from_row(row)
-                st.success(f"Opened paper trade for {symbol}")
-                st.rerun()
-
-
 def _render_paper_exit_controls(df):
 
     if not _allow_manual_paper_close():
@@ -9287,11 +8697,7 @@ def main():
 
                 st.error(f"Scanner failed: {exc}")
 
-    if (
-        TRADING_DASHBOARD_STATE_ONLY
-        and page == "Trading"
-        and not _paper_automation_active(auto_paper_controls)
-    ):
+    if TRADING_DASHBOARD_STATE_ONLY and page == "Trading":
 
         cached_state = _load_cached_state("dashboard_state.json", profile="trading")
 
@@ -9367,36 +8773,11 @@ def main():
         latest_scanner_run = latest_time.iloc[0]
         st.caption(f"Last scanner run: {latest_scanner_run}")
 
-    from app.runtime.paper_automation import (
-        run_auto_paper_entries,
-        run_auto_paper_exits
-    )
-
-    auto_closed = run_auto_paper_exits(
-        df,
-        auto_paper_controls
-    )
-
-    if auto_closed:
-
-        st.success(
-            "Auto-closed paper trades: "
-            + ", ".join(auto_closed)
-        )
-        st.rerun()
-
-    auto_opened = run_auto_paper_entries(
-        df,
-        auto_paper_controls
-    )
-
-    if auto_opened:
-
-        st.success(
-            "Auto-opened paper trades: "
-            + ", ".join(auto_opened)
-        )
-        st.rerun()
+    # Paper trade entries, management, and exits are owned exclusively by the
+    # scanner (app/main.py). The dashboard never opens, updates, or closes a
+    # paper trade automatically: it read the stale scanner_output.xlsx, applied a
+    # second exit rule set that bypassed the exit engine, and only ran on the
+    # Trading/Developer pages. Trigger a scan instead; the scanner decides.
 
     dashboard_state = _load_dashboard_state(df)
 

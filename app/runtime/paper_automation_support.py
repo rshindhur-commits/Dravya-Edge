@@ -21,14 +21,14 @@ from app.storage.auto_paper_decision_store import (
     classify_decision_time,
     update_recent_auto_paper_log,
 )
-from app.storage.daily_paths import get_daily_dir
+from app.storage.daily_paths import get_daily_dir, state_path
 from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
 from app.utils.json_store import load_json_file
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-AUTO_PAPER_DECISION_LOG_FILE = ROOT_DIR / "app" / "state" / "auto_paper_decision_log.json"
-AUTO_PAPER_SETTINGS_FILE = ROOT_DIR / "app" / "state" / "auto_paper_settings.json"
+AUTO_PAPER_DECISION_LOG_FILE = state_path("auto_paper_decision_log.json")
+AUTO_PAPER_SETTINGS_FILE = state_path("auto_paper_settings.json")
 AUTO_PAPER_TOP_CANDIDATES = [
     "BULLISH_TOP_1",
     "BEARISH_TOP_1",
@@ -72,10 +72,8 @@ def load_auto_paper_controls():
         "min_setup": float(settings.get("auto_paper_min_setup", 70)),
         "min_rr": float(settings.get("auto_paper_min_rr", DEFAULT_AUTO_PAPER_MIN_RR)),
         "direction": settings.get("auto_paper_direction", "Both"),
-        "auto_exit_enabled": _boolish(settings.get("auto_paper_exit_enabled", True)),
         "eod_close_enabled": _boolish(settings.get("auto_paper_eod_close_enabled", False)),
         "restore_multiday_positions": _boolish(settings.get("restore_multiday_positions", True)),
-        "profit_r": float(settings.get("auto_paper_profit_r", 1.0)),
     }
 
 
@@ -519,7 +517,9 @@ def build_paper_rule_evaluations(row, allowed, reason, scan_id):
             reason,
             "ELIGIBLE",
             bool(allowed),
-            not bool(allowed),
+            # Operational outcome, not an entry gate: Paper records what execution
+            # did with the recommendation, so it never blocks the trade decision.
+            False,
             50,
         )
     ]
@@ -539,58 +539,22 @@ def _decision_log_rows(df):
     return df[df["Symbol"].notna()].copy()
 
 
-def _infer_trade_direction(entry_type):
-    value = str(entry_type or "").upper()
-    if value in ["PUT", "SHORT", "BEARISH", "BREAKDOWN_SHORT", "EMA_REJECTION_SHORT", "VWAP_REJECTION"]:
-        return "SHORT"
-    return "LONG"
+def eod_force_close_reason(trade, controls, now=None):
+    """Holding-policy end-of-day reason for an open paper trade, or None.
 
+    This is a session policy, not a market exit rule. All market exit decisions
+    (stop, target, EMA, VWAP, MACD, failed breakout, time, profit protection)
+    belong to app/exit/exit_engine.py::evaluate_exit() and are applied by the
+    scanner's per-symbol loop.
+    """
 
-def _calculate_trade_r_progress(trade, current_price):
-    entry = _safe_float(trade.get("entry_price"), None)
-    stop = _safe_float(trade.get("stop_loss"), None)
-    current = _safe_float(current_price, None)
-    if entry is None or stop is None or current is None or entry == stop:
-        return 0
-    risk = abs(entry - stop)
-    direction = _infer_trade_direction(trade.get("direction") or trade.get("entry_type"))
-    return ((entry - current) / risk) if direction == "SHORT" else ((current - entry) / risk)
-
-
-def _auto_exit_reason(trade, current_price, scanner_row, controls):
-    entry = _safe_float(trade.get("entry_price"), None)
-    stop = _safe_float(trade.get("stop_loss"), None)
-    target = _safe_float(trade.get("take_profit"), None)
-    current = _safe_float(current_price, None)
-    if entry is None or current is None:
+    if not (controls or {}).get("eod_close_enabled", False):
         return None
-
-    if controls.get("auto_exit_enabled", False):
-        direction = _infer_trade_direction(trade.get("direction") or trade.get("entry_type"))
-        if direction == "SHORT":
-            if stop is not None and current >= stop:
-                return "Auto paper exit: stop hit"
-            if target is not None and current <= target:
-                return "Auto paper exit: target hit"
-        else:
-            if stop is not None and current <= stop:
-                return "Auto paper exit: stop hit"
-            if target is not None and current >= target:
-                return "Auto paper exit: target hit"
-        if scanner_row is not None:
-            if _boolish(scanner_row.get("Live Exit Signal")):
-                return "Auto paper exit: live exit signal"
-            live_exit_reason = str(scanner_row.get("Live Exit Reason") or "")
-            if any(token in live_exit_reason.lower() for token in ["momentum", "vwap", "ema20", "failed breakout", "breakdown"]):
-                return f"Auto paper exit: {live_exit_reason}"
-        if _calculate_trade_r_progress(trade, current) >= controls.get("profit_r", 1.0):
-            return "Auto paper exit: profit threshold reached"
-
-    if controls.get("eod_close_enabled", False) and _current_et().time() >= AUTO_PAPER_EOD_CLOSE:
-        if not holding_policy(trade.get("holding_profile")).force_eod_exit:
-            return None
-        return "Auto paper exit: end-of-day close"
-    return None
+    if (now or _current_et()).time() < AUTO_PAPER_EOD_CLOSE:
+        return None
+    if not holding_policy(trade.get("holding_profile")).force_eod_exit:
+        return None
+    return "Auto paper exit: end-of-day close"
 
 
 def _close_paper_trade(symbol, close_price, scanner_context=None, exit_reason="Manual dashboard paper exit"):

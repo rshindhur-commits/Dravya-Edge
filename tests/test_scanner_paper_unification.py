@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from app.state.paper_trade_manager import (
+    LEGACY_TRADE_STATE_FILE,
     _queue_paper_trade_upsert,
     get_open_paper_trade,
     update_paper_trade,
@@ -103,7 +104,7 @@ def test_legacy_scanner_trade_is_migrated_into_paper_state():
     assert "SMCI" not in legacy_state
     save_paper.assert_called_once_with(paper_state)
     save_legacy.assert_called_once()
-    assert str(save_legacy.call_args.args[0]).endswith("app\\state\\trade_state.json")
+    assert str(save_legacy.call_args.args[0]) == str(LEGACY_TRADE_STATE_FILE)
     assert save_legacy.call_args.args[1] == legacy_state
     append_event.assert_called_once_with(migrated, "OPEN")
 

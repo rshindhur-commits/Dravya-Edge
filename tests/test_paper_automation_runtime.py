@@ -3,7 +3,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from app.runtime.paper_automation import run_auto_paper_entries, run_auto_paper_exits
+from app.runtime.paper_automation import run_auto_paper_entries
+from app.runtime.paper_position_lifecycle import run_paper_position_lifecycle
 from app.runtime.paper_automation_support import (
     _auto_paper_entry_reason,
     _record_auto_paper_decision,
@@ -250,22 +251,30 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
 
         self.assertEqual(reason, "auto paper enabled; no eligible entry candidate")
 
-    def test_auto_paper_exits_closes_when_exit_reason_exists(self):
+    def test_lifecycle_does_not_close_on_stop_or_target(self):
+        """Market exits belong to the exit engine, not the lifecycle sweep.
+
+        The retired `auto_exit_enabled` / `profit_r` controls are passed on
+        purpose: a stale auto_paper_settings.json must not be able to resurrect
+        the second exit rule set. Do not remove them from this call.
+        """
 
         df = pd.DataFrame([
             {
                 "Symbol": "NVDA",
-                "Price": 105,
+                "Price": 90,
+                "Live Exit Signal": False,
+                "Live Exit Reason": "Hold",
             }
         ])
-        controls = {
-            "auto_exit_enabled": True,
-        }
         trades = {
             "trade": {
                 "symbol": "NVDA",
                 "status": "OPEN",
                 "entry_price": 100,
+                "stop_loss": 98,
+                "take_profit": 110,
+                "holding_profile": "INTRADAY",
             }
         }
 
@@ -273,20 +282,82 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
             "app.state.paper_trade_manager.load_paper_trades",
             return_value=trades
         ), patch(
-            "app.runtime.paper_automation_support._auto_exit_reason",
-            return_value="Auto paper exit: target hit"
-        ), patch(
-            "app.runtime.paper_automation_support._scanner_context_from_row",
-            return_value={"Symbol": "NVDA"}
-        ), patch(
             "app.runtime.paper_automation_support._close_paper_trade"
         ) as close_trade:
 
-            result = run_auto_paper_exits(df, controls)
+            result = run_paper_position_lifecycle(
+                df,
+                {"auto_exit_enabled": True, "profit_r": 0.1},
+            )
 
-        self.assertEqual(result, ["NVDA"])
+        close_trade.assert_not_called()
+        self.assertEqual(result["eod_closed"], [])
+
+    def test_lifecycle_force_closes_intraday_at_end_of_day(self):
+
+        df = pd.DataFrame([
+            {
+                "Symbol": "NVDA",
+                "Price": 105,
+                "Live Exit Signal": False,
+                "Live Exit Reason": "Hold",
+            }
+        ])
+        trades = {
+            "trade": {
+                "symbol": "NVDA",
+                "status": "OPEN",
+                "entry_price": 100,
+                "holding_profile": "INTRADAY",
+            }
+        }
+
+        with patch(
+            "app.state.paper_trade_manager.load_paper_trades",
+            return_value=trades
+        ), patch(
+            "app.runtime.paper_automation_support._current_et"
+        ) as current_et, patch(
+            "app.runtime.paper_automation_support._close_paper_trade"
+        ) as close_trade:
+
+            current_et.return_value = pd.Timestamp("2026-07-28 16:00:00").to_pydatetime()
+            result = run_paper_position_lifecycle(
+                df,
+                {"eod_close_enabled": True},
+            )
+
+        self.assertEqual(result["eod_closed"], ["NVDA"])
         close_trade.assert_called_once()
         self.assertEqual(close_trade.call_args.args[0], "NVDA")
+
+    def test_lifecycle_flags_open_position_the_scanner_could_not_manage(self):
+
+        df = pd.DataFrame([
+            {
+                "Symbol": "NVDA",
+                "Price": 105,
+                "Live Exit Reason": "No active trade",
+                "Blocked By": "NO_5M_DATA",
+            }
+        ])
+        trades = {
+            "trade": {
+                "symbol": "NVDA",
+                "status": "OPEN",
+                "entry_price": 100,
+                "holding_profile": "INTRADAY",
+            }
+        }
+
+        with patch(
+            "app.state.paper_trade_manager.load_paper_trades",
+            return_value=trades
+        ):
+
+            result = run_paper_position_lifecycle(df, {})
+
+        self.assertEqual(result["unmanaged"], ["NVDA"])
 
     def test_blocked_entry_records_actual_gate_not_action_status(self):
 
