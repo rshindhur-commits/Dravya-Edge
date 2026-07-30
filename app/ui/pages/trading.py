@@ -179,6 +179,13 @@ def _activity_rows(state, df):
             "candle_low": "Candle Low",
             "candle_close": "Candle Close",
             "candle_volume": "Candle Volume",
+            "scanner_recommendation": "Scanner Recommendation",
+            "execution_eligibility": "Execution Eligibility",
+            "execution_outcome": "Execution Outcome",
+            "execution_reason": "Execution Reason",
+            "trade_status": "Trade Status",
+            "telegram_status": "Telegram Status",
+            "telegram_reason": "Telegram Reason",
         })
         trace["Marker"] = trace.apply(
             lambda row: _activity_marker(row.get("Event"), row.get("Category")),
@@ -225,6 +232,13 @@ def _activity_rows(state, df):
                 "Stage": "Auto-paper",
                 "Rule": row.get("blocked_by") or "Execution eligibility",
                 "Passed": str(event or "").upper() == "OPENED",
+                "Scanner Recommendation": row.get("scanner_recommendation") or row.get("action_status"),
+                "Execution Eligibility": row.get("execution_eligibility"),
+                "Execution Outcome": row.get("execution_outcome") or event,
+                "Execution Reason": row.get("execution_reason") or row.get("reason"),
+                "Trade Status": row.get("trade_status"),
+                "Telegram Status": row.get("telegram_status"),
+                "Telegram Reason": row.get("telegram_reason"),
             })
     for row in _telegram_rows(trading_day):
         event = row.get("message_type") or row.get("event")
@@ -258,6 +272,13 @@ def _activity_rows(state, df):
                 "Stage": row.get("ENTRY_GATE_FAILURE_STAGE") or "Decision",
                 "Rule": row.get("Blocked By") or "Action Status",
                 "Passed": str(event or "").upper() in {"ENTER", "ENTER_PAPER"},
+                "Scanner Recommendation": row.get("Scanner Recommendation") or event,
+                "Execution Eligibility": row.get("Execution Eligibility"),
+                "Execution Outcome": row.get("Execution Outcome"),
+                "Execution Reason": row.get("Execution Reason"),
+                "Trade Status": row.get("Trade Status"),
+                "Telegram Status": row.get("Telegram Status"),
+                "Telegram Reason": row.get("Telegram Reason"),
             })
     timeline = pd.DataFrame(events)
     if timeline.empty:
@@ -337,13 +358,22 @@ def _render_opportunity_board(state):
         rows.append({
             "Rank": candidate.get("candidate_rank"),
             "Symbol": candidate.get("symbol"),
-            "Decision": _action_label(candidate.get("action")),
+            "Scanner Recommendation": _action_label(
+                candidate.get("scanner_recommendation") or candidate.get("action")
+            ),
+            "Execution": _action_label(
+                candidate.get("execution_outcome")
+                or candidate.get("execution_eligibility")
+                or "NOT_REQUESTED"
+            ),
+            "Execution Reason": candidate.get("execution_reason") or "-",
+            "Trade": _action_label(candidate.get("trade_status") or "NOT_CREATED"),
+            "Telegram": _action_label(candidate.get("telegram_status") or "NO_LIFECYCLE_EVENT"),
             "Setup": candidate.get("setup"),
             "TQS": candidate.get("trade_quality_score"),
             "RR": candidate.get("rr"),
             "Timing": candidate.get("entry_timing_grade"),
             "Holding": candidate.get("holding_profile") or "-",
-            "Telegram": candidate.get("telegram"),
         })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 

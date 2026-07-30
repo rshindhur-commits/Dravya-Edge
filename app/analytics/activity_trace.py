@@ -15,7 +15,9 @@ TRACE_COLUMNS = [
     "context", "origin", "stage", "rule", "passed", "actual", "required",
     "previous_state", "state_changed", "setup_score", "rr", "option_quality",
     "candle_time", "candle_open", "candle_high", "candle_low", "candle_close",
-    "candle_volume", "scan_id", "candidate_key", "trade_id",
+    "candle_volume", "scanner_recommendation", "execution_eligibility",
+    "execution_outcome", "execution_reason", "trade_status", "telegram_status",
+    "telegram_reason", "scan_id", "candidate_key", "trade_id",
 ]
 
 
@@ -57,7 +59,9 @@ def _record(
     actual=None, required=None, previous_state=None, state_changed=None,
     setup_score=None, rr=None, option_quality=None, candle_time=None,
     candle_open=None, candle_high=None, candle_low=None, candle_close=None,
-    candle_volume=None,
+    candle_volume=None, scanner_recommendation=None, execution_eligibility=None,
+    execution_outcome=None, execution_reason=None,
+    trade_status=None, telegram_status=None, telegram_reason=None,
 ):
     source = "|".join([
         str(trading_day), str(time), str(symbol), str(event), str(context),
@@ -88,6 +92,13 @@ def _record(
         "candle_low": candle_low,
         "candle_close": candle_close,
         "candle_volume": candle_volume,
+        "scanner_recommendation": scanner_recommendation,
+        "execution_eligibility": execution_eligibility,
+        "execution_outcome": execution_outcome,
+        "execution_reason": execution_reason,
+        "trade_status": trade_status,
+        "telegram_status": telegram_status,
+        "telegram_reason": telegram_reason,
         "scan_id": scan_id,
         "candidate_key": candidate_key,
         "trade_id": trade_id,
@@ -155,6 +166,13 @@ def build_activity_trace(trading_day, scanner_rows=None, scan_id=None, observed_
             candle_low=_value(row, "Decision Candle Low"),
             candle_close=_value(row, "Decision Candle Close"),
             candle_volume=_value(row, "Decision Candle Volume"),
+            scanner_recommendation=_value(row, "Scanner Recommendation", "Action Status"),
+            execution_eligibility=_value(row, "Execution Eligibility"),
+            execution_outcome=_value(row, "Execution Outcome"),
+            execution_reason=_value(row, "Execution Reason"),
+            trade_status=_value(row, "Trade Status"),
+            telegram_status=_value(row, "Telegram Status"),
+            telegram_reason=_value(row, "Telegram Reason"),
         ))
         for evaluation in build_rule_evaluations(row, str(resolved_scan_id or "")):
             records.append(_record(
@@ -180,6 +198,13 @@ def build_activity_trace(trading_day, scanner_rows=None, scan_id=None, observed_
             stage="Auto-paper",
             rule=row.get("blocked_by") or "Execution eligibility",
             passed=str(row.get("decision") or "").upper() == "OPENED",
+            scanner_recommendation=row.get("scanner_recommendation") or row.get("action_status"),
+            execution_eligibility=row.get("execution_eligibility"),
+            execution_outcome=row.get("execution_outcome") or row.get("decision"),
+            execution_reason=row.get("execution_reason") or row.get("reason"),
+            trade_status=row.get("trade_status"),
+            telegram_status=row.get("telegram_status"),
+            telegram_reason=row.get("telegram_reason"),
         ))
     for row in _read_jsonl(directory / "trade_timeline.jsonl"):
         payload = row.get("payload") or {}

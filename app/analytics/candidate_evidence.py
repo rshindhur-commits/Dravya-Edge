@@ -20,6 +20,8 @@ EVIDENCE_COLUMNS = [
     "entry_priority_adjustment", "expected_remaining_trend", "projected_entry_grade",
     "ranking_score", "candidate_rank",
     "option_quality", "trend_health", "regime", "top_candidate", "quote_freshness", "rule_evaluation",
+    "scanner_recommendation", "execution_eligibility", "execution_outcome", "execution_reason",
+    "trade_status", "telegram_status", "telegram_reason",
     "decision", "latest_decision", "first_actionable_decision", "first_actionable_at",
     "first_actionable_scan_id", "decision_history", "auto_paper_decision",
     "auto_paper_blocked_by", "suggestion_status", "paper_trade_status", "entered",
@@ -67,7 +69,10 @@ def _read_database_snapshots(trading_day):
                        blocked_reason AS blocked_by, risk_reward AS candidate_rr,
                        regime AS market_regime, NULL::TEXT AS top_candidate,
                        option_quality AS option_quality_score,
-                       candidate_rank, realtime_ready, execution_ready
+                       candidate_rank, realtime_ready, execution_ready,
+                       scanner_recommendation, execution_eligibility,
+                      execution_outcome, execution_reason, trade_status,
+                      telegram_status, telegram_reason
                 FROM candidate_snapshot
                 WHERE trading_day = CAST(:trading_day AS DATE)
                 ORDER BY created_at
@@ -354,6 +359,13 @@ def build_candidate_evidence_from_frames(
             "top_candidate": _value(latest, "top_candidate", "Top Candidate"),
             "quote_freshness": _value(latest, "option_quote_freshness", "Option Quote Freshness"),
             "rule_evaluation": auto_paper_blocked_by or scanner_rule or _value(latest, "Action Reason"),
+            "scanner_recommendation": _value(latest, "scanner_recommendation", "Scanner Recommendation", "action_status", "Action Status"),
+            "execution_eligibility": _value(latest, "execution_eligibility", "Execution Eligibility"),
+            "execution_outcome": _value(latest, "execution_outcome", "Execution Outcome"),
+            "execution_reason": _value(latest, "execution_reason", "Execution Reason"),
+            "trade_status": _value(latest, "trade_status", "Trade Status"),
+            "telegram_status": _value(latest, "telegram_status", "Telegram Status"),
+            "telegram_reason": _value(latest, "telegram_reason", "Telegram Reason"),
             "decision": decision,
             "latest_decision": latest_decision,
             "first_actionable_decision": first_actionable_decision,

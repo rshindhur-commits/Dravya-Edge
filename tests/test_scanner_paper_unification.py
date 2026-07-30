@@ -24,17 +24,25 @@ def test_scanner_management_reads_and_updates_paper_trade_state():
         return_value=state,
     ), patch(
         "app.state.paper_trade_manager.save_paper_trades",
-    ) as save_state:
+    ) as save_state, patch(
+        "app.state.paper_trade_manager._queue_paper_trade_upsert",
+    ) as queue_upsert:
         active = get_open_paper_trade("SMCI")
         updated = update_paper_trade(
             "SMCI",
             highest_price=28.70,
             rr_progress=1.2,
             updated_stop=28.44,
+            current_price=28.62,
             lowest_price=28.40,
             bars_in_trade=3,
             partial_profit_taken=True,
-            execution_metrics={"mfe_r": 1.4, "mae_r": 0.2},
+            execution_metrics={
+                "mfe_r": 1.4,
+                "mae_r": 0.2,
+                "trend_health_status": "HEALTHY",
+                "exit_confidence_score": 22,
+            },
         )
 
     assert active is state["trade-1"]
@@ -42,12 +50,16 @@ def test_scanner_management_reads_and_updates_paper_trade_state():
     assert updated["highest_price"] == 28.70
     assert updated["lowest_price"] == 28.40
     assert updated["rr_progress"] == 1.2
+    assert updated["current_price"] == 28.62
     assert updated["stop_loss"] == 28.44
     assert updated["bars_in_trade"] == 3
     assert updated["partial_profit_taken"] is True
     assert updated["mfe_r"] == 1.4
     assert updated["mae_r"] == 0.2
+    assert updated["last_trend_health_status"] == "HEALTHY"
+    assert updated["last_exit_confidence_score"] == 22
     save_state.assert_called_once_with(state)
+    queue_upsert.assert_called_once_with(updated)
 
 
 def test_legacy_scanner_trade_is_migrated_into_paper_state():

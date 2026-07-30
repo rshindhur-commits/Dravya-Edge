@@ -52,7 +52,8 @@ def get_polygon_data(
     symbol,
     multiplier,
     timespan,
-    days_back
+    days_back,
+    force_refresh=False,
 ):
     
 
@@ -355,7 +356,8 @@ def get_polygon_data(
                 timespan=timespan,
                 from_=from_date,
                 to=to_date,
-                limit=1000
+                limit=1000,
+                force_refresh=force_refresh,
             )
 
             debug_print(f"[TOTAL AGGS] {symbol}: {len(aggs)}")        

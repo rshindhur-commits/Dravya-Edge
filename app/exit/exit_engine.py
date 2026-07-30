@@ -1,4 +1,5 @@
 from datetime import time
+import os
 
 import pandas as pd
 
@@ -11,6 +12,7 @@ from app.utils.runtime_logging import debug_print
 EXIT_PRIORITY = {
     "HARD_STOP": 100,
     "HARD_TARGET": 95,
+    "PROFIT_PROTECTION": 85,
     "EMA": 80,
     "VWAP": 70,
     "MACD": 60,
@@ -18,6 +20,13 @@ EXIT_PRIORITY = {
     "TIME_EXIT": 40,
     "NEAR_CLOSE": 30
 }
+
+
+def _env_float(name, default):
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
 
 
 def _is_short_entry(entry_type):
@@ -259,6 +268,15 @@ def evaluate_exit(
         is_short,
     )
 
+    holding_profile = str((trade_state or {}).get("holding_profile") or "INTRADAY").upper()
+    profit_lock_mfe_r = _env_float("MULTIDAY_PROFIT_LOCK_MFE_R", 2.0)
+    profit_lock_r = _env_float("MULTIDAY_PROFIT_LOCK_R", 1.0)
+    profit_exit_mfe_r = _env_float("MULTIDAY_PROFIT_EXIT_MFE_R", 3.0)
+    profit_max_giveback_r = _env_float("MULTIDAY_PROFIT_MAX_GIVEBACK_R", 1.0)
+    profit_protection_active = False
+    profit_lock_stop = None
+    profit_giveback_r = max(0.0, mfe_r - rr_progress)
+
     updated_stop = stop_loss
     trailing_stop = stop_loss
     exit_signal = False
@@ -338,6 +356,32 @@ def evaluate_exit(
             updated_stop = trailing_stop
 
         adjustment_reason = "ATR trailing stop active"
+
+    if not exit_signal and holding_profile == "MULTIDAY" and mfe_r >= profit_lock_mfe_r:
+
+        risk = abs(entry_price - stop_loss)
+        profit_lock_stop = (
+            entry_price - (risk * profit_lock_r)
+            if is_short
+            else entry_price + (risk * profit_lock_r)
+        )
+        updated_stop = (
+            min(updated_stop, profit_lock_stop)
+            if is_short
+            else max(updated_stop, profit_lock_stop)
+        )
+        trailing_stop = updated_stop
+        profit_protection_active = True
+        adjustment_reason = f"Multiday profit lock: {profit_lock_r:.1f}R protected"
+
+        if mfe_r >= profit_exit_mfe_r and profit_giveback_r >= profit_max_giveback_r:
+            exit_reasons.append(_exit_diagnostic(
+                "PROFIT_PROTECTION",
+                f"Multiday profit protection: {profit_giveback_r:.2f}R giveback from {mfe_r:.2f}R peak",
+            ))
+            primary_exit = _select_primary_exit(exit_reasons)
+            exit_signal = True
+            exit_reason = primary_exit["reason"]
 
     if True:
 
@@ -530,6 +574,9 @@ def evaluate_exit(
         "adjustment_reason": adjustment_reason,
         "trend_health_score": trend_health["score"],
         "exit_confidence_score": exit_confidence["exit_confidence_score"],
+        "profit_protection_active": profit_protection_active,
+        "profit_lock_stop": _round_float(profit_lock_stop),
+        "profit_giveback_r": _round_float(profit_giveback_r),
         "grace_zone_active": grace_zone_active,
         "v1_ema_grace_pending": grace_zone_active,
     }

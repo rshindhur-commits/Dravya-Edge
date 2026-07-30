@@ -235,6 +235,21 @@ def _top_candidates(rows, limit=10):
                 "needs": _needs(row),
                 "next_trigger": _clean(_row_get(row, "Next Condition", "Candidate Trigger", "Entry Trigger")),
                 "action": action,
+                "scanner_recommendation": _clean(
+                    _row_get(row, "Scanner Recommendation", "Action Status")
+                ),
+                "execution_eligibility": _clean(
+                    _row_get(row, "Execution Eligibility")
+                ),
+                "execution_outcome": _clean(
+                    _row_get(row, "Execution Outcome")
+                ),
+                "execution_reason": _clean(
+                    _row_get(row, "Execution Reason")
+                ),
+                "trade_status": _clean(_row_get(row, "Trade Status")),
+                "telegram_status": _clean(_row_get(row, "Telegram Status")),
+                "telegram_reason": _clean(_row_get(row, "Telegram Reason")),
                 "entry_price": _clean(_row_get(row, "Candidate Entry Price", "Entry Price", "Price")),
                 "stop_price": _clean(_row_get(row, "Candidate Stop Price", "Stop Loss")),
                 "target_price": _clean(_row_get(row, "Candidate Target Price", "Take Profit")),

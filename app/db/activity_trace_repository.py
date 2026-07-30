@@ -38,6 +38,13 @@ class ActivityTraceRepository(BestEffortRepository):
                 "candle_low": record.get("candle_low"),
                 "candle_close": record.get("candle_close"),
                 "candle_volume": record.get("candle_volume"),
+                "scanner_recommendation": record.get("scanner_recommendation"),
+                "execution_eligibility": record.get("execution_eligibility"),
+                "execution_outcome": record.get("execution_outcome"),
+                "execution_reason": record.get("execution_reason"),
+                "trade_status": record.get("trade_status"),
+                "telegram_status": record.get("telegram_status"),
+                "telegram_reason": record.get("telegram_reason"),
                 "scan_id": record.get("scan_id"),
                 "candidate_key": record.get("candidate_key"),
                 "trade_id": record.get("trade_id"),
@@ -51,7 +58,9 @@ class ActivityTraceRepository(BestEffortRepository):
                 origin, stage, rule, passed, actual, required, scan_id, candidate_key,
                 trade_id, previous_state, state_changed, setup_score, rr, option_quality,
                 candle_time, candle_open, candle_high, candle_low, candle_close,
-                candle_volume, payload
+                candle_volume, scanner_recommendation, execution_eligibility,
+                execution_outcome, execution_reason, trade_status, telegram_status,
+                telegram_reason, payload
             ) VALUES (
                 :event_id, :trading_day, CAST(:occurred_at AS TIMESTAMPTZ), :symbol,
                 :category, :event, :context, :origin, :stage, :rule, :passed,
@@ -59,6 +68,9 @@ class ActivityTraceRepository(BestEffortRepository):
                 :previous_state, :state_changed, :setup_score, :rr, :option_quality,
                 CAST(:candle_time AS TIMESTAMPTZ), :candle_open, :candle_high,
                 :candle_low, :candle_close, :candle_volume,
+                :scanner_recommendation, :execution_eligibility,
+                :execution_outcome, :execution_reason,
+                :trade_status, :telegram_status, :telegram_reason,
                 CAST(:payload AS JSONB)
             ) ON CONFLICT (event_id) DO UPDATE SET
                 context = EXCLUDED.context,
@@ -78,6 +90,13 @@ class ActivityTraceRepository(BestEffortRepository):
                 candle_low = EXCLUDED.candle_low,
                 candle_close = EXCLUDED.candle_close,
                 candle_volume = EXCLUDED.candle_volume,
+                scanner_recommendation = EXCLUDED.scanner_recommendation,
+                execution_eligibility = EXCLUDED.execution_eligibility,
+                execution_outcome = EXCLUDED.execution_outcome,
+                execution_reason = EXCLUDED.execution_reason,
+                trade_status = EXCLUDED.trade_status,
+                telegram_status = EXCLUDED.telegram_status,
+                telegram_reason = EXCLUDED.telegram_reason,
                 payload = EXCLUDED.payload,
                 persisted_at = now()
         """, rows)

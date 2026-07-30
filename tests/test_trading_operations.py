@@ -47,3 +47,4 @@ def test_legacy_skipped_paper_row_does_not_present_action_as_reason():
     )
 
     assert context == "No execution gate recorded (legacy decision row)"
+

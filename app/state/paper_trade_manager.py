@@ -96,7 +96,7 @@ def _queue_paper_trade_upsert(trade):
             priority=3,
             func=upsert_paper_trade,
             args=(trade.copy(),),
-            cancelable=True,
+            cancelable=False,
             scan_id=trade.get("scan_id"),
         ))
     except Exception as exc:
@@ -165,6 +165,7 @@ def update_paper_trade(
     highest_price,
     rr_progress,
     updated_stop,
+    current_price=None,
     lowest_price=None,
     bars_in_trade=None,
     partial_profit_taken=None,
@@ -181,6 +182,8 @@ def update_paper_trade(
 
     trade["highest_price"] = highest_price
     trade["lowest_price"] = lowest_price if lowest_price is not None else trade.get("lowest_price")
+    trade["current_price"] = current_price if current_price is not None else trade.get("current_price")
+    trade["current_price_updated_at"] = _now_et().isoformat()
     trade["rr_progress"] = rr_progress
     trade["stop_loss"] = updated_stop
     if bars_in_trade is not None:
@@ -215,11 +218,19 @@ def update_paper_trade(
         for field in ("mfe_r", "mae_r", "trend_health_score"):
             if execution_metrics.get(field) is not None:
                 trade[field] = execution_metrics.get(field)
+        if execution_metrics.get("trend_health_status") is not None:
+            trade["last_trend_health_status"] = execution_metrics.get("trend_health_status")
+        if execution_metrics.get("exit_confidence_score") is not None:
+            trade["last_exit_confidence_score"] = execution_metrics.get("exit_confidence_score")
     if exit_state is not None:
         trade["v1_ema_grace_pending"] = bool(exit_state.get("v1_ema_grace_pending"))
+        for field in ("profit_protection_active", "profit_lock_stop", "profit_giveback_r"):
+            if exit_state.get(field) is not None:
+                trade[field] = exit_state.get(field)
 
     state[trade_key] = trade
     save_paper_trades(state)
+    _queue_paper_trade_upsert(trade)
     return trade
 
 

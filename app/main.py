@@ -212,6 +212,28 @@ SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
 )
 
 
+def _initialize_execution_fields(df):
+
+    df = df.copy()
+    recommendation = df.get("Action Status", pd.Series("UNKNOWN", index=df.index))
+    actionable = recommendation.astype(str).str.upper().isin({"ENTER", "ENTER_PAPER"})
+    df["Scanner Recommendation"] = "NO_RECOMMENDATION"
+    df.loc[actionable, "Scanner Recommendation"] = "ENTRY_RECOMMENDED"
+    df.loc[
+        recommendation.astype(str).str.upper().eq("REVIEW_TV_CHART"),
+        "Scanner Recommendation"
+    ] = "REVIEW_RECOMMENDED"
+    df["Execution Eligibility"] = "NOT_REQUESTED"
+    df["Execution Outcome"] = "NOT_REQUESTED"
+    df["Execution Reason"] = None
+    df["Trade Status"] = "NOT_CREATED"
+    df["Telegram Status"] = "NO_LIFECYCLE_EVENT"
+    df["Telegram Reason"] = "NO_LIFECYCLE_EVENT"
+    df.loc[actionable, "Execution Eligibility"] = "PENDING"
+    df.loc[actionable, "Execution Outcome"] = "PENDING"
+    return df
+
+
 def _env_bool(name, default=False):
 
     value = os.getenv(name)
@@ -254,7 +276,7 @@ SCANNER_MAX_WORKERS = max(
 )
 
 
-def process_symbol(symbol):
+def process_symbol(symbol, force_refresh=False):
 
     start = time.perf_counter()
 
@@ -264,7 +286,8 @@ def process_symbol(symbol):
             symbol,
             5,
             "minute",
-            1
+            1,
+            force_refresh=force_refresh,
         )
 
         return {
@@ -3208,6 +3231,29 @@ def _persist_scan_outputs(
             f"{snapshot_result['path']}"
         )
 
+    try:
+
+        with profile_timer.stage("Recommendation outcomes"):
+
+            from app.analytics.recommendation_outcomes import write_recommendation_outcomes
+
+            recommendation_outcomes = write_recommendation_outcomes(
+                df_results,
+                trading_day,
+                scan_id,
+                observed_at.isoformat(),
+            )
+
+        print(
+            "[RECOMMENDATION OUTCOMES] "
+            f"facts={recommendation_outcomes['facts_created']} "
+            f"horizons={recommendation_outcomes['outcomes_created']}"
+        )
+
+    except Exception as exc:
+
+        print(f"[RECOMMENDATION OUTCOMES WARNING] {exc}")
+
     if regression_snapshot_result:
 
         print(
@@ -3394,6 +3440,7 @@ def _finalize_scan_outputs(
             df_results
         )
         df_results = rank_candidates(df_results)
+        df_results = _initialize_execution_fields(df_results)
 
     option_freshness = df_results.get("Option Quote Freshness", pd.Series(dtype=object)).astype(str).str.upper()
     successful_runtimes = [
@@ -3662,6 +3709,19 @@ def _run_scanner_impl():
             market_data_status = get_market_data_status(
                 df_5m_raw
             )
+
+            if (
+                market_data_status.get("delay_minutes") is not None
+                and market_data_status["delay_minutes"] > settings.max_stock_data_delay_minutes
+            ):
+
+                refresh_result = process_symbol(symbol, force_refresh=True)
+                if refresh_result.get("success") and not refresh_result.get("data").empty:
+                    refreshed_status = get_market_data_status(refresh_result["data"])
+                    if refreshed_status.get("delay_minutes") <= market_data_status["delay_minutes"]:
+                        df_5m_raw = refresh_result["data"]
+                        market_data_status = refreshed_status
+                        market_data_status["forced_refresh_attempted"] = True
 
             time.sleep(1)
 
@@ -4576,6 +4636,8 @@ def _run_scanner_impl():
                         exit_setup[
                             "updated_stop"
                         ],
+
+                        current_price=current_symbol_close,
 
                         lowest_price=exit_setup[
                             "lowest_price"

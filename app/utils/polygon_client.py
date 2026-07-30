@@ -333,7 +333,7 @@ def _cache_set(key, val):
     _cache[key] = (time.monotonic(), val)
 
 
-def get_aggs_cached(symbol: str, multiplier: int, timespan: str, from_: int, to: int, limit: int = 200):
+def get_aggs_cached(symbol: str, multiplier: int, timespan: str, from_: int, to: int, limit: int = 200, force_refresh: bool = False):
     """Fetch aggregates with a short TTL cache to avoid duplicate calls.
 
     Returns a list of plain dicts with keys: timestamp, open, high, low, close, volume
@@ -341,7 +341,7 @@ def get_aggs_cached(symbol: str, multiplier: int, timespan: str, from_: int, to:
     key = (symbol, multiplier, timespan, from_, to, limit)
 
     cache_read_start = time.perf_counter()
-    cached = _cache_get(key)
+    cached = None if force_refresh else _cache_get(key)
     cache_read_seconds = time.perf_counter() - cache_read_start
 
     if cached is not None:

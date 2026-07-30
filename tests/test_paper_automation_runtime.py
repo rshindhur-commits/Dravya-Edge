@@ -93,9 +93,16 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
             "app.state.paper_trade_manager.load_paper_trades",
             return_value={},
         ):
-            result = run_auto_paper_entries(pd.DataFrame([row]), controls)
+            frame = pd.DataFrame([row])
+            result = run_auto_paper_entries(frame, controls)
 
         self.assertEqual(result, [])
+        self.assertEqual(frame.loc[0, "Execution Eligibility"], "NOT_EXECUTED")
+        self.assertEqual(frame.loc[0, "Execution Outcome"], "SKIPPED")
+        self.assertEqual(frame.loc[0, "Execution Reason"], "SETUP_INVALID")
+        self.assertEqual(frame.loc[0, "Trade Status"], "NOT_CREATED")
+        self.assertEqual(frame.loc[0, "Telegram Status"], "NO_LIFECYCLE_EVENT")
+        self.assertEqual(frame.loc[0, "Telegram Reason"], "NO_LIFECYCLE_EVENT")
         terminal = [
             call for call in record_decision.call_args_list
             if call.args[1] in {"OPENED", "BLOCKED", "SKIPPED"}

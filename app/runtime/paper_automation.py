@@ -47,6 +47,18 @@ def run_auto_paper_entries(df, controls):
             trade=trade,
             controls=controls,
         )
+        execution_eligibility = {
+            "OPENED": "ELIGIBLE",
+            "BLOCKED": "INELIGIBLE",
+            "SKIPPED": "NOT_EXECUTED",
+        }[decision]
+        df.loc[row.name, "Execution Eligibility"] = execution_eligibility
+        df.loc[row.name, "Execution Outcome"] = decision
+        df.loc[row.name, "Execution Reason"] = reason
+        df.loc[row.name, "Trade Status"] = "OPEN" if decision == "OPENED" else "NOT_CREATED"
+        if decision != "OPENED":
+            df.loc[row.name, "Telegram Status"] = "NO_LIFECYCLE_EVENT"
+            df.loc[row.name, "Telegram Reason"] = "NO_LIFECYCLE_EVENT"
         accounted.add(row.name)
         outcomes[decision] += 1
 
@@ -284,6 +296,10 @@ def run_auto_paper_entries(df, controls):
             )
         except Exception as exc:
             telegram_entry_result = {"reason": f"TELEGRAM_ENTRY_ALERT_FAILED:{type(exc).__name__}:{exc}"}
+
+        telegram_sent = bool(telegram_entry_result.get("sent"))
+        df.loc[row.name, "Telegram Status"] = "SENT" if telegram_sent else "NOT_SENT"
+        df.loc[row.name, "Telegram Reason"] = telegram_entry_result.get("reason")
 
         _record_auto_paper_decision(
             row.get("Symbol"),

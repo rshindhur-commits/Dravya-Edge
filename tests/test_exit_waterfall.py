@@ -115,6 +115,42 @@ class ExitWaterfallTests(unittest.TestCase):
         self.assertTrue(result["grace_zone_active"])
         self.assertTrue(result["v1_ema_grace_pending"])
 
+    def test_multiday_profit_protection_exits_after_peak_giveback(self):
+
+        result = evaluate_exit(
+            pd.DataFrame([{
+                "Close": 104,
+                "High": 104.5,
+                "Low": 103.5,
+                "ATR": 1,
+                "EMA9": 103,
+                "EMA9_SLOPE": 1,
+                "EMA20": 102,
+                "VWAP": 103,
+                "MACD": 1,
+                "MACD_SIGNAL": 0.5,
+                "RSI": 60,
+            }]),
+            {},
+            {
+                "entry_price": 100,
+                "stop_loss": 98,
+                "take_profit": 110,
+            },
+            entry_setup={"entry_type": "BREAKOUT"},
+            trade_state={
+                "holding_profile": "MULTIDAY",
+                "highest_price": 106,
+                "lowest_price": 100,
+                "bars_in_trade": 8,
+            },
+        )
+
+        self.assertTrue(result["exit_signal"])
+        self.assertEqual(result["exit_rule"], "PROFIT_PROTECTION")
+        self.assertEqual(result["profit_lock_stop"], 102.0)
+        self.assertEqual(result["profit_giveback_r"], 1.0)
+
 
 if __name__ == "__main__":
 
