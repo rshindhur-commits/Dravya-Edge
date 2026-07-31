@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from app.exit.exit_engine import (
+    _bars_since_entry,
     _calculate_rr_progress,
     evaluate_exit,
     resolve_risk_per_share,
@@ -21,6 +22,7 @@ from app.exit.exit_engine import (
 from app.state.paper_trade_manager import (
     _backfill_initial_stop,
     _initial_risk_per_share,
+    _paper_trade_result,
 )
 
 
@@ -174,6 +176,156 @@ class PaperTradeInitialStopTests(unittest.TestCase):
         _backfill_initial_stop(trade)
 
         self.assertEqual(trade["initial_stop_loss"], 98.0)
+
+
+class BarsSinceEntryTests(unittest.TestCase):
+    """Bars elapsed must come from the frame, not from how often we scanned.
+
+    `bars_in_trade` was incremented once per evaluate_exit call, so at the 300s
+    REGULAR cadence a 15m bar counted three times and every bar-denominated
+    threshold fired 3x early -- the 24-bar time exit at 2h instead of 6h, the
+    MULTIDAY momentum leash at 30m instead of 90m.
+    """
+
+    def _frame_from(self, start, periods):
+        index = pd.date_range(start, periods=periods, freq="15min", tz="America/New_York")
+        return pd.DataFrame({"Close": [100.0] * periods}, index=index)
+
+    def test_counts_bars_not_scans(self):
+        """Four 15m bars since entry reads 4, however many times we evaluated."""
+
+        frame = self._frame_from("2026-07-29 14:00", 8)
+        trade = {"opened_at_et": "2026-07-29T15:00:00-04:00", "bars_in_trade": 40}
+
+        self.assertEqual(_bars_since_entry(frame, trade, fallback=41), 4)
+
+    def test_first_evaluation_after_entry_still_reads_one(self):
+        """Nothing shifts at the start of a trade."""
+
+        frame = self._frame_from("2026-07-29 14:00", 5)
+        trade = {"opened_at_et": "2026-07-29T15:00:00-04:00"}
+
+        self.assertEqual(_bars_since_entry(frame, trade, fallback=1), 1)
+
+    def test_entry_after_the_last_bar_is_still_bar_one(self):
+
+        frame = self._frame_from("2026-07-29 14:00", 4)
+        trade = {"opened_at_et": "2026-07-29T18:00:00-04:00"}
+
+        self.assertEqual(_bars_since_entry(frame, trade, fallback=1), 1)
+
+    def test_accepts_the_naive_et_opened_at_format(self):
+
+        frame = self._frame_from("2026-07-29 14:00", 8)
+        trade = {"opened_at": "2026-07-29 15:00:00"}
+
+        self.assertEqual(_bars_since_entry(frame, trade, fallback=99), 4)
+
+    def test_falls_back_when_the_entry_timestamp_is_unusable(self):
+
+        frame = self._frame_from("2026-07-29 14:00", 8)
+
+        self.assertEqual(_bars_since_entry(frame, {}, fallback=7), 7)
+        self.assertEqual(_bars_since_entry(frame, None, fallback=7), 7)
+        self.assertEqual(
+            _bars_since_entry(frame, {"opened_at": "not a timestamp"}, fallback=7), 7
+        )
+
+    def test_falls_back_on_an_empty_frame(self):
+
+        trade = {"opened_at_et": "2026-07-29T15:00:00-04:00"}
+
+        self.assertEqual(_bars_since_entry(pd.DataFrame(), trade, fallback=3), 3)
+
+
+class ClosedTradeRMultipleTests(unittest.TestCase):
+    """The close-out path must use the same frozen denominator as the exit engine.
+
+    `resolve_risk_per_share` was applied to rr_progress and mfe_r but not to the
+    R booked at close, so a trade could be managed correctly and still be
+    *recorded* against the moved stop. That biases the record against winners:
+    reaching +1R is what moves the stop, so every trade that worked reported no R.
+    """
+
+    def test_breakeven_stop_no_longer_voids_r_at_close(self):
+        """The 2026-07-29 NVDA close: entry and stop both 193.32."""
+
+        result = _paper_trade_result(
+            {
+                "entry_price": 193.32,
+                "stop_loss": 193.32,          # moved to breakeven during the trade
+                "initial_stop_loss": 191.27,  # frozen entry risk
+                "take_profit": 197.81,
+                "direction": "CALL",
+            },
+            192.23,
+        )
+
+        # -1.09 against a frozen 2.05 risk.
+        self.assertAlmostEqual(result["r_multiple"], -0.53, places=2)
+        self.assertEqual(result["outcome"], "LOSS")
+
+    def test_stop_trailed_into_profit_still_measures_r(self):
+        """A trailed long stop sits *above* entry; the signed form went negative."""
+
+        result = _paper_trade_result(
+            {
+                "entry_price": 100.0,
+                "stop_loss": 103.0,           # trailed past entry
+                "initial_stop_loss": 98.0,
+                "take_profit": 110.0,
+                "direction": "CALL",
+            },
+            104.0,
+        )
+
+        self.assertAlmostEqual(result["r_multiple"], 2.0, places=2)
+
+    def test_short_side_uses_the_frozen_stop(self):
+
+        result = _paper_trade_result(
+            {
+                "entry_price": 100.0,
+                "stop_loss": 100.0,           # breakeven on a short
+                "initial_stop_loss": 102.0,
+                "take_profit": 94.0,
+                "direction": "PUT",
+            },
+            98.0,
+        )
+
+        self.assertAlmostEqual(result["r_multiple"], 1.0, places=2)
+
+    def test_legacy_trade_without_initial_stop_falls_back(self):
+        """Trades opened before `initial_stop_loss` existed still report R."""
+
+        result = _paper_trade_result(
+            {
+                "entry_price": 100.0,
+                "stop_loss": 98.0,
+                "take_profit": 106.0,
+                "direction": "CALL",
+            },
+            102.0,
+        )
+
+        self.assertAlmostEqual(result["r_multiple"], 1.0, places=2)
+
+    def test_no_usable_risk_reports_no_r_rather_than_a_wrong_one(self):
+
+        result = _paper_trade_result(
+            {
+                "entry_price": 100.0,
+                "stop_loss": 100.0,
+                "initial_stop_loss": 100.0,
+                "take_profit": 106.0,
+                "direction": "CALL",
+            },
+            102.0,
+        )
+
+        self.assertIsNone(result["r_multiple"])
+        self.assertAlmostEqual(result["pnl_pct"], 2.0, places=2)
 
 
 if __name__ == "__main__":

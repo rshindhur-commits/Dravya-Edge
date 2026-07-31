@@ -15,6 +15,7 @@ from app.gates import (
     is_symbol_in_cooldown,
     symbol_trade_count_today,
 )
+from app.gates.setup_quality import MIN_SETUP_BASE
 from app.state.holding_policy import holding_policy
 from app.storage.auto_paper_decision_store import (
     append_daily_auto_paper_decision,
@@ -97,7 +98,7 @@ def load_auto_paper_controls():
             settings.get("auto_paper_max_daily")
             or env_int("MAX_DAILY_ENTRIES", 3)
         ),
-        "min_setup": float(settings.get("auto_paper_min_setup", 70)),
+        "min_setup": float(settings.get("auto_paper_min_setup", MIN_SETUP_BASE)),
         "min_rr": float(settings.get("auto_paper_min_rr", DEFAULT_AUTO_PAPER_MIN_RR)),
         "direction": settings.get("auto_paper_direction", "Both"),
         # Default ON. `app/state/auto_paper_settings.json` is gitignored, so on
@@ -485,7 +486,7 @@ def _gate_counterfactuals(row, controls):
             return None
 
     current_rr = controls.get("min_rr", DEFAULT_AUTO_PAPER_MIN_RR)
-    current_setup = controls.get("min_setup", 70.0)
+    current_setup = controls.get("min_setup", MIN_SETUP_BASE)
     action_status = str(row.get("Action Status") or "").strip().upper()
 
     return {

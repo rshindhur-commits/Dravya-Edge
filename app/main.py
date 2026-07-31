@@ -48,6 +48,7 @@ from app.gates import (
     EntryGateConfig,
     evaluate_entry_gate
 )
+from app.gates.setup_quality import MIN_SETUP_BASE, setup_percent_from_row
 from app.indicators.technical_indicators import (
     MIN_5M_BARS_FOR_15M_INDICATORS,
     compute_indicators
@@ -60,7 +61,7 @@ from app.strategies.entry_engine_v1 import detect_entry
 from app.strategies.entry_engine_v2 import evaluate_shadow_entry_v2
 from app.risk.risk_manager import calculate_risk
 from app.risk.event_blocker import evaluate_event_blocker
-from app.exit.exit_engine_v1 import evaluate_exit
+from app.exit.exit_engine_v1 import evaluate_exit, resolve_exit_fill
 from app.exit.exit_engine_v2 import evaluate_shadow_exit_v2
 
 from app.utils.timeframe_resampler import (
@@ -2410,55 +2411,13 @@ def _entry_is_valid(entry):
 
 
 def _compute_setup_percent_for_gate(row):
+    """Thin alias. The metric lives in app/gates/setup_quality.py.
 
-    score = abs(_row_float(row, "15m Score"))
-    rr = _row_float(row, "Risk Reward")
-    action = str(row.get("Action Status", "WAIT")).upper()
-    entry = row.get("Entry")
-    setup_valid = _row_bool(row.get("Setup Valid"))
-    score_points = min(score / 10, 1) * 40
-    rr_points = min(rr / 2.5, 1) * 25
-    entry_points = 15 if _entry_is_valid(entry) else 0
+    It was defined here and byte-identically again in dashboard.py, which is how
+    two copies of a scoring rule stay in sync only by luck.
+    """
 
-    if action in ["ENTER", "ENTER_PAPER"]:
-
-        action_points = 20
-
-    elif action in ["WATCH", "REVIEW_TV_CHART"]:
-
-        action_points = 15
-
-    elif action == "QUALITY_BUT_TOO_EXPENSIVE":
-
-        action_points = 10
-
-    elif action == "WAIT":
-
-        action_points = 5
-
-    else:
-
-        action_points = 0
-
-    readiness = score_points + rr_points + entry_points + action_points
-
-    if not setup_valid and action != "REVIEW_TV_CHART":
-
-        readiness = min(readiness, 59)
-
-    if action in [
-        "AVOID",
-        "NO_TRADE_MARKET_CLOSED",
-        "OPTION_MARKET_CLOSED",
-        "NO_BID_ASK",
-        "NO_QUOTE_SNAPSHOT",
-        "RATE_LIMITED",
-        "PROVIDER_ERROR"
-    ]:
-
-        readiness = min(readiness, 49)
-
-    return round(max(0, min(readiness, 100)), 0)
+    return setup_percent_from_row(row)
 
 
 # Mirrors _auto_paper_actionable_rows(): the statuses from which a position can
@@ -4658,11 +4617,18 @@ def _run_scanner_impl():
             # =====================================
             # Entry Timing Filter
             # =====================================
+            #
+            # "BREAKOUT_LONG" is not a value detect_entry() can return -- it emits
+            # "BREAKOUT". The name survives elsewhere as a legacy alias (risk
+            # geometry, option direction, the active-trade direction inference),
+            # but never as a fresh setup, so this list only ever matched
+            # BREAKDOWN_SHORT and the long side of the breakout pair went
+            # unfiltered. Both names are matched now so the alias stays harmless.
 
             if (
-                entry_setup["entry_type"] in 
-                ["BREAKOUT_LONG", "BREAKDOWN_SHORT"]
-                and 
+                entry_setup["entry_type"] in
+                ["BREAKOUT", "BREAKOUT_LONG", "BREAKDOWN_SHORT"]
+                and
                 not analysis_15m["entry_timing_ok"]
             ):
 
@@ -5070,11 +5036,44 @@ def _run_scanner_impl():
 
                         print(f"[V1 ENGINE EVENT WARNING] {exc}")
 
+                    # Level-triggered exits fill at their level, not at whatever
+                    # the last 5m print happened to be. Re-resolved here rather
+                    # than taken from exit_setup because `current_symbol_close`
+                    # prefers the 5m close and the exit engine priced against the
+                    # 15m frame.
+                    exit_fill_price, exit_slippage = resolve_exit_fill(
+                        exit_setup.get("exit_rule"),
+                        str(active_trade.get("direction") or "").upper() == "PUT",
+                        current_symbol_close,
+                        active_trade.get("stop_loss"),
+                        active_trade.get("take_profit"),
+                    )
+
+                    if exit_slippage:
+
+                        print(
+                            f"[EXIT FILL] {symbol} "
+                            f"rule={exit_setup.get('exit_rule')} "
+                            f"market={current_symbol_close} "
+                            f"fill={exit_fill_price} "
+                            f"slippage={exit_slippage}"
+                        )
+
                     close_paper_trade(
                         symbol,
-                        close_price=current_symbol_close,
+                        close_price=(
+                            exit_fill_price
+                            if exit_fill_price is not None
+                            else current_symbol_close
+                        ),
                         exit_reason=exit_setup.get("exit_reason") or "Scanner exit",
-                        scanner_context={"Symbol": symbol, "Price": current_symbol_close},
+                        scanner_context={
+                            "Symbol": symbol,
+                            "Price": current_symbol_close,
+                            "Exit Fill Price": exit_fill_price,
+                            "Exit Slippage": exit_slippage,
+                            "Exit Rule": exit_setup.get("exit_rule"),
+                        },
                         notify_exit=False,
                     )
 

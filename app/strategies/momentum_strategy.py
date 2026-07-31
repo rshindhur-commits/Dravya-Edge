@@ -1005,6 +1005,33 @@ def analyze_setup(df):
     entry_timing_ok = True
     timing_penalty = 2
 
+    def apply_timing_penalty(current_score):
+        """Move the score toward neutral by `timing_penalty`, never past it.
+
+        These filters exist to say "the edge may be real but this is a poor
+        moment to take it", so the penalty has to reduce conviction whichever
+        way the score points. A bare `score -= timing_penalty` only does that
+        for a positive score; against a negative one it *adds* conviction.
+
+        Filters 1 and 2 both measure direction-agnostic conditions -- a large
+        candle body, distance from VWAP as an absolute -- so before this they
+        turned a chased short into a stronger short. A 1.5% extension below
+        VWAP pushed a -6 toward -8, i.e. from BEARISH across the -7 HIGH
+        CONVICTION threshold, on the strength of a filter meant to hold it back.
+
+        Filter 3 below already guards its sign explicitly (`and score > 0` /
+        `and score < 0`); this is the same rule expressed once so filters 1 and
+        2 cannot drift from it again.
+        """
+
+        if current_score > 0:
+            return max(0, current_score - timing_penalty)
+
+        if current_score < 0:
+            return min(0, current_score + timing_penalty)
+
+        return current_score
+
     # -----------------------------------------
     # 1. Extended Candle Filter
     # -----------------------------------------
@@ -1015,7 +1042,7 @@ def analyze_setup(df):
             "Extended candle risk"
         )
 
-        score -= timing_penalty
+        score = apply_timing_penalty(score)
 
         entry_timing_ok = False
 
@@ -1040,7 +1067,7 @@ def analyze_setup(df):
             "Price extended from VWAP"
         )
 
-        score -= timing_penalty
+        score = apply_timing_penalty(score)
 
         entry_timing_ok = False
 

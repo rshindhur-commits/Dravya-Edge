@@ -22,6 +22,85 @@ EXIT_PRIORITY = {
 }
 
 
+def resolve_exit_fill(exit_code, is_short, market_price, stop_loss, take_profit):
+    """The price an exit actually fills at, given the rule that fired.
+
+    Every exit was booked at the latest 5m close regardless of why it fired, which
+    silently detached execution from the levels the trade was built on. A stop is
+    detected on the 15m bar's High/Low but filled wherever price happened to be at
+    the last 5m print, up to a full scan interval later.
+
+    SPCX on 2026-07-20 is the worked example: stop 125.38 against a 0.58 risk,
+    booked at 124.87. Half a point past the stop turned an intended -1R into
+    -1.88R -- 88% more than the trade was ever sized to lose. NVDA on 2026-07-29
+    filled 1.09 past a breakeven stop. Because the overshoot was folded into the
+    fill price and never recorded, a stop that could not hold looked like a
+    strategy that lost more than it risked.
+
+    The model, mirrored for shorts:
+
+    * HARD_STOP    -- a stop becomes a market order the moment it is touched, so
+                      the fill is never *better* than the stop and is worse when
+                      price has already run past it: `min(stop, market)` long.
+    * HARD_TARGET  -- a limit resting at the target. The rule only fires once the
+                      bar has traded through it, so it fills at the target rather
+                      than wherever the bar happened to close.
+    * everything else -- EMA, VWAP, MACD, failed breakout, time, near-close and
+                      profit protection are discretionary market exits with no
+                      resting level, so the close is the honest fill.
+
+    This is deliberately not a slippage *model*: it adds no assumed cost and
+    invents no price the market did not print. It stops crediting a stop with a
+    fill better than a stop can get, and stops charging a limit for a fill worse
+    than a limit would take.
+
+    Returns `(fill, adverse_slippage)`. Slippage is measured against the rule's
+    trigger level, not against the close: it answers "how much worse than the
+    level I meant to exit at did I actually get", which is the quantity that
+    turned SPCX's planned -1R into -1.88R. Positive is always adverse, it is zero
+    when the level was honoured, and it is directly comparable to R once divided
+    by risk per share. Market exits have no trigger level and so report zero.
+    """
+
+    market_price = _float_or_none(market_price)
+
+    if market_price is None:
+        return None, None
+
+    trigger = None
+
+    if exit_code == "HARD_STOP":
+        trigger = _float_or_none(stop_loss)
+
+    elif exit_code == "HARD_TARGET":
+        trigger = _float_or_none(take_profit)
+
+    if trigger is None:
+        return market_price, 0.0
+
+    if exit_code == "HARD_STOP":
+        # A stop is a market order once touched: never better than the level,
+        # worse when price has already traded through it.
+        fill = max(trigger, market_price) if is_short else min(trigger, market_price)
+    else:
+        # A limit resting at the target, which the bar has already traded through.
+        fill = trigger
+
+    adverse = (fill - trigger) if is_short else (trigger - fill)
+
+    return fill, round(max(0.0, adverse), 4)
+
+
+def _float_or_none(value):
+
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    return None if result != result else result
+
+
 def _env_float(name, default):
     try:
         return float(os.getenv(name, default))
@@ -64,6 +143,66 @@ def _get_timestamp_et(latest):
     except Exception:
 
         return None
+
+
+def _bars_since_entry(df, trade_state, fallback):
+    """Bars of the evaluation timeframe elapsed since entry.
+
+    The previous count was `trade_state["bars_in_trade"] + 1`, incremented once
+    per `evaluate_exit` call. That counts *scans*, not bars, and the scanner's
+    cadence is not the bar interval: `SESSION_INTERVALS` is 300s in REGULAR and
+    120s in OPENING_RANGE, while exits are evaluated on 15m bars. So the same
+    forming bar was counted three times in a regular session and seven times at
+    the open, and every threshold expressed in bars fired that much earlier:
+
+        rule                              old value   was firing at   now
+        time exit                         24 scans    ~2h             8 bars
+        MULTIDAY_MOMENTUM_EXIT_MIN_BARS   6 scans     ~30m            2 bars
+        _should_guard_early_exit          3 scans     ~15m            1 bar
+
+    Worse, it moved whenever the cadence did, so an A/B run against an archived
+    day could not reproduce a live session's exits.
+
+    Each constant was restated in 15m bars to hold the wall-clock behaviour the
+    system has actually been running, rather than the longer one its old value
+    implied. That keeps this a unit fix: the timings are unchanged and only their
+    dependence on scan cadence is gone. All three are env-tunable from here.
+
+    Counting bars off the frame's own index makes the measure cadence-independent
+    and matches what every threshold already claims to express. The bar holding
+    the entry counts as bar 1, so the first evaluation after entry still reads 1
+    and nothing shifts at the start of a trade.
+
+    Falls back to the incrementing counter when the entry timestamp is missing or
+    unparseable, which keeps legacy trades and synthetic frames working.
+    """
+
+    opened_at = (trade_state or {}).get("opened_at_et") or (trade_state or {}).get("opened_at")
+
+    if not opened_at or df is None or df.empty:
+        return fallback
+
+    try:
+        entry_ts = pd.Timestamp(opened_at)
+    except (TypeError, ValueError):
+        return fallback
+
+    try:
+        if entry_ts.tzinfo is None:
+            entry_ts = entry_ts.tz_localize("America/New_York")
+
+        index = df.index
+
+        if index.tz is None:
+            index = index.tz_localize("UTC")
+
+        bars = int((index.tz_convert("America/New_York") >= entry_ts).sum())
+
+    except Exception:
+        return fallback
+
+    # A trade opened after the last bar's timestamp is still in its first bar.
+    return max(1, bars)
 
 
 def resolve_risk_per_share(entry_price, initial_stop_loss, current_stop_loss):
@@ -135,24 +274,41 @@ def _round_float(value, digits=2):
         return value
 
 
-def trend_still_valid(df, direction):
+def trend_still_valid(df, direction, ignore=None):
+    """Whether the trend behind the position is otherwise intact.
+
+    `ignore` names the component whose rule just fired, and is excluded from the
+    verdict. Without it the question is self-defeating: a VWAP exit fires because
+    price crossed VWAP, so asking "is the trend intact, including price being on
+    the right side of VWAP?" can only answer no. That made the VWAP entry in
+    `_should_guard_early_exit`'s weak_exit_reasons unreachable -- the rule was
+    listed as guardable and never once could be guarded.
+
+    Excluding the triggering component asks the question that was intended: the
+    rule fired, but does the rest of the evidence still support the trade?
+    """
 
     latest = df.iloc[-1]
     direction = str(direction or "").upper()
+    ignore = str(ignore or "").upper()
 
-    if direction == "CALL":
-
-        return (
-            latest["Close"] > latest["VWAP"]
-            and latest["EMA9"] > latest["EMA20"]
-            and latest["RSI"] > 55
-        )
-
-    return (
-        latest["Close"] < latest["VWAP"]
-        and latest["EMA9"] < latest["EMA20"]
-        and latest["RSI"] < 45
+    vwap_ok = ignore == "VWAP" or (
+        latest["Close"] > latest["VWAP"]
+        if direction == "CALL"
+        else latest["Close"] < latest["VWAP"]
     )
+    ema_ok = ignore == "EMA" or (
+        latest["EMA9"] > latest["EMA20"]
+        if direction == "CALL"
+        else latest["EMA9"] < latest["EMA20"]
+    )
+    rsi_ok = (
+        latest["RSI"] > 55
+        if direction == "CALL"
+        else latest["RSI"] < 45
+    )
+
+    return bool(vwap_ok and ema_ok and rsi_ok)
 
 
 def _momentum_exits_allowed(holding_profile, bars_in_trade):
@@ -182,7 +338,11 @@ def _momentum_exits_allowed(holding_profile, bars_in_trade):
     if str(holding_profile or "").upper() != "MULTIDAY":
         return True
 
-    minimum_bars = _env_float("MULTIDAY_MOMENTUM_EXIT_MIN_BARS", 6)
+    # Restated in true bars. This was 6 while `bars_in_trade` counted scans, so
+    # at the 300s REGULAR cadence it was a 30-minute leash, not the 90 minutes
+    # "6 bars" implies. 2 bars of 15m keeps the 30 minutes that was actually
+    # observed and tuned against, now independent of how often we scan.
+    minimum_bars = _env_float("MULTIDAY_MOMENTUM_EXIT_MIN_BARS", 2)
 
     try:
         return float(bars_in_trade or 0) >= minimum_bars
@@ -192,7 +352,10 @@ def _momentum_exits_allowed(holding_profile, bars_in_trade):
 
 def _should_guard_early_exit(df, exit_reason, bars_in_trade, rr_progress, is_short):
 
-    if bars_in_trade > 3:
+    # Was `> 3` against a scan counter, i.e. the first ~15 minutes at the REGULAR
+    # cadence. One 15m bar preserves that; the guard is meant to cover the noise
+    # immediately after entry, not the first three quarters of an hour.
+    if bars_in_trade > _env_float("EARLY_EXIT_GUARD_MAX_BARS", 1):
 
         return False
 
@@ -200,20 +363,33 @@ def _should_guard_early_exit(df, exit_reason, bars_in_trade, rr_progress, is_sho
 
         return False
 
-    weak_exit_reasons = [
-        "EMA9 invalidation",
-        "VWAP invalidation",
-        "MACD",
-        "Failed breakout"
-    ]
+    # Mapped to the trend component each rule tests, so that component can be
+    # excluded from the verdict below. "Failed breakout" and MACD test neither
+    # VWAP nor the EMA stack, so nothing is excluded for them.
+    weak_exit_reasons = {
+        "EMA9 invalidation": "EMA",
+        "VWAP invalidation": "VWAP",
+        "MACD": None,
+        "Failed breakout": None,
+    }
 
-    if not any(reason in str(exit_reason) for reason in weak_exit_reasons):
+    triggered = next(
+        (
+            (reason, component)
+            for reason, component in weak_exit_reasons.items()
+            if reason in str(exit_reason)
+        ),
+        None,
+    )
+
+    if triggered is None:
 
         return False
 
     return trend_still_valid(
         df,
-        "PUT" if is_short else "CALL"
+        "PUT" if is_short else "CALL",
+        ignore=triggered[1],
     )
 
 
@@ -314,11 +490,15 @@ def evaluate_exit(
         current_price
     )
 
-    bars_in_trade = (
-        trade_state.get("bars_in_trade", 0)
-        if trade_state
-        else 0
-    ) + 1
+    bars_in_trade = _bars_since_entry(
+        df,
+        trade_state,
+        fallback=(
+            trade_state.get("bars_in_trade", 0)
+            if trade_state
+            else 0
+        ) + 1,
+    )
 
     partial_profit_taken = (
         trade_state.get("partial_profit_taken", False)
@@ -546,7 +726,11 @@ def evaluate_exit(
         exit_signal = True
         exit_reason = primary_exit["reason"]
 
-    if bars_in_trade >= 24 and rr_progress < 0.5:
+    # 24 against a scan counter was ~2h at the REGULAR cadence, not the 6h that
+    # "24 bars" reads as. 8 bars of 15m holds that 2h, which is the behaviour the
+    # system has actually been running and the only one with evidence behind it.
+    # A genuine 6h stagnation exit would barely fire inside a 9:45-15:55 session.
+    if bars_in_trade >= _env_float("TIME_EXIT_BARS", 8) and rr_progress < 0.5:
 
         exit_reasons.append(_exit_diagnostic("TIME_EXIT", "Time exit: trade stagnation"))
         primary_exit = _select_primary_exit(exit_reasons)
@@ -578,19 +762,41 @@ def evaluate_exit(
         exit_reason = "Hold"
         adjustment_reason = "Early weak exit guarded; trend intact"
 
+    # The grace zone defers a lone momentum exit by one bar so a wick through the
+    # level does not close the trade on a bar that closes back the right side.
+    #
+    # It was scoped to EMA only, but EMA is the one momentum rule that least needs
+    # it: VWAP and MACD are bare state comparisons -- `price > VWAP`, `MACD <
+    # signal` -- with no buffer, no slope condition and no confirmation, evaluated
+    # against a still-forming bar. On 2026-07-29 nine of thirteen exits were soft
+    # invalidations, two of them booking +0.04R and +0.10R.
+    #
+    # Every other condition is unchanged: the rule must be the *only* exit reason,
+    # `grace_zone_eligible` still requires trend health >= 60, a position in profit
+    # or MFE >= 1R, exactly one soft confirmation and no confirmed trend failure,
+    # and the pending flag still allows the deferral only once per trade. This
+    # widens which rules may be deferred, not how easily.
+    #
+    # The persisted flag keeps its `v1_ema_grace_pending` name: it is written into
+    # live trade state by update_paper_trade(), so renaming it would strand any
+    # position open across the change.
+    GRACE_ELIGIBLE_EXITS = {"EMA", "VWAP", "MACD"}
+
     selected_exit = _select_primary_exit(exit_reasons) if exit_signal else None
-    first_ema_break = (
+    first_momentum_break = (
         selected_exit is not None
-        and selected_exit.get("code") == "EMA"
+        and selected_exit.get("code") in GRACE_ELIGIBLE_EXITS
         and len(exit_reasons) == 1
         and not bool((trade_state or {}).get("v1_ema_grace_pending"))
     )
-    grace_zone_active = first_ema_break and exit_confidence["grace_zone_eligible"]
+    grace_zone_active = first_momentum_break and exit_confidence["grace_zone_eligible"]
     if grace_zone_active:
         exit_signal = False
         exit_reason = "Hold"
         trade_action = "HOLD"
-        adjustment_reason = "EMA grace zone active; awaiting one-bar confirmation"
+        adjustment_reason = (
+            f"{selected_exit['code']} grace zone active; awaiting one-bar confirmation"
+        )
 
     if exit_signal:
 
@@ -606,6 +812,22 @@ def evaluate_exit(
     exit_waterfall = build_exit_waterfall(
         exit_reasons,
         selected_rule=exit_rule if exit_signal else None
+    )
+
+    # Priced against this frame's close. The caller may hold a fresher mark (the
+    # scanner prefers the 5m close), so it re-resolves the fill with that price;
+    # this keeps the exit engine's own result self-consistent for shadow runs,
+    # replays and tests that call evaluate_exit() directly.
+    exit_fill_price, exit_slippage = (
+        resolve_exit_fill(
+            exit_rule,
+            is_short,
+            current_price,
+            stop_loss,
+            take_profit,
+        )
+        if exit_signal
+        else (None, None)
     )
 
     debug_print(
@@ -626,6 +848,8 @@ def evaluate_exit(
         "primary_exit": exit_reason,
         "exit_waterfall": exit_waterfall,
         "exit_rule": exit_rule,
+        "exit_fill_price": _round_float(exit_fill_price),
+        "exit_slippage": exit_slippage,
         "exit_stage": (
             next(
                 (

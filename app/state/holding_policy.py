@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from app.gates.setup_quality import MIN_SETUP_MULTIDAY
+
 
 class HoldingProfile(StrEnum):
     INTRADAY = "INTRADAY"
@@ -89,7 +91,9 @@ def derive_holding_profile(candidate: dict[str, Any] | None) -> HoldingProfile:
         or "OVERNIGHT" in expected_hold
         or (
             expiration_bucket in MULTIDAY_EXPIRATION_BUCKETS
-            and setup_score >= 80
+            # On the setup_quality scale. 80 on the old metric passed 3.55% of
+            # archived rows; 76 here is the matched equivalent.
+            and setup_score >= MIN_SETUP_MULTIDAY
             and rr >= 1.8
             and option_quality >= 75
         )

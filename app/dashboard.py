@@ -66,6 +66,11 @@ from app.gates import (
     evaluate_entry_gate,
     price_geometry_error
 )
+from app.gates.setup_quality import (
+    MIN_SETUP_BASE,
+    setup_grade as _setup_quality_grade,
+    setup_percent_from_row,
+)
 from app.options.option_affordability import add_affordability_metrics
 from app.utils.json_store import (
     load_json_file,
@@ -662,78 +667,19 @@ def _entry_is_valid(entry):
 
 
 def _compute_setup_percent(row):
+    """Thin alias. The metric lives in app/gates/setup_quality.py.
 
-    score = abs(_safe_float(row.get("15m Score")))
-    rr = _safe_float(row.get("Risk Reward"))
-    action = str(row.get("Action Status", "WAIT")).upper()
-    entry = row.get("Entry")
-    setup_valid = bool(row.get("Setup Valid", False))
+    This was a byte-identical copy of the scanner's version, so the dashboard and
+    the gate could silently disagree about what a candidate scored.
+    """
 
-    score_points = min(score / 10, 1) * 40
-    rr_points = min(rr / 2.5, 1) * 25
-    entry_points = 15 if _entry_is_valid(entry) else 0
-
-    if action in ["ENTER", "ENTER_PAPER"]:
-
-        action_points = 20
-
-    elif action in ["WATCH", "REVIEW_TV_CHART"]:
-
-        action_points = 15
-
-    elif action == "QUALITY_BUT_TOO_EXPENSIVE":
-
-        action_points = 10
-
-    elif action == "WAIT":
-
-        action_points = 5
-
-    else:
-
-        action_points = 0
-
-    readiness = score_points + rr_points + entry_points + action_points
-
-    if not setup_valid and action != "REVIEW_TV_CHART":
-
-        readiness = min(readiness, 59)
-
-    if action in [
-        "AVOID",
-        "NO_TRADE_MARKET_CLOSED",
-        "OPTION_MARKET_CLOSED",
-        "NO_BID_ASK",
-        "NO_QUOTE_SNAPSHOT",
-        "RATE_LIMITED",
-        "PROVIDER_ERROR"
-    ]:
-
-        readiness = min(readiness, 49)
-
-    return round(max(0, min(readiness, 100)), 0)
+    return setup_percent_from_row(row)
 
 
 def _setup_grade(setup_pct):
+    """Grade bands rescaled with the metric, in app/gates/setup_quality.py."""
 
-    setup_pct = _safe_float(
-        setup_pct,
-        0
-    )
-
-    if setup_pct >= 82:
-
-        return f"A+ ({int(round(setup_pct))})"
-
-    if setup_pct >= 75:
-
-        return f"A ({int(round(setup_pct))})"
-
-    if setup_pct >= 65:
-
-        return f"B ({int(round(setup_pct))})"
-
-    return f"C ({int(round(setup_pct))})"
+    return _setup_quality_grade(setup_pct)
 
 
 def _style_setup_grade(value):
@@ -3091,9 +3037,9 @@ def _ai_candidate_eligibility(row):
 
         return False, "not a top 3 bullish/bearish candidate"
 
-    if _safe_float(row.get("Setup %"), 0) < 70:
+    if _safe_float(row.get("Setup %"), 0) < MIN_SETUP_BASE:
 
-        return False, "setup below 70"
+        return False, f"setup below {MIN_SETUP_BASE:.0f}"
 
     if _safe_float(row.get("RR"), 0) < 2:
 
