@@ -264,8 +264,19 @@ def upsert_paper_trade(trade):
         "pnl_pct": trade.get("pnl_pct"),
         "r_multiple": trade.get("r_multiple"),
         "payload": _json_safe(trade),
-        "opened_at": trade.get("opened_at"),
-        "closed_at": trade.get("closed_at"),
+        # The *_utc variants, which carry an offset. `opened_at`/`closed_at` are
+        # naive ET wall-clock strings from `_timestamp_for_key`, and Postgres
+        # read them as UTC when writing a timestamptz column -- so every row was
+        # four hours early. NVDA on 2026-07-31 stored `10:58:46+00:00` for a
+        # trade opened at 14:58:46 UTC, while `created_at` on the same row was
+        # correct, which is the tell.
+        #
+        # Deliberately not fixed in `_timestamp_for_key`: that string is part of
+        # `trade_key` ("NVDA|O:NVDA...|2026-07-31 12:57:59"), so changing its
+        # format would break identity for every position open across the change.
+        # Migration 024 corrects the rows already written.
+        "opened_at": trade.get("opened_at_utc") or trade.get("opened_at"),
+        "closed_at": trade.get("closed_at_utc") or trade.get("closed_at"),
         # Migration 012 lifecycle columns. These were never written, so the
         # holding_profile column kept its default while the payload carried the
         # real value -- on 2026-07-29 the column read INTRADAY for a MULTIDAY
