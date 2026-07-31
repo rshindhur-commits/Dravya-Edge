@@ -88,12 +88,17 @@ def annualised_realised_vol(atr_pct_15m):
     return sigma_per_bar * math.sqrt(BARS_PER_YEAR_15M) * 100.0
 
 
-def evaluate_iv_richness(option_iv, atr_pct_15m, max_ratio=None):
+def evaluate_iv_richness(option_iv, atr_pct_15m, max_ratio=None, realised_vol=None):
     """Compare implied to realised volatility for one contract.
 
     `option_iv` is accepted either as a percentage (61) or a fraction (0.61);
     Polygon has returned both shapes across endpoints, and reading 0.61 as 0.61%
     would make every contract look absurdly cheap and silently disable the check.
+
+    `realised_vol` is an already-annualised figure and takes precedence when given.
+    app.indicators.daily_context supplies it from daily bars, which is a far
+    shorter derivation than annualising a 15-minute ATR through 6,552 bars; the
+    ATR path stays as the fallback for when the daily frame is unavailable.
 
     `rich` is None when either side is unknown. Missing data is not evidence that a
     contract is expensive, and blocking on it would drop trades whenever the greeks
@@ -115,7 +120,12 @@ def evaluate_iv_richness(option_iv, atr_pct_15m, max_ratio=None):
     }
 
     implied = _number(option_iv)
-    realised = annualised_realised_vol(atr_pct_15m)
+    realised = _number(realised_vol)
+    result["realised_vol_source"] = "DAILY"
+
+    if realised is None or realised <= 0:
+        realised = annualised_realised_vol(atr_pct_15m)
+        result["realised_vol_source"] = "INTRADAY_ATR"
 
     if implied is not None and 0 < implied <= 5:
         # A fraction, not a percentage.

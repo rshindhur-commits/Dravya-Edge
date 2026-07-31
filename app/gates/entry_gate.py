@@ -484,6 +484,28 @@ def apply_regime_entry_thresholds(row, config: EntryGateConfig):
         min_rr = max(min_rr, 2.2)
         max_spread = min(max_spread, 5.0)
 
+    # Trading against the daily trend. Every frame the scanner builds is resampled
+    # from the same 5-minute pull, so until daily_context existed a candidate could
+    # be a clean 15-minute pullback inside a three-week daily downtrend and nothing
+    # could tell the difference.
+    #
+    # Not a block. Counter-trend entries are where reversals begin and the strongest
+    # names turn first; they just have to be better than a setup the higher
+    # timeframe agrees with.
+    daily_trend = str(
+        _row_get(row, "Daily Trend", "daily_trend", default="")
+    ).upper()
+
+    if daily_trend == "BEAR" and direction == "CALL":
+
+        min_setup = max(min_setup, 85.0)
+        min_rr = max(min_rr, 2.0)
+
+    if daily_trend == "BULL" and direction == "PUT":
+
+        min_setup = max(min_setup, 85.0)
+        min_rr = max(min_rr, 2.0)
+
     return min_setup, min_rr, max_spread
 
 
