@@ -20,6 +20,11 @@ Deliberately a rejection rather than a stop widener. Widening the stop would mov
 it off the structure it was anchored to and quietly change the trade's thesis;
 refusing the trade leaves the analysis honest and costs only a position that could
 not have been won.
+
+Enforcing since 2026-07-31 at a 1.0 multiple, having shipped observe-only while
+the rejection rate was unknown. Replaying the archive answered it: a third of
+entries that reached ENTER_PAPER had a stop that could not clear their own
+contract's round-trip spread even once.
 """
 
 from __future__ import annotations
@@ -27,27 +32,45 @@ from __future__ import annotations
 from app.config.settings import get_bool_env, get_float_env
 
 
-DEFAULT_MIN_STOP_SPREAD_MULTIPLE = 1.5
+# Measured rather than assumed. Replaying every archived scanner_snapshot through
+# evaluate_stop_viability gives 25 rows that reached ENTER_PAPER and carry all five
+# inputs, and their spread multiples fall into three clear groups:
+#
+#   0.43 0.54 0.55 0.61 0.68 0.74 0.78 0.86 | 1.05 1.11 1.24 1.43 1.64 1.67 | 2.18+
+#
+# The gap sits exactly at 1.0. Below it the move to the stop does not cover the
+# round trip even once: the option cannot reach a profit before the underlying
+# reaches the stop, whatever the setup was worth. That is a fact about the
+# contract, not a judgement about the trade, which is what makes 1.0 defensible as
+# a default in a way 1.5 is not -- 1.5 also rejects the 1.05-1.43 group, where the
+# trade is thin but winnable, and that is a preference rather than an arithmetic
+# certainty.
+#
+# 1.0 rejects 8 of those 25 (32%); 1.5 rejects 12 (48%). Raise it once there are
+# enough resolved trades to show the 1.0-1.5 band losing money, rather than now.
+DEFAULT_MIN_STOP_SPREAD_MULTIPLE = 1.0
 
 
 def enforce_stop_viability():
     """Whether a failing verdict blocks the trade, or is only recorded.
 
-    The 1.5 multiple is a judgement, not a measurement. Combined with the 0.50%
-    stop floor it only clears spreads to roughly 4.3%, while contracts observed on
-    2026-07-30 ran 2.1%-8.0% -- so the gate could reject a large share of
-    candidates, and nobody has yet seen a full trading day of this system's
-    candidate flow to know. The 07-30 session did not start until 14:35.
+    On by default since 2026-07-31. It shipped observe-only because nobody had
+    seen a day of this system's candidate flow and the rejection rate was unknown;
+    the archive has since answered that with counts, and the answer at the 1.0
+    multiple is a third of entries whose stop cannot clear their own contract's
+    round-trip spread.
 
-    With STOP_VIABILITY_ENFORCE off, the verdict and the multiple are still written
-    to every row and to the decision ledger; they simply do not change the action.
-    One archived day then answers the question with counts instead of arithmetic,
-    at no cost in missed trades.
+    Enforcing downgrades the row to AVOID with STOP_INSIDE_OPTION_SPREAD, so the
+    verdict propagates through the entry gate, auto-paper and Telegram together.
+    The observe-only fields are still written either way, so turning this back off
+    restores measurement without losing it.
 
-    Turn it on once that day exists.
+    The default is what matters here rather than the .env value: .env is gitignored
+    and never reaches Streamlit Cloud, so on a redeploy every setting falls back to
+    the code default. That is how the intraday EOD close silently reverted to off.
     """
 
-    return get_bool_env("STOP_VIABILITY_ENFORCE", False)
+    return get_bool_env("STOP_VIABILITY_ENFORCE", True)
 
 
 def _number(value):
@@ -68,9 +91,9 @@ def _number(value):
 def min_stop_spread_multiple():
     """How many times the round-trip spread the move to stop must cover.
 
-    0 disables the check. The default is deliberately modest: at 1.5 the trade
-    still only needs the option to move half again the cost of getting in and out
-    before the stop is reached, which is a low bar that 07-30's entries failed.
+    0 disables the check. At the 1.0 default the option only has to cover the cost
+    of getting in and out before the stop is reached -- break even on friction
+    alone, with nothing left over. See DEFAULT_MIN_STOP_SPREAD_MULTIPLE.
     """
 
     return get_float_env("MIN_STOP_SPREAD_MULTIPLE", DEFAULT_MIN_STOP_SPREAD_MULTIPLE)
