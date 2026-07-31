@@ -1,17 +1,17 @@
-SHORT_ENTRY_TYPES = {
-    "BREAKDOWN_SHORT",
-    "EMA_REJECTION_SHORT",
-    "VWAP_REJECTION",
-    "COILED_BREAKDOWN"
-}
+from app.strategies.setup_registry import (
+    LEGACY_SETUP_ALIASES,
+    LONG_SETUPS,
+    SHORT_SETUPS,
+)
 
-LONG_ENTRY_TYPES = {
-    "BREAKOUT",
-    "BREAKOUT_LONG",
-    "COILED_BREAKOUT",
-    "EMA_PULLBACK",
-    "VWAP_RECLAIM",
-    "HIGHER_LOW_CONTINUATION"
+
+# Derived from the setup registry rather than restated. These previously listed
+# four setups the entry engine cannot emit.
+SHORT_ENTRY_TYPES = SHORT_SETUPS
+LONG_ENTRY_TYPES = LONG_SETUPS | {
+    alias
+    for alias, target in LEGACY_SETUP_ALIASES.items()
+    if target in LONG_SETUPS
 }
 
 

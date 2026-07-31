@@ -66,6 +66,7 @@ from app.gates import (
     evaluate_entry_gate,
     price_geometry_error
 )
+from app.strategies.setup_registry import KNOWN_SETUPS
 from app.gates.setup_quality import (
     MIN_SETUP_BASE,
     setup_grade as _setup_quality_grade,
@@ -209,13 +210,9 @@ INVALID_NEW_ENTRY_TYPES = {
     "OPEN_TRADE"
 }
 INDEX_REVIEW_VALIDATION_SYMBOLS = {"SPY", "QQQ"}
-REVIEW_VALIDATION_ENTRY_TYPES = {
-    "EMA_PULLBACK",
-    "VWAP_RECLAIM",
-    "BREAKOUT",
-    "COILED_BREAKOUT",
-    "HIGHER_LOW_CONTINUATION"
-}
+# Was a stale long-only copy of the scanner's constant, containing three setups
+# that cannot be emitted. Imported now so the two cannot disagree again.
+REVIEW_VALIDATION_ENTRY_TYPES = KNOWN_SETUPS
 AUTO_PAPER_ENTRY_START = time(9, 45)
 AUTO_PAPER_ENTRY_END = time(15, 30)
 AUTO_PAPER_EOD_CLOSE = time(15, 55)

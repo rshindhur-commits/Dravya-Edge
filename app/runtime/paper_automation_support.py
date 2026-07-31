@@ -16,6 +16,7 @@ from app.gates import (
     symbol_trade_count_today,
 )
 from app.gates.setup_quality import MIN_SETUP_BASE
+from app.strategies.setup_registry import KNOWN_SETUPS
 from app.state.holding_policy import holding_policy
 from app.storage.auto_paper_decision_store import (
     append_daily_auto_paper_decision,
@@ -39,16 +40,11 @@ AUTO_PAPER_TOP_CANDIDATES = [
     "BEARISH_TOP_3",
 ]
 INDEX_REVIEW_VALIDATION_SYMBOLS = {"SPY", "QQQ"}
-REVIEW_VALIDATION_ENTRY_TYPES = {
-    "BREAKOUT",
-    "BREAKOUT_LONG",
-    "EMA_PULLBACK",
-    "VWAP_RECLAIM",
-    "COILED_BREAKOUT",
-    "BREAKDOWN_SHORT",
-    "EMA_REJECTION_SHORT",
-    "VWAP_REJECTION",
-}
+# Derived from the setup registry. This listed two setups that cannot be emitted,
+# and dashboard.py carried a *different* copy of the same constant allowing only
+# longs -- so the dashboard called a SPY BREAKDOWN_SHORT ineligible while this
+# path would open it. One definition, both sides.
+REVIEW_VALIDATION_ENTRY_TYPES = KNOWN_SETUPS
 AUTO_PAPER_ENTRY_START = time(9, 45)
 AUTO_PAPER_ENTRY_END = time(15, 30)
 AUTO_PAPER_EOD_CLOSE = time(15, 55)

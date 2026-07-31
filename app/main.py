@@ -1229,7 +1229,75 @@ def infer_aggregate_interval_minutes(df):
         return 0
 
 
+def _trend_regime_from_row(latest):
+    """Directional regime only. Never short-circuits on volatility.
+
+    `_classify_explicit_regime` answers "how is this name behaving" with a single
+    label that has to carry both volatility and direction, and it checks
+    volatility first. That makes the two mutually exclusive: a strongly trending
+    name with a wide ATR is labelled HIGH_VOLATILITY and its trend is discarded.
+
+    Measured over the 1,633-row snapshot archive that is not an edge case. The
+    0.45 ATR% cutoff sits at the **25th percentile** of the observed distribution
+    (median 0.70), so it selects 74% of rows. It is really a property of the
+    watchlist rather than of the tape: AMAT, AMD, LRCX, ARM, INTC, MRVL, SMCI,
+    SOXL and MU are HIGH_VOLATILITY on 100% of scans, SPY on 0%. Of the rows it
+    short-circuits, 86% carry a real directional read and every one of them had a
+    setup fire -- so the trend being thrown away is exactly the trend the
+    directional block needed.
+
+    Splitting the question keeps each consumer reading the field it actually
+    wants. Risk sizing still reads the volatility-first regime from
+    momentum_strategy, because stop and target multipliers should follow
+    volatility. Directional discipline reads this, because whether a bullish
+    setup belongs in a falling market has nothing to do with ATR.
+    """
+
+    close = float(latest.get("Close", 0) or 0)
+    vwap = float(latest.get("VWAP", 0) or 0)
+    ema9 = float(latest.get("EMA9", 0) or 0)
+    ema20 = float(latest.get("EMA20", 0) or 0)
+    rsi = float(latest.get("RSI", 50) or 50)
+    macd = latest.get("MACD")
+    macd_signal = latest.get("MACD_SIGNAL")
+
+    macd_bullish = pd.isna(macd_signal) or macd > macd_signal
+    macd_bearish = pd.isna(macd_signal) or macd < macd_signal
+
+    if ema9 > ema20 and close > vwap and rsi >= 55 and macd_bullish:
+
+        return "TRENDING_BULL"
+
+    if ema9 < ema20 and close < vwap and rsi <= 45 and macd_bearish:
+
+        return "TRENDING_BEAR"
+
+    return "RANGE_BOUND"
+
+
+def _classify_trend_regime(df):
+    """Volatility-independent trend regime for the directional setup block."""
+
+    try:
+
+        if df is None or df.empty:
+
+            return "UNKNOWN"
+
+        return _trend_regime_from_row(df.iloc[-1])
+
+    except Exception:
+
+        return "UNKNOWN"
+
+
 def _classify_explicit_regime(df):
+    """Volatility-first regime. Kept as-is; see _trend_regime_from_row.
+
+    Still what the scanner row, the entry gate's regime tighteners and the
+    reference-regime roll-up read, so its vocabulary and thresholds are
+    unchanged. The directional block no longer depends on it.
+    """
 
     try:
 
@@ -1239,13 +1307,6 @@ def _classify_explicit_regime(df):
 
         latest = df.iloc[-1]
         atr_pct = float(latest.get("ATR_PCT", 0) or 0)
-        close = float(latest.get("Close", 0) or 0)
-        vwap = float(latest.get("VWAP", 0) or 0)
-        ema9 = float(latest.get("EMA9", 0) or 0)
-        ema20 = float(latest.get("EMA20", 0) or 0)
-        rsi = float(latest.get("RSI", 50) or 50)
-        macd = latest.get("MACD")
-        macd_signal = latest.get("MACD_SIGNAL")
 
         if atr_pct > 0.45:
 
@@ -1255,34 +1316,7 @@ def _classify_explicit_regime(df):
 
             return "LOW_VOLATILITY"
 
-        macd_bullish = (
-            pd.isna(macd_signal)
-            or macd > macd_signal
-        )
-        macd_bearish = (
-            pd.isna(macd_signal)
-            or macd < macd_signal
-        )
-
-        if (
-            ema9 > ema20
-            and close > vwap
-            and rsi >= 55
-            and macd_bullish
-        ):
-
-            return "TRENDING_BULL"
-
-        if (
-            ema9 < ema20
-            and close < vwap
-            and rsi <= 45
-            and macd_bearish
-        ):
-
-            return "TRENDING_BEAR"
-
-        return "RANGE_BOUND"
+        return _trend_regime_from_row(latest)
 
     except Exception:
 
@@ -1519,88 +1553,103 @@ def _sector_strength(symbol, symbol_move_pct, reference_context):
     }
 
 
-def _evaluate_regime_setup_block(entry_type, final_signal, market_regime):
+def _evaluate_regime_setup_block(
+    entry_type,
+    final_signal,
+    market_regime,
+    trend_regime=None
+):
+    """Whether a setup is fighting the regime it is being taken in.
+
+    Directional rules judge against `trend_regime`, which never short-circuits on
+    volatility. They used to judge against `market_regime`, which does, and which
+    additionally returned a blanket pass for HIGH_VOLATILITY -- so on 74% of
+    archived rows this function returned "not blocked" without evaluating
+    anything. Nine watchlist symbols were labelled HIGH_VOLATILITY on 100% of
+    scans, meaning they had no directional discipline at all, ever, while SPY had
+    it on every scan. See `_trend_regime_from_row` for the measurements.
+
+    `market_regime` is still what the LOW_VOLATILITY rule reads, because that one
+    genuinely is a volatility judgement: a market too quiet to carry a momentum
+    setup to target. UNKNOWN still passes, since a regime that could not be
+    computed is not evidence of anything.
+    """
 
     entry_type = str(entry_type or "NO_ENTRY")
     final_signal = str(final_signal or "NEUTRAL")
+    trend_regime = str(trend_regime or market_regime or "UNKNOWN")
 
-    if market_regime in [
-        "HIGH_VOLATILITY",
-        "UNKNOWN"
-    ]:
+    if market_regime == "LOW_VOLATILITY":
+
+        if "BULLISH" in final_signal:
+
+            return {
+                "blocked": True,
+                "reason": "Bullish momentum setup blocked in LOW_VOLATILITY regime"
+            }
+
+        if "BEARISH" in final_signal:
+
+            return {
+                "blocked": True,
+                "reason": "Bearish momentum setup blocked in LOW_VOLATILITY regime"
+            }
+
+    if trend_regime == "UNKNOWN":
 
         return {
             "blocked": False,
             "reason": None
         }
 
+    # Setups the entry engine can actually emit. The commented-out detectors
+    # (VWAP_RECLAIM, COILED_*) were removed rather than left listed here, where
+    # they made the block look more comprehensive than it was.
     bullish_setups = [
         "BREAKOUT",
         "BREAKOUT_LONG",
-        "EMA_PULLBACK",
-        "VWAP_RECLAIM",
-        "COILED_BREAKOUT"
+        "EMA_PULLBACK"
     ]
     bearish_setups = [
         "BREAKDOWN_SHORT",
         "EMA_REJECTION_SHORT",
-        "VWAP_REJECTION",
-        "COILED_BREAKDOWN"
+        "VWAP_REJECTION"
     ]
 
-    if entry_type in bullish_setups and market_regime == "TRENDING_BEAR":
+    if entry_type in bullish_setups and trend_regime == "TRENDING_BEAR":
 
         return {
             "blocked": True,
             "reason": "Bullish setup blocked in TRENDING_BEAR regime"
         }
 
-    if entry_type in bearish_setups and market_regime == "TRENDING_BULL":
+    if entry_type in bearish_setups and trend_regime == "TRENDING_BULL":
 
         return {
             "blocked": True,
             "reason": "Bearish setup blocked in TRENDING_BULL regime"
         }
 
+    # Breakouts and breakdowns need the trend behind them; continuation and
+    # rejection setups are allowed to work inside a range.
     if entry_type in [
-        "VWAP_RECLAIM",
         "BREAKOUT",
         "BREAKOUT_LONG"
-    ] and market_regime not in [
-        "TRENDING_BULL",
-        "HIGH_VOLATILITY"
-    ]:
+    ] and trend_regime != "TRENDING_BULL":
 
         return {
             "blocked": True,
-            "reason": f"{entry_type} blocked in {market_regime} regime"
+            "reason": f"{entry_type} blocked in {trend_regime} regime"
         }
 
     if entry_type in [
         "BREAKDOWN_SHORT",
         "VWAP_REJECTION"
-    ] and market_regime not in [
-        "TRENDING_BEAR",
-        "HIGH_VOLATILITY"
-    ]:
+    ] and trend_regime != "TRENDING_BEAR":
 
         return {
             "blocked": True,
-            "reason": f"{entry_type} blocked in {market_regime} regime"
-        }
-
-    if "BULLISH" in final_signal and market_regime == "LOW_VOLATILITY":
-
-        return {
-            "blocked": True,
-            "reason": "Bullish momentum setup blocked in LOW_VOLATILITY regime"
-        }
-
-    if "BEARISH" in final_signal and market_regime == "LOW_VOLATILITY":
-
-        return {
-            "blocked": True,
-            "reason": "Bearish momentum setup blocked in LOW_VOLATILITY regime"
+            "reason": f"{entry_type} blocked in {trend_regime} regime"
         }
 
     return {
@@ -4256,6 +4305,11 @@ def _run_scanner_impl():
             market_regime = _classify_explicit_regime(
                 df_15m
             )
+            # Direction without the volatility short-circuit. See
+            # _trend_regime_from_row for why these are separate reads.
+            trend_regime = _classify_trend_regime(
+                df_15m
+            )
             above_vwap = _latest_bool(
                 df_15m,
                 "Close",
@@ -5273,7 +5327,8 @@ def _run_scanner_impl():
             regime_block = _evaluate_regime_setup_block(
                 entry_setup.get("entry_type"),
                 final_signal,
-                market_regime
+                market_regime,
+                trend_regime
             )
 
             if regime_block.get("blocked"):
@@ -5979,6 +6034,8 @@ def _run_scanner_impl():
                 "ATR %": atr_pct,
 
                 "Market Regime": market_regime,
+
+                "Trend Regime": trend_regime,
 
                 "Reference Regime": reference_regime,
 
