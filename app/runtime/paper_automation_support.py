@@ -54,7 +54,7 @@ AUTO_PAPER_EOD_CLOSE = time(15, 55)
 AUTO_PAPER_MAX_CANDIDATE_RANK = 3
 DEFAULT_AUTO_PAPER_MIN_RR = 1.8
 DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0
-DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 10.0
+DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 6.0
 AUTO_PAPER_REQUIRED_COLUMNS = [
     "Symbol", "Setup Valid", "Candidate Direction", "Candidate Entry Price",
     "Candidate Stop Price", "Candidate Target Price", "Candidate RR", "Entry",
@@ -594,8 +594,12 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "action_status": action_status,
         "action_reason": row.get("Action Reason") if row is not None else None,
         # Why the stop was or was not compatible with the contract's spread.
+        # stop_viability_would_block is the observe-only signal: it counts what the
+        # gate would have cost before it is allowed to cost anything.
         "stop_viability": row.get("STOP_VIABILITY") if row is not None else None,
         "stop_spread_multiple": row.get("STOP_SPREAD_MULTIPLE") if row is not None else None,
+        "stop_viability_would_block": row.get("STOP_VIABILITY_WOULD_BLOCK") if row is not None else None,
+        "stop_viability_enforced": row.get("STOP_VIABILITY_ENFORCED") if row is not None else None,
         **_gate_counterfactuals(row, controls),
     }
     write_auto_paper_decision(entry, trading_day)

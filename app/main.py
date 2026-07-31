@@ -40,7 +40,7 @@ from app.diagnostics import (
     build_entry_snapshot_columns,
     diagnostics_to_json
 )
-from app.risk.stop_viability import evaluate_stop_viability
+from app.risk.stop_viability import enforce_stop_viability, evaluate_stop_viability
 from app.gates import (
     build_entry_gate_diagnostics,
     EntryGateConfig,
@@ -2487,11 +2487,14 @@ def _add_stop_viability(row):
         row.get("Option Spread %"),
     )
 
+    enforcing = enforce_stop_viability()
+
     row["STOP_VIABILITY"] = viability.get("reason")
     row["STOP_SPREAD_MULTIPLE"] = viability.get("spread_multiple")
     row["STOP_MOVE_PCT_OF_PREMIUM"] = viability.get("move_pct_of_premium")
     row["STOP_ROUND_TRIP_SPREAD_PCT"] = viability.get("round_trip_spread_pct")
     row["STOP_REQUIRED_SPREAD_MULTIPLE"] = viability.get("required_multiple")
+    row["STOP_VIABILITY_ENFORCED"] = enforcing
 
     # None means "not enough information", which must not block a trade: an
     # unpriced contract is a data gap, not evidence of a bad stop.
@@ -2499,6 +2502,12 @@ def _add_stop_viability(row):
         return row
 
     if str(row.get("Action Status") or "").upper() not in _ENTRY_ACTION_STATUSES:
+        return row
+
+    # Observe-only: the verdict is recorded above and reaches the decision ledger,
+    # so a day of data can be gathered before this starts costing trades.
+    if not enforcing:
+        row["STOP_VIABILITY_WOULD_BLOCK"] = True
         return row
 
     row["Action Status"] = "AVOID"

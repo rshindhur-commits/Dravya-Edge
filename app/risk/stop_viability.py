@@ -24,10 +24,30 @@ not have been won.
 
 from __future__ import annotations
 
-from app.config.settings import get_float_env
+from app.config.settings import get_bool_env, get_float_env
 
 
 DEFAULT_MIN_STOP_SPREAD_MULTIPLE = 1.5
+
+
+def enforce_stop_viability():
+    """Whether a failing verdict blocks the trade, or is only recorded.
+
+    The 1.5 multiple is a judgement, not a measurement. Combined with the 0.50%
+    stop floor it only clears spreads to roughly 4.3%, while contracts observed on
+    2026-07-30 ran 2.1%-8.0% -- so the gate could reject a large share of
+    candidates, and nobody has yet seen a full trading day of this system's
+    candidate flow to know. The 07-30 session did not start until 14:35.
+
+    With STOP_VIABILITY_ENFORCE off, the verdict and the multiple are still written
+    to every row and to the decision ledger; they simply do not change the action.
+    One archived day then answers the question with counts instead of arithmetic,
+    at no cost in missed trades.
+
+    Turn it on once that day exists.
+    """
+
+    return get_bool_env("STOP_VIABILITY_ENFORCE", False)
 
 
 def _number(value):

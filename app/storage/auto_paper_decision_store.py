@@ -79,6 +79,8 @@ AUTO_PAPER_DECISION_FIELDS = [
     "missed_move_type",
     "stop_viability",
     "stop_spread_multiple",
+    "stop_viability_would_block",
+    "stop_viability_enforced",
 ]
 
 
