@@ -86,6 +86,9 @@ AUTO_PAPER_DECISION_FIELDS = [
     "iv_richness_would_block",
     "event_blocked",
     "event_label",
+    "daily_trend",
+    "daily_realised_vol",
+    "realised_vol_source",
 ]
 
 

@@ -40,6 +40,7 @@ from app.diagnostics import (
     build_entry_snapshot_columns,
     diagnostics_to_json
 )
+from app.indicators.daily_context import daily_context
 from app.risk.iv_richness import enforce_iv_richness, evaluate_iv_richness
 from app.risk.stop_viability import enforce_stop_viability, evaluate_stop_viability
 from app.gates import (
@@ -2524,6 +2525,29 @@ def _add_stop_viability(row):
     return row
 
 
+def _add_daily_context(row):
+    """Attach the daily trend, prior-session levels and daily realised volatility.
+
+    Cached per trading day inside daily_context(), so this costs one request per
+    symbol on the first scan of the session and nothing afterwards.
+    """
+
+    row = dict(row)
+    context = daily_context(row.get("Symbol"))
+
+    row["Daily Trend"] = context.get("daily_trend")
+    row["Daily Trend Reason"] = context.get("daily_trend_reason")
+    row["Daily ATR %"] = context.get("daily_atr_pct")
+    row["Daily Realised Vol %"] = context.get("daily_realised_vol")
+    row["Prior Day High"] = context.get("prior_day_high")
+    row["Prior Day Low"] = context.get("prior_day_low")
+    row["Prior Day Close"] = context.get("prior_day_close")
+    row["Above Prior Day High"] = context.get("above_prior_day_high")
+    row["Below Prior Day Low"] = context.get("below_prior_day_low")
+
+    return row
+
+
 def _add_iv_richness(row):
     """Record how implied volatility compares to what the underlying actually does.
 
@@ -2534,14 +2558,22 @@ def _add_iv_richness(row):
 
     row = dict(row)
 
+    # Prefer the daily-derived realised volatility. Annualising a 15-minute ATR
+    # runs through 6,552 bars and a range-to-sigma constant; from daily bars the
+    # same figure is one sqrt(252) away, so the ratio stops resting on the weakest
+    # link in that chain. Falls back to the 15m estimate when daily is unavailable.
+    daily_realised = row.get("Daily Realised Vol %")
+
     richness = evaluate_iv_richness(
         row.get("Option IV"),
         row.get("ATR %"),
+        realised_vol=daily_realised,
     )
 
     row["IV_RV_RATIO"] = richness.get("iv_rv_ratio")
     row["IV_REALISED_VOL"] = richness.get("realised_vol")
     row["IV_RICHNESS"] = richness.get("reason")
+    row["IV_RV_SOURCE"] = richness.get("realised_vol_source")
     row["IV_RICHNESS_ENFORCED"] = enforce_iv_richness()
 
     if richness.get("rich") is not True:
@@ -6839,6 +6871,9 @@ def _run_scanner_impl():
 
             }
 
+            result_row = _add_daily_context(
+                result_row
+            )
             result_row = _add_stop_viability(
                 result_row
             )

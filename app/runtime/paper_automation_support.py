@@ -605,6 +605,10 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "iv_richness_would_block": row.get("IV_RICHNESS_WOULD_BLOCK") if row is not None else None,
         "event_blocked": row.get("Event Blocked") if row is not None else None,
         "event_label": row.get("Event Label") if row is not None else None,
+        # Higher-timeframe context: was this taken with or against the daily trend.
+        "daily_trend": row.get("Daily Trend") if row is not None else None,
+        "daily_realised_vol": row.get("Daily Realised Vol %") if row is not None else None,
+        "realised_vol_source": row.get("IV_RV_SOURCE") if row is not None else None,
         "stop_viability_enforced": row.get("STOP_VIABILITY_ENFORCED") if row is not None else None,
         **_gate_counterfactuals(row, controls),
     }
