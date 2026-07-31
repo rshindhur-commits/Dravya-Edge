@@ -97,6 +97,19 @@ worker for best-effort DB writes.
 Sidebar (always rendered, in this order): auto-refresh controls → paper automation controls →
 daily validation report controls → downloads → **Navigation radio** → `Run scanner now` button.
 
+Downloads were consolidated on 2026-07-31 into a single `Downloads` expander. Before that they
+were split across the Operations block and a `Tools: Downloads` expander, which served the
+validation report, the replay summary and `scanner_output.xlsx` from two places each — 20 buttons
+covering 17 files. It is now: **Daily review export** (built on click, not on every rerun — the
+build reads every daily artifact and rebuilds the waterfall, so eager building charged that to
+each rerun), the validation report, the replay summary, and an `Individual files` expander.
+`build_daily_review_export` now also carries `raw/` verbatim copies of the artifacts that exist
+**only** on the container filesystem and `state/` copies of the operator state, so one click
+preserves what a redeploy would otherwise wipe. Buttons removed as redundant or dead:
+`scanner_output.xlsx` (root legacy file, not what the page reads), `trade_state.json` (legacy),
+`auto_paper_decision_log.json` (capped copy of a CSV Postgres also holds), `candidate_snapshots.csv`
+(never written — the writer prefers parquet).
+
 | Page | Question | Primary source | Fallback |
 | --- | --- | --- | --- |
 | **Trading** | What is the engine doing right now? | `data/live/dashboard_state.json` (5s TTL) + `paper_trade_state.json` + `activity_trace.csv` + telegram audit jsonl | `scanner_output.xlsx` full path |
@@ -108,13 +121,32 @@ daily validation report controls → downloads → **Navigation radio** → `Run
 | **Developer** | Is the system healthy? | `runtime_state.json`, `runtime_health.json`, `runtime_*.csv` | lazy `Load ...` toggles per panel |
 
 Page bodies live in `app/ui/pages/*.py` but **all shared helpers still live in `app/dashboard.py`
-(~8,870 lines after the 2026-07-29 cleanup)**; the page modules import back into it. `dashboard.py` also still holds the
+(~8,470 lines after the 2026-07-31 cleanup)**; the page modules import back into it. The orphaned
 `DEPRECATED` renderers (`_render_command_center`, `_render_current_opportunities`,
-`_render_why_no_trade`, `_render_missed_opportunities`, `_render_trading_page*`).
+`_render_today_performance`, `_render_why_no_trade`, `_render_missed_opportunities`,
+`_render_trading_page*`) were deleted on 2026-07-31; `_metadata_status`, `_status_label`,
+`_scan_metadata` and `_render_metadata_card` sat inside that block and are still live.
 
-Trading page detail (`app/ui/pages/trading.py`): Live Positions table + per-symbol expander →
-Activity Feed (filters: type / symbol / search / group, 25-row pages) + Active Risk Monitor →
-Current Opportunity Board (top 10 ranked) → Telegram status + Market pulse.
+Trading page detail (`app/ui/pages/trading.py`), reworked 2026-07-31 into an operator console:
+operator bar (trading day, LIVE / POST-MARKET, engine state) → health cards (engine, last-scan
+age, scans/failures, DB writes, Telegram, book) + market pulse → **Book** as position cards with
+an R gauge + Active Risk Monitor → **Current Opportunity Board** intraday, **Today's Result**
+after 16:00 ET → Activity Feed, now collapsed because it re-reads and re-sorts the full activity
+trace (17,742 rows on 2026-07-31) on every rerun.
+
+Health tones are stated by the caller, not inferred from the value text as `_render_compact_card_grid`
+does — "990m ago" carries no keyword a matcher could read. Scan age is scored against the session:
+stale is a fault before 16:00 ET and expected after it. `app/ui/components.py` holds the shared
+`status_card_grid`, `operator_bar` and `position_card`; the R gauge is anchored on **-1R**, not
+zero, because position risk is only readable against the stop — half a bar means breakeven.
+
+`app/ui/trade_chart.py` draws 5m candles from `candles_5m.csv` with the engine's own entry, stop,
+target and exit marked, and emits TradingView deep links (`REVIEW_TV_CHART` is the most common
+action status the engine produces — 238 of 403 auto-paper decisions on 2026-07-31 — and had no
+in-app destination before this). Two traps that module handles: every scan re-fetches the session
+on its own anchor, so the file holds **several interleaved 5m grids** offset by a minute or two
+(NVDA carried three on 2026-07-31) and only one scan's bars may be charted together; and roughly a
+quarter of rows are exact duplicates.
 
 The Opportunity Board and the activity trace both render the **five independent layers**:
 `Scanner Recommendation` (`ENTRY_RECOMMENDED`) → `Execution Eligibility` / `Execution Outcome` /
