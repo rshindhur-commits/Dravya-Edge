@@ -62,13 +62,41 @@ AUTO_PAPER_REQUIRED_COLUMNS = [
 ]
 
 
+def max_active_paper_trades():
+    """Concurrent open paper positions allowed."""
+
+    return env_int("MAX_ACTIVE_PAPER_TRADES", 3)
+
+
+def max_active_per_direction():
+    """Concurrent open positions allowed in one direction.
+
+    Kept separate from the total so directional concentration can be limited
+    without capping the book: four positions split 2 CALL / 2 PUT is a different
+    risk to four CALLs, and only the total was ever intended to be a hard cap.
+    """
+
+    return env_int("MAX_ACTIVE_PER_DIRECTION", 2)
+
+
 def load_auto_paper_controls():
     settings = load_json_file(str(AUTO_PAPER_SETTINGS_FILE), {})
     return {
         "auto_paper_enabled": _boolish(
             settings.get("auto_paper_enabled", _env_bool("AUTO_PAPER_ENABLED", True))
         ),
-        "max_daily": int(settings.get("auto_paper_max_daily", 3)),
+        # Falls back to MAX_DAILY_ENTRIES rather than a bare 3. The two settings
+        # named the same limit and disagreed: MAX_DAILY_ENTRIES=5 was read by the
+        # affordability config while this path silently enforced 3, so the
+        # configured daily cap was never the one that applied.
+        #
+        # auto_paper_settings.json still wins where present -- it is the sidebar
+        # control -- but it is gitignored and therefore absent on Streamlit Cloud
+        # after every redeploy, which is exactly when the default matters.
+        "max_daily": int(
+            settings.get("auto_paper_max_daily")
+            or env_int("MAX_DAILY_ENTRIES", 3)
+        ),
         "min_setup": float(settings.get("auto_paper_min_setup", 70)),
         "min_rr": float(settings.get("auto_paper_min_rr", DEFAULT_AUTO_PAPER_MIN_RR)),
         "direction": settings.get("auto_paper_direction", "Both"),
@@ -696,9 +724,21 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     if symbol_trade_count_today(paper_trades, symbol, now_et) >= env_int("MAX_TRADES_PER_SYMBOL_PER_DAY", 1):
         return False, "MAX_TRADES_PER_SYMBOL_PER_DAY_REACHED"
     open_trades = [trade for trade in paper_trades.values() if trade.get("status") == "OPEN"]
-    if len(open_trades) >= 3:
+
+    # Both limits were hardcoded here, which meant MAX_ACTIVE_PAPER_TRADES was read
+    # by the affordability config and honoured by the dashboard entry path while
+    # this path -- the one that opens almost every trade -- ignored it and used 3.
+    # Setting it to 1 therefore had no effect on automated entries at all.
+    if len(open_trades) >= max_active_paper_trades():
         return False, "MAX_ACTIVE_PAPER_TRADES_REACHED"
-    if len([trade for trade in open_trades if trade.get("direction") == direction]) >= 1:
+
+    # Previously a hardcoded 1: a single open CALL blocked every other bullish
+    # setup. Under a MULTIDAY profile (force_eod_exit=False) that position is held
+    # overnight, so one trade could block the book for days. This is the constraint
+    # that decided how many trades a day actually happened.
+    if len([
+        trade for trade in open_trades if trade.get("direction") == direction
+    ]) >= max_active_per_direction():
         return False, "DIRECTION_ALREADY_ACTIVE"
     if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
         return False, "DAILY_AUTO_PAPER_LIMIT_REACHED"
