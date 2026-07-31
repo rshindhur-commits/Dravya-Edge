@@ -1,6 +1,7 @@
 from app.config.settings import get_float_env
 from app.utils.runtime_logging import debug_print
 from app.gates import validate_price_geometry
+from app.strategies.setup_registry import is_short_setup
 
 
 def _safe_value(row, key, default=None):
@@ -21,13 +22,9 @@ def _safe_value(row, key, default=None):
 
 
 def _is_short_entry(entry_type):
+    """Delegates to the setup registry; this listed a setup that cannot occur."""
 
-    return entry_type in [
-        "BREAKDOWN_SHORT",
-        "VWAP_REJECTION",
-        "COILED_BREAKDOWN",
-        "EMA_REJECTION_SHORT"
-    ]
+    return is_short_setup(entry_type)
 
 
 def _risk_direction(analysis, entry_type):
@@ -51,10 +48,11 @@ def _risk_direction(analysis, entry_type):
     return "UNKNOWN"
 
 
+# Setups whose stop is anchored to local structure rather than the swing extreme.
+# COILED_BREAKOUT was listed here and cannot be emitted; see setup_registry.
 STRUCTURE_STOP_SETUPS = {
     "BREAKOUT",
     "BREAKOUT_LONG",
-    "COILED_BREAKOUT",
     "BREAKDOWN_SHORT",
 }
 

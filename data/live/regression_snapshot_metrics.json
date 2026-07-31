@@ -1,0 +1,10 @@
+{
+    "queued": 104,
+    "completed": 104,
+    "dropped": 0,
+    "failures": 0,
+    "average_persist_ms": 1537.0,
+    "persist_attempts": 4,
+    "enabled": true,
+    "last_persist_ms": 1529.25
+}

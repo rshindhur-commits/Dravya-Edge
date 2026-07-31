@@ -1,0 +1,2 @@
+event_id,trading_day,engine_version,symbol,direction,entry_time,entry_price,exit_time,exit_price,final_r,mfe_r,stop_loss,exit_phase,entry_efficiency_score,tes,trend_capture_pct,stock_direction,trade_direction,stock_finish,trade_finish,trend_outcome,engine_captured_trend
+5648c3295d08a20a6357da20,2026-07-31,v1,NVDA,PUT,2026-07-30 14:23:04,193.3,2026-07-31T00:38:27.079719-04:00,196.839,-4.12,0.0,194.16,Hard stop hit (short),,,,BULLISH,PUT,GREEN,LOSS,CHOPPY_OR_FLAT,False

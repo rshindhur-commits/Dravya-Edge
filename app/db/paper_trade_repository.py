@@ -123,6 +123,9 @@ class PaperTradeRepository(BestEffortRepository):
                 "bars_in_trade", "holding_profile", "entry_source",
                 "option_pnl_pct", "option_pnl_pct_net", "option_spread_cost_pct",
                 "trend_capture", "left_on_table", "mfe_r",
+                # Written at open, and until now never read anywhere. See
+                # build_performance_statistics().
+                "include_in_strategy_stats",
             ):
                 if record.get(key) is None:
                     record[key] = payload.get(key)

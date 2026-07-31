@@ -1,0 +1,75 @@
+{
+  "trading_day": "2026-07-31",
+  "readonly": true,
+  "snapshots": [
+    {
+      "scan_id": "2026-07-31_003816",
+      "scan_timestamp": "2026-07-31 00:39:12.922053-04:00",
+      "path": "20260731_003912_2026-07-31_003816.csv",
+      "rows": 26,
+      "format": "csv",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-07-31_004034",
+      "scan_timestamp": "2026-07-31 00:41:29.285457-04:00",
+      "path": "20260731_004129_2026-07-31_004034.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-07-31_005221",
+      "scan_timestamp": "2026-07-31 00:53:16.787577-04:00",
+      "path": "20260731_005316_2026-07-31_005221.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-07-31_011159",
+      "scan_timestamp": "2026-07-31 01:12:55.208345-04:00",
+      "path": "20260731_011255_2026-07-31_011159.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    }
+  ],
+  "scanner_version": "unknown",
+  "configuration": {
+    "entry_engine": "v1",
+    "exit_engine": "v1",
+    "strategy_version": "unknown"
+  },
+  "watchlist": [
+    "AAPL",
+    "AMAT",
+    "AMD",
+    "AMZN",
+    "ARM",
+    "AVGO",
+    "CRWD",
+    "INTC",
+    "LRCX",
+    "META",
+    "MRVL",
+    "MSFT",
+    "MU",
+    "NFLX",
+    "NVDA",
+    "ORCL",
+    "PANW",
+    "PLTR",
+    "QQQ",
+    "SMCI",
+    "SMH",
+    "SOXL",
+    "SPCX",
+    "SPY",
+    "TSLA",
+    "TSM"
+  ],
+  "timezone": "America/New_York",
+  "scan_count": 4,
+  "scan_interval_seconds": 707
+}

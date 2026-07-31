@@ -1,0 +1,18 @@
+{
+  "NVDA|CALL|ACTIVE_TRADE": {
+    "symbol": "NVDA",
+    "direction": "CALL",
+    "entry": "ACTIVE_TRADE",
+    "first_seen_at": "2026-07-31T00:39:13.010802-04:00",
+    "last_seen_at": "2026-07-31T00:39:13.010802-04:00",
+    "last_scan_id": "2026-07-31_003816",
+    "scan_count": 1,
+    "current_score": 12.5,
+    "previous_score": null,
+    "best_score": 12.5,
+    "score_delta": null,
+    "strengthening": false,
+    "action_status": "STALE_STOCK_DATA",
+    "top_candidate": null
+  }
+}

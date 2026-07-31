@@ -1,0 +1,9 @@
+{
+    "trading_day": "2026-07-31",
+    "session_id": "paper_validation_2026-07-31",
+    "status": "OPEN",
+    "first_scan_at": "2026-07-31 00:38:16",
+    "last_scan_at": "2026-07-31 01:11:59",
+    "finalized": false,
+    "last_scan_id": "2026-07-31_011159"
+}

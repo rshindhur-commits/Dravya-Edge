@@ -3,6 +3,13 @@ from datetime import datetime
 import math
 import os
 
+from app.gates.setup_quality import (
+    MIN_SETUP_BASE,
+    MIN_SETUP_ELEVATED,
+    MIN_SETUP_RANGE_BOUND,
+    MIN_SETUP_WEAK_BREADTH,
+)
+
 
 ACTIONABLE_STATUSES = {
     "ENTER",
@@ -14,7 +21,10 @@ ACTIONABLE_STATUSES = {
 @dataclass
 class EntryGateConfig:
     min_rr: float = 1.8
-    min_setup_percent: float = 70.0
+    # Setup thresholds are on the scale defined in app/gates/setup_quality.py and
+    # were re-derived there at matched pass rates when the metric changed. They
+    # are imported rather than restated so the two cannot drift apart.
+    min_setup_percent: float = MIN_SETUP_BASE
     min_option_quality: float = 65.0
     max_spread_pct: float = 10.0
 
@@ -448,13 +458,13 @@ def apply_regime_entry_thresholds(row, config: EntryGateConfig):
 
     if market_regime == "RANGE_BOUND":
 
-        min_setup = max(min_setup, 90.0)
+        min_setup = max(min_setup, MIN_SETUP_RANGE_BOUND)
         min_rr = max(min_rr, 2.0)
         max_spread = min(max_spread, 5.0)
 
     if breadth < -20 or above_ema20 < 40:
 
-        min_setup = max(min_setup, 88.0)
+        min_setup = max(min_setup, MIN_SETUP_WEAK_BREADTH)
         min_rr = max(min_rr, 2.0)
 
     # A candidate fighting its own sector complex. Not blocked outright -- the
@@ -462,17 +472,17 @@ def apply_regime_entry_thresholds(row, config: EntryGateConfig):
     # that has the tape behind it.
     if reference_regime == "TRENDING_BEAR" and direction == "CALL":
 
-        min_setup = max(min_setup, 88.0)
+        min_setup = max(min_setup, MIN_SETUP_WEAK_BREADTH)
         min_rr = max(min_rr, 2.0)
 
     if reference_regime == "TRENDING_BULL" and direction == "PUT":
 
-        min_setup = max(min_setup, 88.0)
+        min_setup = max(min_setup, MIN_SETUP_WEAK_BREADTH)
         min_rr = max(min_rr, 2.0)
 
     if reference_regime == "HIGH_VOLATILITY":
 
-        min_setup = max(min_setup, 85.0)
+        min_setup = max(min_setup, MIN_SETUP_ELEVATED)
         min_rr = max(min_rr, 2.0)
 
     # A VIX spike raises every option premium at once and widens the quotes you
@@ -480,7 +490,7 @@ def apply_regime_entry_thresholds(row, config: EntryGateConfig):
     # pay for the position is now competing with a higher entry price.
     if vix_move is not None and vix_move >= _vix_spike_pct():
 
-        min_setup = max(min_setup, 88.0)
+        min_setup = max(min_setup, MIN_SETUP_WEAK_BREADTH)
         min_rr = max(min_rr, 2.2)
         max_spread = min(max_spread, 5.0)
 
@@ -498,12 +508,12 @@ def apply_regime_entry_thresholds(row, config: EntryGateConfig):
 
     if daily_trend == "BEAR" and direction == "CALL":
 
-        min_setup = max(min_setup, 85.0)
+        min_setup = max(min_setup, MIN_SETUP_ELEVATED)
         min_rr = max(min_rr, 2.0)
 
     if daily_trend == "BULL" and direction == "PUT":
 
-        min_setup = max(min_setup, 85.0)
+        min_setup = max(min_setup, MIN_SETUP_ELEVATED)
         min_rr = max(min_rr, 2.0)
 
     return min_setup, min_rr, max_spread

@@ -12,6 +12,7 @@ from app.gates import (
     active_symbol_trade,
     build_trade_key
 )
+from app.exit.exit_engine import resolve_risk_per_share
 from app.state.holding_policy import derive_holding_profile, holding_policy
 from app.storage.daily_paths import daily_path, state_path
 from app.storage.session_manager import (
@@ -655,6 +656,27 @@ def _round_or_none(value, digits=4):
 
 
 def _paper_trade_result(trade, close_price):
+    """Realised P&L and R for a trade being closed.
+
+    R is measured against the risk frozen at entry, never the stop as it stands
+    at exit. `update_paper_trade` writes the moved stop back to `stop_loss`, so
+    by the time a trade closes that field may be at breakeven or trailed into
+    profit. Dividing by it is not a smaller denominator, it is the wrong one:
+
+    * stop moved to breakeven -> `entry - stop` is 0 -> `r_multiple` is None
+    * stop trailed past entry -> the difference goes negative -> also None
+
+    Either way the trade reports no R. That selects precisely against the trades
+    that worked, because reaching +1R is what moves the stop in the first place,
+    so the surviving R series described only the losers. NVDA on 2026-07-29
+    closed with entry and stop both at 193.32 and booked `r_multiple = NaN`.
+
+    `resolve_risk_per_share` is the exit engine's rule for the same question and
+    stays the single definition of the R denominator; this reuses it rather than
+    restating it. `initial_stop_loss` is frozen at entry by `open_paper_trade`
+    and backfilled by `_backfill_initial_stop` for trades opened before it
+    existed, with the current stop as the last fallback.
+    """
 
     entry_price = _safe_float(
         trade.get("entry_price")
@@ -682,23 +704,18 @@ def _paper_trade_result(trade, close_price):
 
     is_short = direction == "PUT"
 
-    if is_short:
+    pnl = (
+        entry_price - close_price
+        if is_short
+        else close_price - entry_price
+    )
 
-        pnl = entry_price - close_price
-        risk = (
-            stop_loss - entry_price
-            if stop_loss is not None
-            else None
-        )
-
-    else:
-
-        pnl = close_price - entry_price
-        risk = (
-            entry_price - stop_loss
-            if stop_loss is not None
-            else None
-        )
+    # Magnitude, not a signed distance: `pnl` already carries the direction.
+    risk = resolve_risk_per_share(
+        entry_price,
+        _safe_float(trade.get("initial_stop_loss")),
+        stop_loss
+    )
 
     pnl_pct = round(
         (pnl / entry_price) * 100,

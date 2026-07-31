@@ -143,21 +143,40 @@ def detect_entry(df, analysis, symbol=None):
     # =========================
     # Overextension Filter
     # =========================
+    #
+    # Measured as distance, not as signed offset. `vwap_distance` and
+    # `ema_distance` are positive above the reference and negative below it, so
+    # testing `> 1.5` only ever caught extended longs. A PUT setup entered 2%
+    # below VWAP -- a chased short -- read as -2.0 and cleared both filters.
+    #
+    # That mattered more than it looks: `avoid_chasing` is not a score penalty,
+    # it is a hard block in risk_manager.calculate_risk(), so shorts were the
+    # only direction with no chase protection at all. It compounded with the
+    # scoring asymmetry that already favours them (a below-VWAP close feeds both
+    # the individual rules and the bearish_strength aggregate in
+    # momentum_strategy), and with the timing filter below, which named a setup
+    # the entry engine never emits and so only ever filtered BREAKDOWN_SHORT.
+    #
+    # Thresholds are unchanged; only the direction they can see is.
 
-    if vwap_distance > 1.5:
+    if abs(vwap_distance) > 1.5:
 
         avoid_chasing = True
 
         reasons.append(
             "Price extended far above VWAP"
+            if vwap_distance > 0
+            else "Price extended far below VWAP"
         )
 
-    if ema_distance > 1.2:
+    if abs(ema_distance) > 1.2:
 
         avoid_chasing = True
 
         reasons.append(
             "Price extended far above EMA9"
+            if ema_distance > 0
+            else "Price extended far below EMA9"
         )
 
     # =========================
@@ -209,35 +228,6 @@ def detect_entry(df, analysis, symbol=None):
                 "Near breakout level"
             )
 
-    # =========================
-    # VWAP Reclaim Entry
-    # =========================
-
-    # if (
-
-    #     latest["Close"] > latest["VWAP"]
-    #     and latest["Open"] < latest["VWAP"]
-
-    # ):
-
-    #     setup_score = 3
-
-    #     if setup_score > best_score:
-
-    #         best_score = setup_score
-
-    #         entry_type = "VWAP_RECLAIM"
-
-    #         entry_trigger = round(
-    #             latest["VWAP"],
-    #             2
-    #         )
-
-    #         entry_quality = "MEDIUM"
-
-    #         reasons.append(
-    #             "VWAP reclaim detected"
-    #         )
 
     # =========================
     # EMA Pullback Continuation
@@ -356,113 +346,6 @@ def detect_entry(df, analysis, symbol=None):
                 "Bearish EMA rejection"
             )
 
-
-    # =========================
-    # Higher Low Pullback
-    # =========================
-
-    # if (
-
-    #     latest.get("HIGHER_LOW", False)
-    #     and latest["Close"] > latest["VWAP"]
-    #     and latest["EMA9"] > latest["EMA20"]
-
-    # ):        
-
-    #     setup_score = 4
-    #     if setup_score > best_score:
-    #         best_score = setup_score   
-
-    #         entry_type = "HIGHER_LOW_CONTINUATION"
-
-    #         entry_trigger = round(
-    #             latest["EMA9"],
-    #             2
-    #         )
-
-    #         entry_quality = "HIGH"
-
-    #         reasons.append(
-    #             "Higher low continuation setup"
-    #         )
-
-
-    # Breakout entry
-
-    # if (
-
-    #     latest["BREAKOUT"]
-    #     and not avoid_chasing
-
-    # ):
-
-    #     setup_score = 3
-
-    #     if setup_score > best_score:
-
-    #         best_score = setup_score
-
-    #         entry_type = "BREAKOUT_CONTINUATION"
-
-    #         entry_quality = "HIGH"
-
-    #         reasons.append(
-    #             "Momentum breakout continuation"
-    #         )
-
-    # Bullish coiled setup
-
-    # if (
-
-    #     latest["CONSOLIDATING"]
-    #     and latest["REL_VOLUME"] > 1.5
-    #     and latest["Close"] > latest["VWAP"]
-    #     and latest["EMA9"] > latest["EMA20"]
-
-    # ):
-
-    #     setup_score = 3
-
-    #     if setup_score > best_score:
-
-    #         best_score = setup_score
-
-    #         entry_type = "COILED_BREAKOUT"
-
-    #         entry_quality = "HIGH"
-
-    #         reasons.append(
-    #             "Bullish coiled breakout"
-    #         )
-
-    # # Bearish coiled setup
-
-    # if (
-
-    #     latest["CONSOLIDATING"]
-    #     and latest["REL_VOLUME"] > 1.5
-    #     and latest["Close"] < latest["VWAP"]
-    #     and latest["EMA9"] < latest["EMA20"]
-
-    # ):
-
-    #     setup_score = 3
-
-    #     if setup_score > best_score:
-
-    #         best_score = setup_score
-
-    #         entry_type = "COILED_BREAKDOWN"
-
-    #         entry_quality = "HIGH"
-
-    #         reasons.append(
-    #             "Bearish coiled breakdown"
-    #         )
-
-    # =========================
-    # Bearish Breakdown Trigger
-    # =========================
 
     debug_print(
         f"[BREAKDOWN CHECK] "

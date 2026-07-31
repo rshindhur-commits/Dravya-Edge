@@ -1,0 +1,2 @@
+trading_day,session_id,scan_id,event_time,event_time_et,event_time_utc,event_type,trade_key,symbol,direction,option_ticker,entry_price,exit_price,status,r_multiple,exit_reason
+2026-07-30,paper_validation_2026-07-30,2026-07-30_142304,2026-07-31 00:38:27,2026-07-31T00:38:27.114241-04:00,2026-07-31T04:38:27.114241+00:00,AUTO_EXIT,NVDA|O:NVDA260814P00190000|2026-07-30 14:23:04,NVDA,PUT,O:NVDA260814P00190000,193.3,196.839,CLOSED,-4.12,Hard stop hit (short)
