@@ -91,6 +91,91 @@ def resolve_exit_fill(exit_code, is_short, market_price, stop_loss, take_profit)
     return fill, round(max(0.0, adverse), 4)
 
 
+PROFIT_LOCK_ELIGIBLE_EXITS = {"EMA", "VWAP", "MACD"}
+
+
+def resolve_profit_lock(
+    exit_code,
+    exit_signal,
+    mfe_r,
+    trend_health_score,
+    exit_confidence_score,
+    entry_price,
+    current_stop,
+    risk_per_share,
+    is_short,
+):
+    """Turn a doubtful soft exit on a profitable trade into a stop, not a close.
+
+    A soft rule can say "momentum broke" while the trade is sitting on real
+    banked profit and the trend still reads strong. NVDA on 2026-07-31 ran to
+    +1.66R, printed "Partial profit threshold reached" three times over ten
+    minutes, then closed at +0.60R on an EMA9 touch -- with the engine scoring
+    its own confidence in that exit at 11.5 out of 100 and trend health at 95.
+    Breakeven protection was already active and did nothing, because the exit
+    came from a soft rule rather than from the stop.
+
+    So the exit is neither honoured nor vetoed. It becomes a floor: hold the
+    position and ratchet the stop to protect all but PROFIT_LOCK_MAX_GIVEBACK_R
+    of the peak. The stop only ever moves in the trade's favour, so this cannot
+    turn a winner into a loser -- worst case is exiting at the locked level
+    instead of at the soft signal, best case is keeping a trend that had not
+    actually ended.
+
+    Deliberately narrow. It requires all three of: profit actually banked, a
+    trend still reading healthy, and the engine's own low confidence in the
+    exit. None of those describe a losing trade, so a loss can never be widened
+    and a confident exit is always honoured.
+
+    Returns `(locked_stop, locked_r)`, or `(None, None)` when it does not apply.
+    """
+
+    if not exit_signal or exit_code not in PROFIT_LOCK_ELIGIBLE_EXITS:
+        return None, None
+
+    mfe_r = _float_or_none(mfe_r)
+    risk_per_share = _float_or_none(risk_per_share)
+    entry_price = _float_or_none(entry_price)
+
+    if not mfe_r or not risk_per_share or entry_price is None:
+        return None, None
+
+    if mfe_r < _env_float("PROFIT_LOCK_MIN_MFE_R", 1.0):
+        return None, None
+
+    health = _float_or_none(trend_health_score)
+    if health is None or health < _env_float("PROFIT_LOCK_MIN_TREND_HEALTH", 70):
+        return None, None
+
+    confidence = _float_or_none(exit_confidence_score)
+    if confidence is None or confidence >= _env_float(
+        "PROFIT_LOCK_MAX_EXIT_CONFIDENCE", 25
+    ):
+        return None, None
+
+    locked_r = mfe_r - _env_float("PROFIT_LOCK_MAX_GIVEBACK_R", 1.0)
+
+    if locked_r <= 0:
+        return None, None
+
+    locked_stop = (
+        entry_price - (locked_r * risk_per_share)
+        if is_short
+        else entry_price + (locked_r * risk_per_share)
+    )
+    current_stop = _float_or_none(current_stop)
+
+    if current_stop is not None:
+        # Ratchet only. Never widen risk.
+        locked_stop = (
+            min(current_stop, locked_stop)
+            if is_short
+            else max(current_stop, locked_stop)
+        )
+
+    return locked_stop, locked_r
+
+
 def _float_or_none(value):
 
     try:
@@ -798,6 +883,50 @@ def evaluate_exit(
             f"{selected_exit['code']} grace zone active; awaiting one-bar confirmation"
         )
 
+    # Profit protection. A soft rule may say "momentum broke" while the trade is
+    # sitting on real banked profit and the trend still reads strong. NVDA on
+    # 2026-07-31 ran to +1.66R, printed "Partial profit threshold reached" three
+    # times over ten minutes, then closed at +0.60R on an EMA9 touch -- with the
+    # engine scoring its own confidence in that exit at 11.5 out of 100 and trend
+    # health at 95. Breakeven protection was already active and did nothing,
+    # because the exit came from a soft rule rather than the stop.
+    #
+    # So rather than honour or veto the exit outright, convert it into a floor:
+    # keep the position and ratchet the stop up to protect all but
+    # PROFIT_LOCK_MAX_GIVEBACK_R of the peak. The stop only ever moves in the
+    # trade's favour, so this cannot turn a winner into a loser -- the worst case
+    # is exiting at the locked level instead of at the soft signal, and the best
+    # case is keeping a trend that had not actually ended.
+    #
+    # Deliberately narrow: it needs real profit banked, a trend still reading
+    # healthy, AND the engine's own low confidence in the exit. None of those
+    # describe a losing trade, so this never widens a loss.
+    profit_lock_active = False
+    locked_stop, locked_r = resolve_profit_lock(
+        exit_code=selected_exit.get("code") if selected_exit else None,
+        exit_signal=exit_signal,
+        mfe_r=mfe_r,
+        trend_health_score=trend_health["score"],
+        exit_confidence_score=exit_confidence["exit_confidence_score"],
+        entry_price=entry_price,
+        current_stop=updated_stop,
+        risk_per_share=risk_per_share,
+        is_short=is_short,
+    )
+
+    if locked_stop is not None:
+
+        updated_stop = locked_stop
+        profit_lock_active = True
+        exit_signal = False
+        exit_reason = "Hold"
+        trade_action = "HOLD"
+        adjustment_reason = (
+            f"{selected_exit['code']} exit held at confidence "
+            f"{exit_confidence['exit_confidence_score']}; "
+            f"stop locked at {locked_r:.2f}R of {mfe_r:.2f}R peak"
+        )
+
     if exit_signal:
 
         trade_action = "EXIT"
@@ -880,6 +1009,11 @@ def evaluate_exit(
         # its own independent risk denominator.
         "mfe_r": _round_float(mfe_r),
         "risk_per_share": _round_float(risk_per_share),
+        # The price this verdict was reached on. The caller fills against a
+        # fresher mark, so without this the gap between deciding and filling is
+        # unrecoverable -- and for soft exits `exit_slippage` is zero by
+        # definition, so nothing else records it.
+        "current_price": _round_float(current_price),
         "highest_price": _round_float(highest_price),
         "lowest_price": _round_float(lowest_price),
         "bars_in_trade": int(bars_in_trade),
@@ -892,5 +1026,6 @@ def evaluate_exit(
         "profit_lock_stop": _round_float(profit_lock_stop),
         "profit_giveback_r": _round_float(profit_giveback_r),
         "grace_zone_active": grace_zone_active,
+        "profit_lock_active": profit_lock_active,
         "v1_ema_grace_pending": grace_zone_active,
     }

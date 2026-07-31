@@ -30,6 +30,7 @@ from app.config.watchlist import (
     REFERENCE_FETCH_SYMBOLS
 )
 from app.config.settings import (
+    get_float_env,
     get_secret_env,
     print_runtime_banner,
     settings,
@@ -218,11 +219,26 @@ def _regression_market_snapshot(df_5m, df_15m, df_1h):
     }
 
 
+# Read from configuration rather than restated here. These were hardcoded, so
+# `OPTION_MAX_SPREAD_PCT = 6` in Streamlit Secrets never reached the gate and
+# every `Option Spread` rule row was evaluated against 10 -- which is why the
+# 2026-07-31 decision waterfall showed `required_value 10.0` for a setting that
+# had been 6 since the previous night. `EntryGateConfig`'s own docstring says
+# the setup thresholds "are imported rather than restated so the two cannot
+# drift apart"; restating one here defeated that.
+#
+# `min_setup_percent` stays above MIN_SETUP_BASE deliberately: 62 is the floor
+# below which a row is not a setup at all, while this is the scanner's own bar
+# for putting a candidate forward. It is now nameable and tunable instead of
+# being a literal buried in module scope.
 SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
-    min_rr=2.0,
-    min_setup_percent=70.0,
-    min_option_quality=65.0,
-    max_spread_pct=10.0
+    min_rr=get_float_env("SCANNER_GATE_MIN_RR", 2.0),
+    min_setup_percent=get_float_env("SCANNER_GATE_MIN_SETUP", 70.0),
+    min_option_quality=get_float_env(
+        "OPTION_MIN_QUALITY_SCORE",
+        65.0,
+    ),
+    max_spread_pct=get_float_env("OPTION_MAX_SPREAD_PCT", 10.0),
 )
 
 
@@ -3843,6 +3859,15 @@ def _persist_scan_outputs(
             f"{profile_result['path']}"
         )
 
+    # Not cancelable. Both of these are the scan's only record of itself, and
+    # `cancel_old_jobs` kills any QUEUED cancelable job belonging to an earlier
+    # scan the moment the next one starts. On 2026-07-31 that raced: the opening
+    # range runs a 120s cadence against a ~150s scan, so the next scan began
+    # ~5s after these were submitted and cancelled them before the worker could
+    # drain. 13 of 50 runs that day archived nothing and 9 stayed at STARTED,
+    # because `record_scanner_run_finish` lives inside persist_scan_artifacts.
+    # Shedding a scan's own audit trail under load is never the right trade --
+    # the work is bounded by one scan and drains during the next one.
     get_runtime_scheduler().submit_normal(
         RuntimeJob(
             name="persist_scan_artifacts_db",
@@ -3856,7 +3881,7 @@ def _persist_scan_outputs(
                 output_file,
                 observed_at.isoformat(),
             ),
-            cancelable=True,
+            cancelable=False,
             scan_id=scan_id,
         )
     )
@@ -3875,7 +3900,7 @@ def _persist_scan_outputs(
                     observed_at.isoformat(),
                     regression_market_snapshots,
                 ),
-                cancelable=True,
+                cancelable=False,
                 scan_id=scan_id,
             )
         )
@@ -5127,6 +5152,18 @@ def _run_scanner_impl():
                             "Exit Fill Price": exit_fill_price,
                             "Exit Slippage": exit_slippage,
                             "Exit Rule": exit_setup.get("exit_rule"),
+                            # What the exit engine was looking at when it
+                            # decided, so the gap between deciding and filling
+                            # is recoverable. `Exit Slippage` only measures
+                            # overshoot past a *level*, so a soft exit records
+                            # zero however far price moved in the meantime:
+                            # NVDA on 2026-07-31 decided at 197.68 (-0.56R) and
+                            # filled at 197.50 (-0.74R) four minutes later, and
+                            # 0.18R of cadence cost was invisible to every
+                            # metric the system had.
+                            "Exit Decision Price": exit_setup.get("current_price"),
+                            "Exit Decision RR": exit_setup.get("rr_progress"),
+                            "Exit Risk Per Share": exit_setup.get("risk_per_share"),
                         },
                         notify_exit=False,
                     )

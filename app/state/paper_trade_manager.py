@@ -305,9 +305,24 @@ def update_paper_trade(
         trade["option_pl_pct"] = option_pl.get("option_pl_pct")
         trade["option_pl_dollars"] = option_pl.get("option_pl_dollars")
     if execution_metrics:
-        for field in ("mfe_r", "mae_r", "trend_health_score"):
-            if execution_metrics.get(field) is not None:
-                trade[field] = execution_metrics.get(field)
+        # Excursions are the extreme over the life of the trade, not the latest
+        # scan's reading. This overwrote, so a trade that ran to +1.66R and
+        # retraced recorded mfe_r 0.0 -- which is exactly what NVDA did on
+        # 2026-07-31 while three "Partial profit threshold reached" signals
+        # fired and it closed at +0.60R.
+        #
+        # That is not only a reporting loss. MFE gates grace-zone eligibility
+        # ("in profit or MFE >= 1R") and profit protection, so both were
+        # reasoning about a number that reset every scan and could never see
+        # the peak they exist to defend. `state_trade_manager` already does
+        # this correctly; the two are now consistent.
+        for field in ("mfe_r", "mae_r"):
+            value = _safe_float(execution_metrics.get(field))
+            if value is not None:
+                trade[field] = max(_safe_float(trade.get(field)) or 0.0, value)
+
+        if execution_metrics.get("trend_health_score") is not None:
+            trade["trend_health_score"] = execution_metrics.get("trend_health_score")
         if execution_metrics.get("trend_health_status") is not None:
             trade["last_trend_health_status"] = execution_metrics.get("trend_health_status")
         if execution_metrics.get("exit_confidence_score") is not None:
@@ -605,7 +620,11 @@ def _option_trade_result(trade):
     """
 
     entry_mid = _safe_float(trade.get("option_mid"))
-    entry_ask = _safe_float(trade.get("option_ask")) or entry_mid
+    # `option_entry_ask` is frozen at open; `option_ask` is the live quote and
+    # holds the exit price by the time this runs. Trades opened before that
+    # field existed fall back to the entry mid, which understates the spread
+    # rather than cancelling it out entirely.
+    entry_ask = _safe_float(trade.get("option_entry_ask")) or entry_mid
     close_bid = _safe_float(trade.get("option_bid"))
     close_ask = _safe_float(trade.get("option_ask"))
     close_mid = _safe_float(trade.get("option_current_mid"))
@@ -1001,6 +1020,26 @@ def open_paper_trade(
         "option_bid": option_bid,
         "option_ask": option_ask,
         "option_mid": option_mid,
+        # Frozen at entry, like `initial_stop_loss` and for the same reason.
+        # `option_bid`/`option_ask` are refreshed on every scan, so by close
+        # they hold the exit quote. `_option_trade_result` read the entry ask
+        # from `option_ask` and so compared the close bid against the close
+        # ask, making `option_pnl_pct_net` come out as minus the current spread
+        # on every trade regardless of outcome -- NVDA recorded -2.2% on a 2.2%
+        # spread, CRWD -9.21% on a 9.21% spread.
+        "option_entry_bid": option_bid,
+        "option_entry_ask": option_ask,
+        # The spread actually paid, frozen. `option_spread_pct` is refreshed
+        # each scan and so holds the exit spread by the time a trade closes,
+        # which makes entry economics unreconstructable after the fact. CRWD on
+        # 2026-07-31 read 9.21% at exit and it was never knowable what it had
+        # been when the position was opened -- nor whether the spread had blown
+        # out while the trade was held, which is itself a risk nothing models.
+        "option_entry_spread_pct": (
+            round(((option_ask - option_bid) / option_mid) * 100, 2)
+            if option_bid and option_ask and option_mid
+            else None
+        ),
         "option_contracts": option_contracts,
         "scanner_context": scanner_context or {},
         "planned_rr": (
@@ -1112,9 +1151,27 @@ def close_paper_trade(
         close_price
     )
 
-    if scanner_context and not trade.get("scanner_context"):
+    if scanner_context:
 
+        # Unconditional. This was guarded on the trade having no entry-time
+        # `scanner_context`, which every auto-paper trade has -- so the close
+        # context was discarded for exactly the trades that matter, taking
+        # `Exit Fill Price`, `Exit Slippage`, `Exit Rule` and the decision price
+        # with it. That is why no closed trade has ever carried an
+        # `exit_slippage`, and why the 0.18R NVDA lost between deciding at
+        # 197.68 and filling at 197.50 on 2026-07-31 could only be recovered by
+        # hand from an alert payload.
         trade["close_scanner_context"] = scanner_context
+
+        for source, field in (
+            ("Exit Fill Price", "exit_fill_price"),
+            ("Exit Slippage", "exit_slippage"),
+            ("Exit Rule", "exit_rule"),
+            ("Exit Decision Price", "exit_decision_price"),
+            ("Exit Decision RR", "exit_decision_rr"),
+        ):
+            if scanner_context.get(source) is not None:
+                trade[field] = scanner_context.get(source)
 
     closed_dt = _now_et()
 

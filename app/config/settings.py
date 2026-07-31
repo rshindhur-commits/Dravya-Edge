@@ -5,7 +5,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-load_dotenv(override=True)
+# `override=False`: a variable already set in the environment wins over `.env`.
+#
+# With override=True there was no way to run the scanner without writing to the
+# production database -- `DB_WRITE_ENABLED=false python -m app.main` was silently
+# rewritten to `true` by `.env` before the guard ever saw it. Both DB writers are
+# correctly guarded; the guard simply never received the value it was given. That
+# is how an orphaned NVDA position came to be closed at -4.12R during a
+# verification run on 2026-07-31 that was believed to be write-disabled.
+#
+# Streamlit Cloud is unaffected either way: there is no `.env` there, so settings
+# come from Secrets, which arrive as real environment variables.
+load_dotenv(override=False)
 
 
 def get_secret_env(name, default=None):
