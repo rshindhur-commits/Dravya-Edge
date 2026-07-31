@@ -599,6 +599,12 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "stop_viability": row.get("STOP_VIABILITY") if row is not None else None,
         "stop_spread_multiple": row.get("STOP_SPREAD_MULTIPLE") if row is not None else None,
         "stop_viability_would_block": row.get("STOP_VIABILITY_WOULD_BLOCK") if row is not None else None,
+        # Implied vs realised volatility, and why the event blocker fired.
+        "iv_rv_ratio": row.get("IV_RV_RATIO") if row is not None else None,
+        "iv_richness": row.get("IV_RICHNESS") if row is not None else None,
+        "iv_richness_would_block": row.get("IV_RICHNESS_WOULD_BLOCK") if row is not None else None,
+        "event_blocked": row.get("Event Blocked") if row is not None else None,
+        "event_label": row.get("Event Label") if row is not None else None,
         "stop_viability_enforced": row.get("STOP_VIABILITY_ENFORCED") if row is not None else None,
         **_gate_counterfactuals(row, controls),
     }

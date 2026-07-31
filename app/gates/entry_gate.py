@@ -382,10 +382,49 @@ def is_symbol_in_cooldown(
     ).total_seconds() < cooldown_minutes * 60
 
 
+def _vix_spike_pct():
+    """Intraday VIX move, in percent, that counts as a volatility spike.
+
+    8 is deliberately not sensitive. The purpose is to catch the days when
+    premium repriced under you, not to react to ordinary noise -- the VIX moves
+    more than 3% on a quiet afternoon.
+    """
+
+    try:
+        return float(os.getenv("VIX_SPIKE_PCT", "8") or 8)
+    except ValueError:
+        return 8.0
+
+
 def apply_regime_entry_thresholds(row, config: EntryGateConfig):
+    """Raise the entry bar when conditions are hostile.
+
+    "Market Regime" is not a market regime. _classify_explicit_regime() derives it
+    from the candidate's own 15m frame -- its ATR_PCT, EMAs, VWAP, RSI and MACD --
+    so it describes one symbol's trend state. A name can read TRENDING_BULL while
+    the sector it belongs to is breaking down, and only the first was consulted.
+
+    "Reference Regime" is the market-level view, built in _fetch_reference_context()
+    by taking the majority regime across XLK, SMH and SOXX. For a watchlist that is
+    almost entirely semiconductors and large-cap tech those three are a better
+    market proxy than SPY. It was computed on every scan, written to every row, and
+    read by nothing.
+
+    VIX is the same story: fetched, given a move, an ATR and a regime, recorded on
+    the row as "VIX Move %", and never consulted. A volatility spike is the single
+    clearest signal that premium is expensive and that stops get run -- both of
+    which matter more to a premium buyer than to anyone else.
+
+    Every threshold here only ever tightens, never loosens, so a hostile reading
+    can raise the bar but no combination can wave through a trade the base config
+    would have refused.
+    """
 
     market_regime = str(
         _row_get(row, "Market Regime", "market_regime", default="")
+    ).upper()
+    reference_regime = str(
+        _row_get(row, "Reference Regime", "reference_regime", default="")
     ).upper()
     breadth = safe_float(
         _row_get(row, "Watchlist Breadth Score", "watchlist_breadth_score"),
@@ -395,6 +434,13 @@ def apply_regime_entry_thresholds(row, config: EntryGateConfig):
         _row_get(row, "Above EMA20 %", "above_ema20_pct"),
         100.0
     )
+    vix_move = safe_float(
+        _row_get(row, "VIX Move %", "vix_move_pct"),
+        None
+    )
+    direction = str(
+        _row_get(row, "Candidate Direction", "candidate_direction", default="")
+    ).upper()
 
     min_setup = config.min_setup_percent
     min_rr = config.min_rr
@@ -410,6 +456,33 @@ def apply_regime_entry_thresholds(row, config: EntryGateConfig):
 
         min_setup = max(min_setup, 88.0)
         min_rr = max(min_rr, 2.0)
+
+    # A candidate fighting its own sector complex. Not blocked outright -- the
+    # strongest names lead reversals -- but it has to be clearly better than one
+    # that has the tape behind it.
+    if reference_regime == "TRENDING_BEAR" and direction == "CALL":
+
+        min_setup = max(min_setup, 88.0)
+        min_rr = max(min_rr, 2.0)
+
+    if reference_regime == "TRENDING_BULL" and direction == "PUT":
+
+        min_setup = max(min_setup, 88.0)
+        min_rr = max(min_rr, 2.0)
+
+    if reference_regime == "HIGH_VOLATILITY":
+
+        min_setup = max(min_setup, 85.0)
+        min_rr = max(min_rr, 2.0)
+
+    # A VIX spike raises every option premium at once and widens the quotes you
+    # have to cross twice. Long calls suffer most: the move that was supposed to
+    # pay for the position is now competing with a higher entry price.
+    if vix_move is not None and vix_move >= _vix_spike_pct():
+
+        min_setup = max(min_setup, 88.0)
+        min_rr = max(min_rr, 2.2)
+        max_spread = min(max_spread, 5.0)
 
     return min_setup, min_rr, max_spread
 

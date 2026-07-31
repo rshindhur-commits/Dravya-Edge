@@ -40,6 +40,7 @@ from app.diagnostics import (
     build_entry_snapshot_columns,
     diagnostics_to_json
 )
+from app.risk.iv_richness import enforce_iv_richness, evaluate_iv_richness
 from app.risk.stop_viability import enforce_stop_viability, evaluate_stop_viability
 from app.gates import (
     build_entry_gate_diagnostics,
@@ -2517,6 +2518,48 @@ def _add_stop_viability(row):
         f"{viability.get('round_trip_spread_pct')}% round-trip spread "
         f"({viability.get('spread_multiple')}x, need "
         f"{viability.get('required_multiple')}x)"
+    )
+    row["Rejected Trade Reason"] = row["Action Reason"]
+
+    return row
+
+
+def _add_iv_richness(row):
+    """Record how implied volatility compares to what the underlying actually does.
+
+    Ships observing rather than blocking: the realised-vol conversion is an
+    approximation, and no archived day exists yet against which to calibrate the
+    threshold. IV_RICHNESS_ENFORCE turns it into a gate once one does.
+    """
+
+    row = dict(row)
+
+    richness = evaluate_iv_richness(
+        row.get("Option IV"),
+        row.get("ATR %"),
+    )
+
+    row["IV_RV_RATIO"] = richness.get("iv_rv_ratio")
+    row["IV_REALISED_VOL"] = richness.get("realised_vol")
+    row["IV_RICHNESS"] = richness.get("reason")
+    row["IV_RICHNESS_ENFORCED"] = enforce_iv_richness()
+
+    if richness.get("rich") is not True:
+        return row
+
+    if str(row.get("Action Status") or "").upper() not in _ENTRY_ACTION_STATUSES:
+        return row
+
+    if not enforce_iv_richness():
+        row["IV_RICHNESS_WOULD_BLOCK"] = True
+        return row
+
+    row["Action Status"] = "AVOID"
+    row["Blocked By"] = "IV_RICH_VS_REALISED"
+    row["Action Reason"] = (
+        f"Implied {richness.get('implied_vol')}% against realised "
+        f"{richness.get('realised_vol')}% "
+        f"({richness.get('iv_rv_ratio')}x, limit {richness.get('max_ratio')}x)"
     )
     row["Rejected Trade Reason"] = row["Action Reason"]
 
@@ -6797,6 +6840,9 @@ def _run_scanner_impl():
             }
 
             result_row = _add_stop_viability(
+                result_row
+            )
+            result_row = _add_iv_richness(
                 result_row
             )
             result_row = _add_entry_gate_diagnostics(

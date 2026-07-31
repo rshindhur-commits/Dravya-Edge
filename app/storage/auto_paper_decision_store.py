@@ -81,6 +81,11 @@ AUTO_PAPER_DECISION_FIELDS = [
     "stop_spread_multiple",
     "stop_viability_would_block",
     "stop_viability_enforced",
+    "iv_rv_ratio",
+    "iv_richness",
+    "iv_richness_would_block",
+    "event_blocked",
+    "event_label",
 ]
 
 
