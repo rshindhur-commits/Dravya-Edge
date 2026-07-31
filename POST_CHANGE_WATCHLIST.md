@@ -278,27 +278,43 @@ effect is attributable.
 
 ## 4. Known-wrong, worth fixing
 
-### 4.1 `load_dotenv(override=True)` makes local runs unsafe
+### 4.1 ~~`load_dotenv(override=True)` makes local runs unsafe~~ — FIXED
 
-`app/config/settings.py:8` and `app/utils/polygon_client.py:20` overwrite shell
-environment variables with `.env` values, so `DB_WRITE_ENABLED=false` silently
-becomes `true` and there is **no way to run the scanner without writing to the
-production database**. This is how the orphaned NVDA position came to be closed
-at −4.12R during a supposedly write-disabled verification run.
+Both call sites now load with `override=False`, so a variable already set in the
+environment wins over `.env` and `DB_WRITE_ENABLED=false python -m app.main` is
+finally honoured. Streamlit Cloud is unaffected: there is no `.env` there and
+Secrets arrive as real environment variables.
 
-Both DB writers are correctly guarded — the guard never sees `false`. The commit
-message on `31d825e` blames `upsert_paper_trade`; that is wrong.
+Kept for the history. It was how the orphaned NVDA position came to be closed at
+−4.12R during a verification run believed to be write-disabled. Both DB writers
+were always correctly guarded — the guard simply never received the value it was
+given. The commit message on `31d825e` blames `upsert_paper_trade`; that is
+wrong.
 
-### 4.2 Four tables the code writes to do not exist
+### 4.2 ~~Four tables the code writes to do not exist~~ — RETRACTED
 
-`scanner_run` (singular), `daily_session_summary`, `missed_winner_analysis`,
-`trade_efficiency`. Every write has been failing silently and no migration
-creates them. `scanner_runs` (plural) exists, so there are two competing
-scan-run schemas. Needs a migration; should be its own change.
+**This item was false and is kept only so it is not rediscovered.** It claimed
+`scanner_run`, `daily_session_summary`, `missed_winner_analysis` and
+`trade_efficiency` were written to and missing, with every write failing
+silently.
 
-### 4.3 Config in Secrets that never reaches the gate
+Checked properly on 2026-07-31: **zero SQL references to any of them.**
 
-`app/main.py:221` hardcodes the scanner's entry gate:
+- `scanner_run` — only ever appears as `scanner_run.lock`, a lock *filename*
+- `trade_efficiency` — a Python *module directory*, `app/analytics/trade_efficiency/`
+- `daily_session_summary`, `missed_winner_analysis` — no references at all
+
+Nothing writes to them, nothing fails, and no migration is needed. Creating four
+unused tables would have been the actively worse outcome.
+
+The claim was inherited from an earlier session's assertion and repeated twice
+without verification — including into this file's own rewrite, a few hours after
+section 6 was written warning about exactly this. Worth keeping as the concrete
+example: **a confident claim in a handover document is a lead, not a fact.**
+
+### 4.3 ~~Config in Secrets that never reaches the gate~~ — FIXED
+
+`app/main.py` hardcoded the scanner's entry gate:
 
 ```python
 SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
@@ -306,12 +322,17 @@ SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
     min_option_quality=65.0, max_spread_pct=10.0)
 ```
 
-So `OPTION_MAX_SPREAD_PCT = 6` and `MIN_SETUP_BASE = 62` do **not** reach it —
-every `Option Spread` rule row evaluates against 10 (or 5 in `RANGE_BOUND`).
-Entries are still capped at 6 via the separate auto-paper constant, so nothing
-is unsafe, but the Secrets file is partly decorative. `EntryGateConfig`'s own
-docstring says thresholds "are imported rather than restated so the two cannot
-drift apart" — and then `main.py` restates one.
+So `OPTION_MAX_SPREAD_PCT = 6` did **not** reach it — every `Option Spread` rule
+row evaluated against 10 (or 5 in `RANGE_BOUND`), which is why the 2026-07-31
+waterfall showed `required_value 10.0` for a setting that had been 6 since the
+previous night.
+
+Now read from configuration: `OPTION_MAX_SPREAD_PCT`, `OPTION_MIN_QUALITY_SCORE`
+and two new named knobs, `SCANNER_GATE_MIN_RR` and `SCANNER_GATE_MIN_SETUP`. The
+scanner's own bar stays deliberately above `MIN_SETUP_BASE` — 62 is the floor
+below which a row is not a setup at all, 70 is the bar for putting a candidate
+forward — but it is now nameable and tunable rather than a literal in module
+scope.
 
 ### 4.4 Entry score is computed and discarded
 

@@ -48,11 +48,17 @@ _real_load_dotenv = dotenv.load_dotenv
 def _load_dotenv_keeping_db_disabled(*args, **kwargs):
     """Let .env load, then put the database kill switch back.
 
-    Clearing the environment once is not enough. app/config/settings.py and
-    app/utils/polygon_client.py both call `load_dotenv(override=True)` at import,
-    which copies the real DATABASE_URL and DB_WRITE_ENABLED=true back over
-    anything set here. `db_writes_enabled()` reads os.environ at call time, so
-    that restored value is what a test's write path saw.
+    `app/config/settings.py` and `app/utils/polygon_client.py` used to call
+    `load_dotenv(override=True)` at import, which copied the real DATABASE_URL
+    and DB_WRITE_ENABLED=true back over anything set here; `db_writes_enabled()`
+    reads os.environ at call time, so that restored value was what a test's
+    write path saw. Both now load with `override=False`, so the kill switch set
+    above already survives.
+
+    Kept anyway. It costs nothing, and it is the only thing standing between a
+    stray `load_dotenv(override=True)` somewhere in the tree and a test suite
+    writing to the production database. Belt and braces on the one failure whose
+    blast radius is real money.
 
     Wrapping rather than no-oping keeps every other .env value available, so test
     behaviour is unchanged apart from the database being unreachable.

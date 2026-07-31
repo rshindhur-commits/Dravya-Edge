@@ -1029,6 +1029,17 @@ def open_paper_trade(
         # spread, CRWD -9.21% on a 9.21% spread.
         "option_entry_bid": option_bid,
         "option_entry_ask": option_ask,
+        # The spread actually paid, frozen. `option_spread_pct` is refreshed
+        # each scan and so holds the exit spread by the time a trade closes,
+        # which makes entry economics unreconstructable after the fact. CRWD on
+        # 2026-07-31 read 9.21% at exit and it was never knowable what it had
+        # been when the position was opened -- nor whether the spread had blown
+        # out while the trade was held, which is itself a risk nothing models.
+        "option_entry_spread_pct": (
+            round(((option_ask - option_bid) / option_mid) * 100, 2)
+            if option_bid and option_ask and option_mid
+            else None
+        ),
         "option_contracts": option_contracts,
         "scanner_context": scanner_context or {},
         "planned_rr": (
@@ -1140,9 +1151,27 @@ def close_paper_trade(
         close_price
     )
 
-    if scanner_context and not trade.get("scanner_context"):
+    if scanner_context:
 
+        # Unconditional. This was guarded on the trade having no entry-time
+        # `scanner_context`, which every auto-paper trade has -- so the close
+        # context was discarded for exactly the trades that matter, taking
+        # `Exit Fill Price`, `Exit Slippage`, `Exit Rule` and the decision price
+        # with it. That is why no closed trade has ever carried an
+        # `exit_slippage`, and why the 0.18R NVDA lost between deciding at
+        # 197.68 and filling at 197.50 on 2026-07-31 could only be recovered by
+        # hand from an alert payload.
         trade["close_scanner_context"] = scanner_context
+
+        for source, field in (
+            ("Exit Fill Price", "exit_fill_price"),
+            ("Exit Slippage", "exit_slippage"),
+            ("Exit Rule", "exit_rule"),
+            ("Exit Decision Price", "exit_decision_price"),
+            ("Exit Decision RR", "exit_decision_rr"),
+        ):
+            if scanner_context.get(source) is not None:
+                trade[field] = scanner_context.get(source)
 
     closed_dt = _now_et()
 

@@ -1009,6 +1009,11 @@ def evaluate_exit(
         # its own independent risk denominator.
         "mfe_r": _round_float(mfe_r),
         "risk_per_share": _round_float(risk_per_share),
+        # The price this verdict was reached on. The caller fills against a
+        # fresher mark, so without this the gap between deciding and filling is
+        # unrecoverable -- and for soft exits `exit_slippage` is zero by
+        # definition, so nothing else records it.
+        "current_price": _round_float(current_price),
         "highest_price": _round_float(highest_price),
         "lowest_price": _round_float(lowest_price),
         "bars_in_trade": int(bars_in_trade),

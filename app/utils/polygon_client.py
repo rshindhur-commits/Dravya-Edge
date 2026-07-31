@@ -17,7 +17,9 @@ from datetime import timedelta
 
 from app.utils.runtime_logging import debug_print
 
-load_dotenv(override=True)
+# See app/config/settings.py: the shell environment must win over `.env`, so a
+# run can be given settings that `.env` cannot silently rewrite.
+load_dotenv(override=False)
 
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "").strip()
 
