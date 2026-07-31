@@ -77,6 +77,15 @@ AUTO_PAPER_DECISION_FIELDS = [
     "would_pass_gate_if_review_allowed",
     "late_entry_risk",
     "missed_move_type",
+    "stop_viability",
+    "stop_spread_multiple",
+    "stop_viability_would_block",
+    "stop_viability_enforced",
+    "iv_rv_ratio",
+    "iv_richness",
+    "iv_richness_would_block",
+    "event_blocked",
+    "event_label",
 ]
 
 

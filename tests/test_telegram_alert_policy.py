@@ -91,30 +91,12 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_ALERT_POLICY": "PAPER",
                 "TELEGRAM_ALERTS_ENABLED": "1",
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
-                "TELEGRAM_MIN_ENTRY_ALERT_SCORE": "0",
+                "TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE": "0",
             },
             clear=False,
         ), patch(
-            "app.alerts.telegram_alerts._entry_alert_time_bucket",
-            return_value="MORNING"
-        ), patch(
             "app.alerts.telegram_alerts._load_alert_state",
             return_value={}
-        ), patch(
-            "app.alerts.telegram_alerts._entry_alerts_today",
-            return_value=0
-        ), patch(
-            "app.alerts.telegram_alerts._active_entry_alerts",
-            return_value=[]
-        ), patch(
-            "app.alerts.telegram_alerts._entry_alerts_in_bucket",
-            return_value=0
-        ), patch(
-            "app.alerts.telegram_alerts._recent_matching_entry_alert",
-            return_value=False
-        ), patch(
-            "app.alerts.telegram_alerts._recent_closed_symbol_alert",
-            return_value=False
         ), patch(
             "app.alerts.telegram_alerts.alert_was_sent",
             return_value=False
@@ -135,7 +117,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             {
                 "TELEGRAM_ALERTS_ENABLED": "1",
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
-                "TELEGRAM_MIN_ENTRY_ALERT_SCORE": "100",
+                "TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE": "100",
             },
             clear=False,
         ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
@@ -319,31 +301,13 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_ALERT_POLICY": "PAPER",
                 "TELEGRAM_ALERTS_ENABLED": "1",
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
-                "TELEGRAM_MIN_ENTRY_ALERT_SCORE": "0",
+                "TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE": "0",
                 "TELEGRAM_DISPATCH_MODE": "QUEUED",
             },
             clear=False,
         ), patch(
-            "app.alerts.telegram_alerts._entry_alert_time_bucket",
-            return_value="MORNING"
-        ), patch(
             "app.alerts.telegram_alerts._load_alert_state",
             return_value={}
-        ), patch(
-            "app.alerts.telegram_alerts._entry_alerts_today",
-            return_value=0
-        ), patch(
-            "app.alerts.telegram_alerts._active_entry_alerts",
-            return_value=[]
-        ), patch(
-            "app.alerts.telegram_alerts._entry_alerts_in_bucket",
-            return_value=0
-        ), patch(
-            "app.alerts.telegram_alerts._recent_matching_entry_alert",
-            return_value=False
-        ), patch(
-            "app.alerts.telegram_alerts._recent_closed_symbol_alert",
-            return_value=False
         ), patch(
             "app.runtime.telegram_dispatcher.get_runtime_scheduler"
         ) as scheduler_factory, patch(
@@ -418,19 +382,57 @@ class TelegramAlertPolicyTests(unittest.TestCase):
 
         self.assertGreaterEqual(score, 88.0)
 
-    def test_instant_alert_default_matches_current_policy(self):
+    def test_entry_alert_policy_exposes_only_enforced_bars(self):
+        """Every key in the policy must be one the alert path actually reads.
 
-        with patch.dict(
-            "os.environ",
-            {
-                "TELEGRAM_INSTANT_ENTRY_ALERT_SCORE": ""
-            },
-            clear=False,
-        ):
+        This replaces a test that pinned the default of instant_alert_score, a
+        setting nothing ever consumed. Eleven such keys existed -- a daily cap, a
+        concurrent cap, two cooldowns, a top-candidate limit, three score
+        thresholds and three per-session caps -- all inert, and a test asserting
+        their defaults made them look supported.
+        """
 
+        self.assertEqual(
+            set(_entry_alert_policy()),
+            {"min_option_quality", "min_rr", "max_spread_pct"},
+        )
+
+    def test_alert_bars_are_never_stricter_than_the_entry_gate(self):
+        """A position that opened must not be unalertable on a bar entry already passed.
+
+        TELEGRAM_MIN_RR sat at 2.0 against an entry floor of 1.8, so a setup
+        entering at 1.9 opened a trade and told no subscriber about it.
+        """
+
+        import os
+
+        from app.runtime.paper_automation_support import (
+            DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT,
+            DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY,
+            DEFAULT_AUTO_PAPER_MIN_RR,
+        )
+
+        # Cleared deliberately. Code defaults are what reaches Streamlit Cloud --
+        # .env is gitignored and never deployed -- so the shipped defaults are what
+        # this invariant has to hold for.
+        overrides = {
+            key: "" for key in (
+                "TELEGRAM_MIN_RR",
+                "TELEGRAM_MIN_OPTION_QUALITY_SCORE",
+                "TELEGRAM_MAX_SPREAD_PCT",
+            )
+        }
+
+        with patch.dict("os.environ", overrides, clear=False):
             policy = _entry_alert_policy()
 
-        self.assertEqual(policy["instant_alert_score"], 88.0)
+        self.assertLessEqual(policy["min_rr"], DEFAULT_AUTO_PAPER_MIN_RR)
+        self.assertLessEqual(
+            policy["min_option_quality"], DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY
+        )
+        self.assertLessEqual(
+            policy["max_spread_pct"], DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT
+        )
 
 
 if __name__ == "__main__":

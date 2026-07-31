@@ -19,6 +19,23 @@ class TradeHoldingPolicy:
     archive_candidates_eod: bool
 
 
+# Expirations with enough life left to be worth carrying overnight.
+#
+# This set previously read {"PREFERRED_14_30", "LONGER_DTE"}, and "LONGER_DTE" is
+# not a value classify_expiration_bucket() can return -- the buckets past 30 days
+# are FALLBACK_31_45 and LONG_DATED_46_PLUS. The branch was dead, so a 40-day
+# contract, which has strictly less theta risk than the 14-30 one beside it, could
+# never qualify as MULTIDAY.
+#
+# SHORT_SWING_7_13 is deliberately excluded: a contract with under two weeks left
+# is carried overnight only to pay a full night of theta on the steepest part of
+# the curve.
+MULTIDAY_EXPIRATION_BUCKETS = {
+    "PREFERRED_14_30",
+    "FALLBACK_31_45",
+    "LONG_DATED_46_PLUS",
+}
+
 INTRADAY_POLICY = TradeHoldingPolicy(
     holding_profile=HoldingProfile.INTRADAY,
     force_eod_exit=True,
@@ -71,7 +88,7 @@ def derive_holding_profile(candidate: dict[str, Any] | None) -> HoldingProfile:
         or "SWING" in expected_hold
         or "OVERNIGHT" in expected_hold
         or (
-            expiration_bucket in {"PREFERRED_14_30", "LONGER_DTE"}
+            expiration_bucket in MULTIDAY_EXPIRATION_BUCKETS
             and setup_score >= 80
             and rr >= 1.8
             and option_quality >= 75

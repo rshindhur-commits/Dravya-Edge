@@ -4442,7 +4442,13 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         if trade.get("status") == "OPEN"
     ]
 
-    if len(open_trades) >= 3:
+    # Shared with the scan path so the two cannot enforce different books.
+    from app.runtime.paper_automation_support import (
+        max_active_paper_trades,
+        max_active_per_direction,
+    )
+
+    if len(open_trades) >= max_active_paper_trades():
 
         return False, "MAX_ACTIVE_PAPER_TRADES_REACHED"
 
@@ -4451,7 +4457,7 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         if trade.get("direction") == direction
     ]
 
-    if len(same_direction) >= 1:
+    if len(same_direction) >= max_active_per_direction():
 
         return False, "DIRECTION_ALREADY_ACTIVE"
 

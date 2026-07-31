@@ -54,12 +54,29 @@ AUTO_PAPER_EOD_CLOSE = time(15, 55)
 AUTO_PAPER_MAX_CANDIDATE_RANK = 3
 DEFAULT_AUTO_PAPER_MIN_RR = 1.8
 DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0
-DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 10.0
+DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 6.0
 AUTO_PAPER_REQUIRED_COLUMNS = [
     "Symbol", "Setup Valid", "Candidate Direction", "Candidate Entry Price",
     "Candidate Stop Price", "Candidate Target Price", "Candidate RR", "Entry",
     "Action Status", "Next Condition", "Live Chart Checklist",
 ]
+
+
+def max_active_paper_trades():
+    """Concurrent open paper positions allowed."""
+
+    return env_int("MAX_ACTIVE_PAPER_TRADES", 3)
+
+
+def max_active_per_direction():
+    """Concurrent open positions allowed in one direction.
+
+    Kept separate from the total so directional concentration can be limited
+    without capping the book: four positions split 2 CALL / 2 PUT is a different
+    risk to four CALLs, and only the total was ever intended to be a hard cap.
+    """
+
+    return env_int("MAX_ACTIVE_PER_DIRECTION", 2)
 
 
 def load_auto_paper_controls():
@@ -68,7 +85,18 @@ def load_auto_paper_controls():
         "auto_paper_enabled": _boolish(
             settings.get("auto_paper_enabled", _env_bool("AUTO_PAPER_ENABLED", True))
         ),
-        "max_daily": int(settings.get("auto_paper_max_daily", 3)),
+        # Falls back to MAX_DAILY_ENTRIES rather than a bare 3. The two settings
+        # named the same limit and disagreed: MAX_DAILY_ENTRIES=5 was read by the
+        # affordability config while this path silently enforced 3, so the
+        # configured daily cap was never the one that applied.
+        #
+        # auto_paper_settings.json still wins where present -- it is the sidebar
+        # control -- but it is gitignored and therefore absent on Streamlit Cloud
+        # after every redeploy, which is exactly when the default matters.
+        "max_daily": int(
+            settings.get("auto_paper_max_daily")
+            or env_int("MAX_DAILY_ENTRIES", 3)
+        ),
         "min_setup": float(settings.get("auto_paper_min_setup", 70)),
         "min_rr": float(settings.get("auto_paper_min_rr", DEFAULT_AUTO_PAPER_MIN_RR)),
         "direction": settings.get("auto_paper_direction", "Both"),
@@ -414,6 +442,61 @@ def _persist_auto_paper_decision(entry):
         print(f"[AUTO PAPER DECISION DB WARNING] {entry.get('symbol')}: {exc}")
 
 
+def _gate_counterfactuals(row, controls):
+    """Would this candidate have passed under a different threshold?
+
+    These columns exist in the decision ledger and have never been populated on
+    the scan path: they are produced by _add_shadow_diagnostics(), which runs
+    inside the dashboard's _load_scanner_output() and therefore only ever sees
+    dashboard renders. Every automated decision recorded them blank, which is why
+    "what did the RR gate cost us today" has not been answerable.
+
+    Computed against evaluate_entry_gate() with a substituted threshold rather
+    than by re-deriving the rule, so the counterfactual cannot drift from the gate
+    it is a counterfactual about. Only the threshold is varied -- position caps,
+    cooldowns and the daily limit are deliberately left out, because "would a
+    lower RR floor have allowed this setup" and "was there room in the book" are
+    different questions and answering them in one column makes both useless.
+    """
+
+    if row is None:
+        return {}
+
+    try:
+        gate_row = _paper_gate_row(row)
+    except Exception:
+        return {}
+
+    def passes(min_rr, min_setup):
+        try:
+            allowed, _ = evaluate_entry_gate(
+                gate_row,
+                EntryGateConfig(
+                    min_rr=min_rr,
+                    min_setup_percent=min_setup,
+                    min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY,
+                    max_spread_pct=DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT,
+                ),
+                mode="paper",
+            )
+            return bool(allowed)
+
+        except Exception:
+            return None
+
+    current_rr = controls.get("min_rr", DEFAULT_AUTO_PAPER_MIN_RR)
+    current_setup = controls.get("min_setup", 70.0)
+    action_status = str(row.get("Action Status") or "").strip().upper()
+
+    return {
+        "would_pass_gate_if_rr_1_7": passes(1.7, current_setup),
+        "would_pass_gate_if_setup_65": passes(current_rr, 65.0),
+        "would_pass_gate_if_review_allowed": (
+            action_status == "REVIEW_TV_CHART" and passes(current_rr, current_setup)
+        ),
+    }
+
+
 def write_auto_paper_decision(entry, trading_day):
     """Persist one decision to all three sinks.
 
@@ -510,6 +593,20 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "scanner_blocked_by": scanner_blocked_by,
         "action_status": action_status,
         "action_reason": row.get("Action Reason") if row is not None else None,
+        # Why the stop was or was not compatible with the contract's spread.
+        # stop_viability_would_block is the observe-only signal: it counts what the
+        # gate would have cost before it is allowed to cost anything.
+        "stop_viability": row.get("STOP_VIABILITY") if row is not None else None,
+        "stop_spread_multiple": row.get("STOP_SPREAD_MULTIPLE") if row is not None else None,
+        "stop_viability_would_block": row.get("STOP_VIABILITY_WOULD_BLOCK") if row is not None else None,
+        # Implied vs realised volatility, and why the event blocker fired.
+        "iv_rv_ratio": row.get("IV_RV_RATIO") if row is not None else None,
+        "iv_richness": row.get("IV_RICHNESS") if row is not None else None,
+        "iv_richness_would_block": row.get("IV_RICHNESS_WOULD_BLOCK") if row is not None else None,
+        "event_blocked": row.get("Event Blocked") if row is not None else None,
+        "event_label": row.get("Event Label") if row is not None else None,
+        "stop_viability_enforced": row.get("STOP_VIABILITY_ENFORCED") if row is not None else None,
+        **_gate_counterfactuals(row, controls),
     }
     write_auto_paper_decision(entry, trading_day)
 
@@ -637,9 +734,21 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     if symbol_trade_count_today(paper_trades, symbol, now_et) >= env_int("MAX_TRADES_PER_SYMBOL_PER_DAY", 1):
         return False, "MAX_TRADES_PER_SYMBOL_PER_DAY_REACHED"
     open_trades = [trade for trade in paper_trades.values() if trade.get("status") == "OPEN"]
-    if len(open_trades) >= 3:
+
+    # Both limits were hardcoded here, which meant MAX_ACTIVE_PAPER_TRADES was read
+    # by the affordability config and honoured by the dashboard entry path while
+    # this path -- the one that opens almost every trade -- ignored it and used 3.
+    # Setting it to 1 therefore had no effect on automated entries at all.
+    if len(open_trades) >= max_active_paper_trades():
         return False, "MAX_ACTIVE_PAPER_TRADES_REACHED"
-    if len([trade for trade in open_trades if trade.get("direction") == direction]) >= 1:
+
+    # Previously a hardcoded 1: a single open CALL blocked every other bullish
+    # setup. Under a MULTIDAY profile (force_eod_exit=False) that position is held
+    # overnight, so one trade could block the book for days. This is the constraint
+    # that decided how many trades a day actually happened.
+    if len([
+        trade for trade in open_trades if trade.get("direction") == direction
+    ]) >= max_active_per_direction():
         return False, "DIRECTION_ALREADY_ACTIVE"
     if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
         return False, "DAILY_AUTO_PAPER_LIMIT_REACHED"

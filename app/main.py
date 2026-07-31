@@ -30,6 +30,7 @@ from app.config.watchlist import (
     REFERENCE_FETCH_SYMBOLS
 )
 from app.config.settings import (
+    get_secret_env,
     print_runtime_banner,
     settings,
     validate_runtime_settings
@@ -39,6 +40,8 @@ from app.diagnostics import (
     build_entry_snapshot_columns,
     diagnostics_to_json
 )
+from app.risk.iv_richness import enforce_iv_richness, evaluate_iv_richness
+from app.risk.stop_viability import enforce_stop_viability, evaluate_stop_viability
 from app.gates import (
     build_entry_gate_diagnostics,
     EntryGateConfig,
@@ -1710,6 +1713,77 @@ def _apply_breadth_and_leaderboards(df_results):
     return df_results
 
 
+# Only six candidates per scan are tradable (BULLISH_TOP_1..3, BEARISH_TOP_1..3),
+# so the sort below decides which setups the system is even allowed to take.
+#
+# It used to lead with "RS Rank Score", making relative strength the primary
+# selector and pushing Risk Reward and setup quality down to tiebreakers. On
+# 2026-07-30 ORCL was blocked five times as "not top candidate" at setup scores of
+# 100/100/100/98/98 -- and ORCL was the only V1 winner of the day. Three weaker
+# setups held the slots on relative strength alone.
+#
+# Ranking by expected value puts the two things that decide the outcome of a trade
+# first, and keeps relative strength as the tiebreaker it is well suited to being.
+# This changes which trades are taken, not how many, and the number of tradable
+# slots is unchanged.
+_RANK_SORT_COLUMNS = [
+    "Expected Value Score",
+    "Setup Valid",
+    "Directional RS Score",
+]
+_RANK_SORT_ASCENDING = [False, False, False]
+
+
+def _add_expected_value_rank(df_results):
+    """Score candidates by what they are worth, not by how strong the symbol is.
+
+    Expected value here is a deliberately crude proxy -- setup quality as a
+    probability stand-in, multiplied by the planned reward:risk. It is not
+    calibrated and does not claim to be; it only has to order candidates better
+    than relative strength does, which is a low bar when the top-ranked name can
+    have half the RR of the one it displaced.
+
+    Relative strength survives as "Directional RS Score", sign-flipped for bearish
+    candidates so that the weakest symbol ranks first on the short side, which is
+    what the original direction-specific sort orders were expressing.
+
+    Set CANDIDATE_RANK_MODE=RS_RANK to restore the previous ordering; the two can
+    then be compared over archived days rather than argued about.
+    """
+
+    if df_results is None or df_results.empty:
+        return df_results
+
+    setup = pd.to_numeric(df_results.get("Setup %"), errors="coerce")
+
+    if setup.isna().all():
+        setup = pd.to_numeric(df_results.get("15m Score"), errors="coerce")
+
+    reward_risk = pd.to_numeric(df_results.get("Risk Reward"), errors="coerce")
+
+    if reward_risk.isna().all():
+        reward_risk = pd.to_numeric(df_results.get("Candidate RR"), errors="coerce")
+
+    rs_score = pd.to_numeric(df_results.get("RS Rank Score"), errors="coerce").fillna(0)
+    direction_sign = pd.to_numeric(
+        df_results.get("Candidate Direction Sign"), errors="coerce"
+    ).fillna(1.0)
+
+    df_results["Directional RS Score"] = (rs_score * direction_sign).round(2)
+
+    expected_value = (setup.fillna(0) / 100.0) * reward_risk.fillna(0)
+
+    if str(get_secret_env("CANDIDATE_RANK_MODE", "EXPECTED_VALUE")).strip().upper() == "RS_RANK":
+        # Legacy ordering, expressed through the same sort so only one code path
+        # decides the ranking.
+        df_results["Expected Value Score"] = df_results["Directional RS Score"]
+        return df_results
+
+    df_results["Expected Value Score"] = expected_value.round(4)
+
+    return df_results
+
+
 def _add_relative_strength_rankings(df_results):
 
     if df_results.empty:
@@ -1775,6 +1849,9 @@ def _add_relative_strength_rankings(df_results):
     df_results["RS Rank Score"] = rs_rank_score.where(
         symbol_moves.notna()
     ).round(2)
+    df_results["Candidate Direction Sign"] = df_results["Final Signal"].astype(str).str.contains(
+        "BEARISH", case=False, na=False
+    ).map({True: -1.0, False: 1.0})
     df_results["Bullish Rank"] = None
     df_results["Bearish Rank"] = None
     df_results["Top Candidate"] = None
@@ -1783,6 +1860,8 @@ def _add_relative_strength_rankings(df_results):
         df_results["Symbol"].notna()
     ].copy()
 
+    _add_expected_value_rank(tradable)
+
     bullish = tradable[
         tradable["Final Signal"].astype(str).str.contains(
             "BULLISH",
@@ -1790,13 +1869,8 @@ def _add_relative_strength_rankings(df_results):
             na=False
         )
     ].sort_values(
-        by=[
-            "RS Rank Score",
-            "Setup Valid",
-            "Risk Reward",
-            "15m Score"
-        ],
-        ascending=[False, False, False, False]
+        by=_RANK_SORT_COLUMNS,
+        ascending=_RANK_SORT_ASCENDING
     ).head(3)
 
     bearish = tradable[
@@ -1806,13 +1880,8 @@ def _add_relative_strength_rankings(df_results):
             na=False
         )
     ].sort_values(
-        by=[
-            "RS Rank Score",
-            "Setup Valid",
-            "Risk Reward",
-            "15m Score"
-        ],
-        ascending=[True, False, False, True]
+        by=_RANK_SORT_COLUMNS,
+        ascending=_RANK_SORT_ASCENDING
     ).head(3)
 
     for rank, index in enumerate(bullish.index, start=1):
@@ -2389,6 +2458,112 @@ def _compute_setup_percent_for_gate(row):
         readiness = min(readiness, 49)
 
     return round(max(0, min(readiness, 100)), 0)
+
+
+# Mirrors _auto_paper_actionable_rows(): the statuses from which a position can
+# actually be opened. REVIEW_TV_CHART is included because it becomes tradable when
+# ALLOW_REVIEW_TV_CHART_AUTO_PAPER is on, and a stop that cannot clear the spread
+# is no more tradable after a chart review than before one.
+_ENTRY_ACTION_STATUSES = {"ENTER", "ENTER_PAPER", "REVIEW_TV_CHART"}
+
+
+def _add_stop_viability(row):
+    """Flag entries whose stop cannot clear the contract's own bid/ask.
+
+    Runs here rather than in calculate_risk() because the option is not chosen
+    until well after the stop is set: risk runs at candidate time, the contract is
+    priced much later, and this check needs both.
+
+    Only ENTER-side rows are downgraded. A row that was already going to be
+    rejected keeps its original reason, which is more specific than this one.
+    """
+
+    row = dict(row)
+
+    viability = evaluate_stop_viability(
+        row.get("Candidate Entry Price"),
+        row.get("Candidate Stop Price"),
+        row.get("Option Mid Price") or row.get("Option Ask"),
+        row.get("Option Delta"),
+        row.get("Option Spread %"),
+    )
+
+    enforcing = enforce_stop_viability()
+
+    row["STOP_VIABILITY"] = viability.get("reason")
+    row["STOP_SPREAD_MULTIPLE"] = viability.get("spread_multiple")
+    row["STOP_MOVE_PCT_OF_PREMIUM"] = viability.get("move_pct_of_premium")
+    row["STOP_ROUND_TRIP_SPREAD_PCT"] = viability.get("round_trip_spread_pct")
+    row["STOP_REQUIRED_SPREAD_MULTIPLE"] = viability.get("required_multiple")
+    row["STOP_VIABILITY_ENFORCED"] = enforcing
+
+    # None means "not enough information", which must not block a trade: an
+    # unpriced contract is a data gap, not evidence of a bad stop.
+    if viability.get("viable") is not False:
+        return row
+
+    if str(row.get("Action Status") or "").upper() not in _ENTRY_ACTION_STATUSES:
+        return row
+
+    # Observe-only: the verdict is recorded above and reaches the decision ledger,
+    # so a day of data can be gathered before this starts costing trades.
+    if not enforcing:
+        row["STOP_VIABILITY_WOULD_BLOCK"] = True
+        return row
+
+    row["Action Status"] = "AVOID"
+    row["Blocked By"] = "STOP_INSIDE_OPTION_SPREAD"
+    row["Action Reason"] = (
+        f"Stop is {viability.get('move_pct_of_premium')}% of premium against a "
+        f"{viability.get('round_trip_spread_pct')}% round-trip spread "
+        f"({viability.get('spread_multiple')}x, need "
+        f"{viability.get('required_multiple')}x)"
+    )
+    row["Rejected Trade Reason"] = row["Action Reason"]
+
+    return row
+
+
+def _add_iv_richness(row):
+    """Record how implied volatility compares to what the underlying actually does.
+
+    Ships observing rather than blocking: the realised-vol conversion is an
+    approximation, and no archived day exists yet against which to calibrate the
+    threshold. IV_RICHNESS_ENFORCE turns it into a gate once one does.
+    """
+
+    row = dict(row)
+
+    richness = evaluate_iv_richness(
+        row.get("Option IV"),
+        row.get("ATR %"),
+    )
+
+    row["IV_RV_RATIO"] = richness.get("iv_rv_ratio")
+    row["IV_REALISED_VOL"] = richness.get("realised_vol")
+    row["IV_RICHNESS"] = richness.get("reason")
+    row["IV_RICHNESS_ENFORCED"] = enforce_iv_richness()
+
+    if richness.get("rich") is not True:
+        return row
+
+    if str(row.get("Action Status") or "").upper() not in _ENTRY_ACTION_STATUSES:
+        return row
+
+    if not enforce_iv_richness():
+        row["IV_RICHNESS_WOULD_BLOCK"] = True
+        return row
+
+    row["Action Status"] = "AVOID"
+    row["Blocked By"] = "IV_RICH_VS_REALISED"
+    row["Action Reason"] = (
+        f"Implied {richness.get('implied_vol')}% against realised "
+        f"{richness.get('realised_vol')}% "
+        f"({richness.get('iv_rv_ratio')}x, limit {richness.get('max_ratio')}x)"
+    )
+    row["Rejected Trade Reason"] = row["Action Reason"]
+
+    return row
 
 
 def _add_entry_replay_snapshot(row, df_15m, analysis, entry_setup):
@@ -6664,6 +6839,12 @@ def _run_scanner_impl():
 
             }
 
+            result_row = _add_stop_viability(
+                result_row
+            )
+            result_row = _add_iv_richness(
+                result_row
+            )
             result_row = _add_entry_gate_diagnostics(
                 result_row
             )

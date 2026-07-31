@@ -1,3 +1,4 @@
+from app.config.settings import get_float_env
 from app.options.affordability_config import get_affordability_config
 
 
@@ -38,6 +39,42 @@ def _option_mid_price(contract):
     return 0.0
 
 
+def _option_entry_price(contract):
+    """The price a buy order would actually have to pay, not the midpoint.
+
+    Affordability was measured against the mid, but a long option is bought at or
+    near the ask. On a real MRVL $210 call 08/14 quoted 4.60 / 5.15, the mid is
+    4.875 -- a $487.50 contract, inside a $500 limit -- while the order screen shows
+    an estimated cost of $515.04. The gate approved a contract that cannot be
+    bought within the limit, and nothing downstream re-checked it.
+
+    That error scales with the spread, so it is largest exactly where it is most
+    dangerous: this contract's round trip is 10.7% of the ask.
+
+    AFFORDABILITY_FILL_FRACTION is where in the spread the fill is assumed. 1.0 is
+    the ask and guarantees the contract is buyable inside the limit; 0.5 restores
+    the previous mid-based behaviour. The default is deliberately the conservative
+    end -- approving an unbuyable contract wastes a signal and an alert, while
+    rejecting a marginal one costs a candidate that was at the edge of budget
+    anyway.
+    """
+
+    mid = _option_mid_price(contract)
+    ask = _float_value(contract.get("ask"))
+    bid = _float_value(contract.get("bid"))
+
+    if ask <= 0:
+        return mid
+
+    if bid <= 0 or ask < bid:
+        return ask
+
+    fraction = get_float_env("AFFORDABILITY_FILL_FRACTION", 1.0)
+    fraction = min(max(fraction, 0.0), 1.0)
+
+    return bid + (ask - bid) * fraction
+
+
 def add_affordability_metrics(contract, current_capital=None, config=None):
 
     if not contract:
@@ -53,7 +90,9 @@ def add_affordability_metrics(contract, current_capital=None, config=None):
     )
 
     mid = _option_mid_price(contract)
-    contract_cost = mid * 100.0
+    # Cost is what the order pays, which is the ask end of the spread, not the mid.
+    entry_price = _option_entry_price(contract)
+    contract_cost = entry_price * 100.0
 
     stop_loss_pct = _float_value(
         config.get("option_stop_loss_pct"),
@@ -101,6 +140,11 @@ def add_affordability_metrics(contract, current_capital=None, config=None):
     cost_ok = min_cost <= contract_cost <= max_allowed_cost and risk_ok
 
     contract["contract_cost"] = round(contract_cost, 2)
+    # Both are recorded so a rejection near the limit can be read directly: the
+    # gap between them is the spread, and it is what decides borderline contracts.
+    contract["contract_entry_price"] = round(entry_price, 4)
+    contract["contract_mid_price"] = round(mid, 4)
+    contract["contract_cost_at_mid"] = round(mid * 100.0, 2)
     contract["risk_at_stop"] = round(risk_at_stop, 2)
     contract["max_allowed_risk"] = round(max_allowed_risk, 2)
     contract["current_capital"] = round(current_capital, 2)

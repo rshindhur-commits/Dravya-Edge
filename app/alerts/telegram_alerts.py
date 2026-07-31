@@ -168,75 +168,53 @@ def _float_value(value, default=0.0):
 
 
 def _entry_alert_policy():
+    """Quality bars an opened trade must clear before subscribers are told about it.
+
+    This used to carry eleven further keys -- a daily cap, a concurrent cap, entry
+    and symbol cooldowns, a top-candidate limit, three score thresholds and three
+    per-session caps. None of them were read. The helpers that would have applied
+    them (_entry_alerts_today, _active_entry_alerts, _entry_alerts_in_bucket,
+    _recent_matching_entry_alert, _recent_closed_symbol_alert, _top_candidate_allowed)
+    were defined and never called from anywhere in the repository, so every one of
+    those settings was inert while appearing configurable.
+
+    They are removed rather than wired up. Entry alerts are one-to-one with opened
+    positions, and the entry path already limits those -- MAX_DAILY_ENTRIES,
+    MAX_ACTIVE_PAPER_TRADES, MAX_ACTIVE_PER_DIRECTION, the symbol cooldown and
+    MAX_TRADES_PER_SYMBOL_PER_DAY. Reinstating a second set of counters here would
+    put the same limit in two places that can disagree, which is the failure this
+    codebase has already produced repeatedly: the position caps hardcoded in two
+    entry paths, "LONGER_DTE", ENTRY_DIAGNOSTICS_JSON, row["RR"].
+
+    What remains is what is actually enforced, and each bar is matched to the
+    corresponding entry gate so an opened position is never silently unalertable.
+    The setup floor is read separately at the call site from
+    TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE.
+    """
 
     return {
-        "max_daily_entries": _int_setting(
-            "TELEGRAM_MAX_ENTRY_ALERTS_PER_DAY",
-            3
-        ),
-        "max_active_alerted_trades": _int_setting(
-            "TELEGRAM_MAX_ACTIVE_ALERTED_TRADES",
-            2
-        ),
-        "cooldown_minutes": _int_setting(
-            "TELEGRAM_ENTRY_COOLDOWN_MINUTES",
-            60
-        ),
-        "symbol_cooldown_minutes": _int_setting(
-            "TELEGRAM_SYMBOL_COOLDOWN_MINUTES",
-            60
-        ),
-        "top_candidate_limit": _int_setting(
-            "TELEGRAM_TOP_CANDIDATE_LIMIT",
-            3
-        ),
-        "min_alert_score": _float_setting(
-            "TELEGRAM_MIN_ENTRY_ALERT_SCORE",
-            85.0
-        ),
-        "instant_alert_score": _float_setting(
-            "TELEGRAM_INSTANT_ENTRY_ALERT_SCORE",
-            88.0
-        ),
-        "afternoon_min_alert_score": _float_setting(
-            "TELEGRAM_AFTERNOON_MIN_ENTRY_ALERT_SCORE",
-            90.0
-        ),
         "min_option_quality": _float_setting(
             "TELEGRAM_MIN_OPTION_QUALITY_SCORE",
             65.0
         ),
+        # Matched to DEFAULT_AUTO_PAPER_MIN_RR. At 2.0 this was the one alert bar
+        # genuinely stricter than the gate that opens the position, so a setup
+        # entering at 1.8-1.99 opened a trade and told nobody: the system carried a
+        # position its subscribers never heard about, and the daily report counted
+        # it while no client could have taken it.
         "min_rr": _float_setting(
             "TELEGRAM_MIN_RR",
-            2.0
+            1.8
         ),
+        # Aligned with OPTION_MAX_SPREAD_PCT. At 8 this was looser than the scanner
+        # gate that produced the candidate, so it could never bind -- and if the
+        # scanner ceiling were ever raised, clients would receive alerts on contracts
+        # the system itself considers too wide to trade.
         "max_spread_pct": _float_setting(
             "TELEGRAM_MAX_SPREAD_PCT",
-            8.0
+            6.0
         ),
-        "max_morning_entries": _int_setting(
-            "TELEGRAM_MAX_MORNING_ENTRY_ALERTS",
-            2
-        ),
-        "max_midday_entries": _int_setting(
-            "TELEGRAM_MAX_MIDDAY_ENTRY_ALERTS",
-            1
-        ),
-        "max_afternoon_entries": _int_setting(
-            "TELEGRAM_MAX_AFTERNOON_ENTRY_ALERTS",
-            1
-        )
     }
-
-
-def _entry_alert_policy_mode():
-
-    return str(
-        os.getenv(
-            "TELEGRAM_ALERT_POLICY",
-            _streamlit_secret(["TELEGRAM_ALERT_POLICY"], "PAPER")
-        )
-    ).strip().upper()
 
 
 def _streamlit_secret(path, default=None):
@@ -869,178 +847,11 @@ def _sent_at_trading_date(metadata):
         return sent_at.date()
 
 
-def _entry_alerts_today(state):
-
-    today = _today_key()
-    count = 0
-
-    for metadata in state.get("sent", {}).values():
-
-        if metadata.get("event_type") != ENTRY_EVENT_TYPE:
-
-            continue
-
-        sent_date = _sent_at_trading_date(metadata)
-
-        if sent_date == today:
-
-            count += 1
-
-    return count
-
-
-def _entry_alerts_in_bucket(state, bucket):
-
-    today = _today_key()
-    count = 0
-
-    for metadata in state.get("sent", {}).values():
-
-        if metadata.get("event_type") != ENTRY_EVENT_TYPE:
-
-            continue
-
-        if metadata.get("time_bucket") != bucket:
-
-            continue
-
-        sent_date = _sent_at_trading_date(metadata)
-
-        if sent_date == today:
-
-            count += 1
-
-    return count
-
-
-def _active_entry_alerts(state):
-
-    return [
-        metadata for metadata in state.get("sent", {}).values()
-        if metadata.get("event_type") == ENTRY_EVENT_TYPE
-        and not metadata.get("closed")
-    ]
-
-
-def _recent_matching_entry_alert(state, symbol, setup_key, cooldown_minutes):
-
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        minutes=cooldown_minutes
-    )
-
-    for metadata in state.get("sent", {}).values():
-
-        if metadata.get("event_type") != ENTRY_EVENT_TYPE:
-
-            continue
-
-        if metadata.get("symbol") != symbol:
-
-            continue
-
-        if metadata.get("setup_key") != setup_key:
-
-            continue
-
-        sent_at = _sent_at_datetime(metadata)
-
-        if sent_at and sent_at >= cutoff:
-
-            return True
-
-    return False
-
-
-def _recent_closed_symbol_alert(state, symbol, cooldown_minutes):
-
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        minutes=cooldown_minutes
-    )
-
-    for metadata in state.get("sent", {}).values():
-
-        if metadata.get("event_type") != ENTRY_EVENT_TYPE:
-
-            continue
-
-        if metadata.get("symbol") != symbol:
-
-            continue
-
-        if not metadata.get("closed"):
-
-            continue
-
-        closed_at = None
-
-        try:
-
-            closed_at = datetime.fromisoformat(
-                metadata.get("closed_at")
-            )
-
-        except Exception:
-
-            closed_at = None
-
-        if closed_at and closed_at >= cutoff:
-
-            return True
-
-    return False
-
-
-def _top_candidate_allowed(top_candidate, limit):
-
-    top_candidate = str(top_candidate or "").upper()
-
-    if not top_candidate:
-
-        return False
-
-    for direction in [
-        "BULLISH",
-        "BEARISH"
-    ]:
-
-        for rank in range(1, limit + 1):
-
-            if top_candidate == f"{direction}_TOP_{rank}":
-
-                return True
-
-    return False
-
-
 def _current_et():
 
     return datetime.now(
         ZoneInfo("America/New_York")
     )
-
-
-def _entry_alert_time_bucket(current_et=None):
-
-    current_et = current_et or _current_et()
-    minutes = current_et.hour * 60 + current_et.minute
-
-    if minutes < 9 * 60 + 45:
-
-        return "TOO_EARLY"
-
-    if minutes < 10 * 60 + 30:
-
-        return "MORNING"
-
-    if minutes < 13 * 60 + 30:
-
-        return "MIDDAY"
-
-    if minutes < 14 * 60 + 45:
-
-        return "AFTERNOON"
-
-    return "TOO_LATE"
 
 
 def calculate_entry_alert_score(

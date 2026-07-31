@@ -228,9 +228,18 @@ def get_settings():
             "OPTION_MIN_OPEN_INTEREST",
             500
         ),
+        # A 10% round trip starts the position 10% down before the thesis has a
+        # chance, and it is not recoverable by being right about direction. It also
+        # left two gates disagreeing: at the 0.50% stop floor the stop-viability
+        # check only clears spreads to about 4.3%, so contracts between there and
+        # 10% were admitted here and rejected downstream.
+        #
+        # Lowering this reduces the number of tradable candidates. That is the
+        # intended direction: a contract quoted 6% wide is a worse instrument for
+        # the same setup, and taking it is how a good signal becomes a losing trade.
         option_max_spread_pct=get_float_env(
             "OPTION_MAX_SPREAD_PCT",
-            10
+            6
         ),
         option_min_quality_score=get_int_env(
             "OPTION_MIN_QUALITY_SCORE",
