@@ -238,6 +238,17 @@ def upsert_paper_trade(trade):
             session_id_open = EXCLUDED.session_id_open,
             session_id_close = EXCLUDED.session_id_close,
             updated_at = now()
+        -- A close is terminal. Upserts are queued jobs carrying a snapshot of
+        -- the trade taken when they were queued, and nothing orders them, so an
+        -- OPEN snapshot queued by an earlier scan can run after the close and
+        -- revert the row. On 2026-07-31 CRWD sat OPEN for 39 minutes after
+        -- exiting and NVDA was still OPEN 71 minutes after its exit alert, with
+        -- the realised R existing only inside an alert payload.
+        --
+        -- A CLOSED write always applies, so genuine corrections to a closed
+        -- trade still land; only the regression to OPEN is refused.
+        WHERE paper_trades.status IS DISTINCT FROM 'CLOSED'
+           OR EXCLUDED.status = 'CLOSED'
     """))
     params = {
         "trade_key": trade.get("trade_key"),

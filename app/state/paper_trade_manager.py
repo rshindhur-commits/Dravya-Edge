@@ -305,9 +305,24 @@ def update_paper_trade(
         trade["option_pl_pct"] = option_pl.get("option_pl_pct")
         trade["option_pl_dollars"] = option_pl.get("option_pl_dollars")
     if execution_metrics:
-        for field in ("mfe_r", "mae_r", "trend_health_score"):
-            if execution_metrics.get(field) is not None:
-                trade[field] = execution_metrics.get(field)
+        # Excursions are the extreme over the life of the trade, not the latest
+        # scan's reading. This overwrote, so a trade that ran to +1.66R and
+        # retraced recorded mfe_r 0.0 -- which is exactly what NVDA did on
+        # 2026-07-31 while three "Partial profit threshold reached" signals
+        # fired and it closed at +0.60R.
+        #
+        # That is not only a reporting loss. MFE gates grace-zone eligibility
+        # ("in profit or MFE >= 1R") and profit protection, so both were
+        # reasoning about a number that reset every scan and could never see
+        # the peak they exist to defend. `state_trade_manager` already does
+        # this correctly; the two are now consistent.
+        for field in ("mfe_r", "mae_r"):
+            value = _safe_float(execution_metrics.get(field))
+            if value is not None:
+                trade[field] = max(_safe_float(trade.get(field)) or 0.0, value)
+
+        if execution_metrics.get("trend_health_score") is not None:
+            trade["trend_health_score"] = execution_metrics.get("trend_health_score")
         if execution_metrics.get("trend_health_status") is not None:
             trade["last_trend_health_status"] = execution_metrics.get("trend_health_status")
         if execution_metrics.get("exit_confidence_score") is not None:
@@ -605,7 +620,11 @@ def _option_trade_result(trade):
     """
 
     entry_mid = _safe_float(trade.get("option_mid"))
-    entry_ask = _safe_float(trade.get("option_ask")) or entry_mid
+    # `option_entry_ask` is frozen at open; `option_ask` is the live quote and
+    # holds the exit price by the time this runs. Trades opened before that
+    # field existed fall back to the entry mid, which understates the spread
+    # rather than cancelling it out entirely.
+    entry_ask = _safe_float(trade.get("option_entry_ask")) or entry_mid
     close_bid = _safe_float(trade.get("option_bid"))
     close_ask = _safe_float(trade.get("option_ask"))
     close_mid = _safe_float(trade.get("option_current_mid"))
@@ -1001,6 +1020,15 @@ def open_paper_trade(
         "option_bid": option_bid,
         "option_ask": option_ask,
         "option_mid": option_mid,
+        # Frozen at entry, like `initial_stop_loss` and for the same reason.
+        # `option_bid`/`option_ask` are refreshed on every scan, so by close
+        # they hold the exit quote. `_option_trade_result` read the entry ask
+        # from `option_ask` and so compared the close bid against the close
+        # ask, making `option_pnl_pct_net` come out as minus the current spread
+        # on every trade regardless of outcome -- NVDA recorded -2.2% on a 2.2%
+        # spread, CRWD -9.21% on a 9.21% spread.
+        "option_entry_bid": option_bid,
+        "option_entry_ask": option_ask,
         "option_contracts": option_contracts,
         "scanner_context": scanner_context or {},
         "planned_rr": (
