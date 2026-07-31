@@ -105,3 +105,27 @@ def test_engine_is_restarted_even_when_the_cadence_is_unchanged():
     source = inspect.getsource(dashboard._render_scan_engine_status)
 
     assert 'not engine.get("thread_alive")' in source
+
+
+def test_daily_cap_default_defers_to_max_daily_entries():
+    """The sidebar default must not defeat the backend's own fallback.
+
+    A bare 3 here was not merely a different default. On a fresh container the
+    settings file does not exist, so this value became the widget value, and the
+    widget value is written straight back to auto_paper_settings.json. The
+    backend then found the key present and never reached its own
+    `or env_int("MAX_DAILY_ENTRIES", 3)`, so MAX_DAILY_ENTRIES=5 was enforced
+    as 3. On 2026-07-31 that bound the instant the third trade opened and
+    blocked AMZN five times at RR 2.88.
+    """
+
+    import inspect
+
+    from app import dashboard
+
+    source = inspect.getsource(dashboard._auto_refresh_defaults)
+
+    assert 'env_int("MAX_DAILY_ENTRIES", 3)' in source, (
+        "the sidebar default must defer to MAX_DAILY_ENTRIES, as "
+        "load_auto_paper_controls does"
+    )

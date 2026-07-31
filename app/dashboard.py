@@ -3635,10 +3635,21 @@ def _auto_refresh_defaults():
 
     if "auto_paper_max_daily" not in st.session_state:
 
+        # Falls back to MAX_DAILY_ENTRIES, matching load_auto_paper_controls.
+        # A bare 3 here defeated that fallback rather than merely differing from
+        # it: on a fresh container the settings file does not exist, this default
+        # became the widget value, and the widget value is written straight back
+        # to auto_paper_settings.json. The backend then found the key present and
+        # never reached its own `or env_int("MAX_DAILY_ENTRIES", 3)`.
+        #
+        # So MAX_DAILY_ENTRIES=5 in Secrets was silently enforced as 3. On
+        # 2026-07-31 the cap bound the instant the third trade opened at
+        # 12:57:59 and blocked AMZN five times after that, at RR 2.88 -- a better
+        # ratio than any of the three trades actually taken.
         st.session_state["auto_paper_max_daily"] = int(
             saved_auto_settings.get(
                 "auto_paper_max_daily",
-                3
+                env_int("MAX_DAILY_ENTRIES", 3),
             )
         )
 
