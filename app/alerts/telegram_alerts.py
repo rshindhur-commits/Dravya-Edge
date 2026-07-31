@@ -170,13 +170,19 @@ def _float_value(value, default=0.0):
 def _entry_alert_policy():
 
     return {
+        # Subscribers act only on these alerts, so this -- not MAX_DAILY_ENTRIES --
+        # is what decides how many trades a client actually sees. It sat at 3 while
+        # the entry path allowed 5, making two of those trades invisible.
         "max_daily_entries": _int_setting(
             "TELEGRAM_MAX_ENTRY_ALERTS_PER_DAY",
-            3
+            4
         ),
+        # Matches MAX_ACTIVE_PAPER_TRADES. At 2 the third and fourth alerts of a day
+        # could not fire until an earlier position closed, which under a MULTIDAY
+        # profile could mean not that day at all.
         "max_active_alerted_trades": _int_setting(
             "TELEGRAM_MAX_ACTIVE_ALERTED_TRADES",
-            2
+            4
         ),
         "cooldown_minutes": _int_setting(
             "TELEGRAM_ENTRY_COOLDOWN_MINUTES",
@@ -210,21 +216,33 @@ def _entry_alert_policy():
             "TELEGRAM_MIN_RR",
             2.0
         ),
+        # Aligned with OPTION_MAX_SPREAD_PCT. At 8 this was looser than the scanner
+        # gate that produced the candidate, so it could never bind -- and if the
+        # scanner ceiling were ever raised, clients would receive alerts on contracts
+        # the system itself considers too wide to trade.
         "max_spread_pct": _float_setting(
             "TELEGRAM_MAX_SPREAD_PCT",
-            8.0
+            6.0
         ),
+        # These summed to exactly 2 + 1 + 1 = 4, so four alerts a day were reachable
+        # only on a day that offered opportunities in that exact shape. On a trending
+        # day where the move is in the morning, the morning cap of 2 bound first and
+        # the day ended with two alerts and unused headroom.
+        #
+        # Widened so the daily cap above is what actually limits the day, while these
+        # still stop a single session consuming everything. They are a shape
+        # constraint, not the budget.
         "max_morning_entries": _int_setting(
             "TELEGRAM_MAX_MORNING_ENTRY_ALERTS",
-            2
+            3
         ),
         "max_midday_entries": _int_setting(
             "TELEGRAM_MAX_MIDDAY_ENTRY_ALERTS",
-            1
+            2
         ),
         "max_afternoon_entries": _int_setting(
             "TELEGRAM_MAX_AFTERNOON_ENTRY_ALERTS",
-            1
+            2
         )
     }
 
