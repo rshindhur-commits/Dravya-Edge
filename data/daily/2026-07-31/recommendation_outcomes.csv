@@ -1,0 +1,1 @@
+recommendation_id,horizon_sessions,evaluation_trading_day,evaluated_at,symbol,direction,entry_price,evaluation_price,underlying_return_pct,directional_return_pct,option_return_pct,option_outcome_status

@@ -1,0 +1,116 @@
+{
+  "trading_day": "2026-07-31",
+  "v2_shadow_trades": 0,
+  "trades_compared": 0,
+  "avg_entry_efficiency": null,
+  "avg_trend_capture": null,
+  "avg_exit_confidence": 85.0,
+  "avg_v1_r": null,
+  "avg_v2_r": null,
+  "avg_r_delta": null,
+  "premature_exits": 0,
+  "wait_one_bar_improved": 0,
+  "wait_two_bars_improved": 0,
+  "avg_wait_one_bar_move": null,
+  "avg_wait_two_bars_move": null,
+  "blocking_stages": {},
+  "market_distribution": {},
+  "lifecycle_distribution": {},
+  "feedback_loop": {
+    "refresh_success_rate_last_50": 100.0,
+    "tqs_calibration": [
+      {
+        "bucket": "<70",
+        "candidates": 57,
+        "winner_rate": 0.0
+      }
+    ],
+    "rule_roi": [
+      {
+        "rule": "LOW_RR",
+        "losses_prevented": 18,
+        "winners_blocked": 0,
+        "roi": 18
+      },
+      {
+        "rule": "NO_ENTRY_TRIGGER",
+        "losses_prevented": 16,
+        "winners_blocked": 0,
+        "roi": 16
+      },
+      {
+        "rule": "RISK_REJECTED",
+        "losses_prevented": 16,
+        "winners_blocked": 0,
+        "roi": 16
+      },
+      {
+        "rule": "NO_DIRECTIONAL_EDGE",
+        "losses_prevented": 6,
+        "winners_blocked": 0,
+        "roi": 6
+      },
+      {
+        "rule": "DELAYED_DATA_CONFIRM_LIVE_CHART",
+        "losses_prevented": 1,
+        "winners_blocked": 0,
+        "roi": 1
+      }
+    ],
+    "feature_promotion": [
+      {
+        "feature_name": "Entry Timing",
+        "shadow_days": 0,
+        "completed_trades": 0,
+        "improvement_pct": null,
+        "confidence": 15.0,
+        "status": "SHADOW",
+        "recommended_action": "INSUFFICIENT_SAMPLE"
+      },
+      {
+        "feature_name": "Trade Ranking",
+        "shadow_days": 0,
+        "completed_trades": 0,
+        "improvement_pct": null,
+        "confidence": 15.0,
+        "status": "SHADOW",
+        "recommended_action": "INSUFFICIENT_SAMPLE"
+      },
+      {
+        "feature_name": "Exit Confidence",
+        "shadow_days": 0,
+        "completed_trades": 0,
+        "improvement_pct": null,
+        "confidence": 15.0,
+        "status": "SHADOW",
+        "recommended_action": "INSUFFICIENT_SAMPLE"
+      },
+      {
+        "feature_name": "Grace Zone",
+        "shadow_days": 0,
+        "completed_trades": 0,
+        "improvement_pct": null,
+        "confidence": 15.0,
+        "status": "SHADOW",
+        "recommended_action": "INSUFFICIENT_SAMPLE"
+      }
+    ]
+  },
+  "aggregate_statistics": [],
+  "performance": {
+    "completed_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": null,
+    "average_r": null,
+    "total_r": 0,
+    "profit_factor": null,
+    "max_drawdown_r": null,
+    "priced_trades": 0,
+    "net_win_rate": null,
+    "total_option_pnl_pct": null,
+    "average_option_pnl_pct": null,
+    "average_spread_cost_pct": null
+  },
+  "db_persisted": false
+}

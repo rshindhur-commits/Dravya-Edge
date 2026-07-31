@@ -1,0 +1,12 @@
+{
+  "trading_day": "2026-07-31",
+  "source_rows": 130,
+  "evidence_rows": 57,
+  "rows_expected": 130,
+  "rows_written": 57,
+  "duplicates_removed": 73,
+  "local_path": "D:\\Dravya_Trade_Works\\data\\daily\\2026-07-31\\candidate_evidence.parquet",
+  "database_rows": 57,
+  "db_rows_persisted": 57,
+  "database_status": "PERSISTED"
+}
