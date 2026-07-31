@@ -128,7 +128,23 @@ and only the composition should shift.
 **Trigger.** Volume moving more than ~30% either way means the archive was not
 representative of live flow.
 
-### 2.5 Earnings blackout
+### 2.5 Premium-terms P&L has almost no history
+
+`option_pnl_pct_net` and `option_spread_cost_pct` are written by
+`_option_trade_result`, which landed 2026-07-30 21:14 UTC. Every trade closed
+before that — five of the six on 07-30 — has them as NULL. So `net_win_rate` in
+`build_performance_statistics` currently rests on **one trade**.
+
+Not a bug, but it means any premium-based conclusion drawn today is effectively
+unsampled. It also means the specific figures quoted in that function's own
+docstring ("all five lost … at −7.69% and −4.95%") were computed live in a prior
+session from data that was never persisted, and cannot be reproduced now.
+
+**Watch.** Count of closed trades with a non-null `option_pnl_pct_net`. Once it
+reaches ~10, compare `net_win_rate` against the R-based win rate — the gap is the
+spread tax, and it is the number that decides whether any setup is tradeable.
+
+### 2.6 Earnings blackout
 
 Migration 023 applied, 4,777 dates cached, verified firing on the right days.
 
