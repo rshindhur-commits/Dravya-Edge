@@ -129,3 +129,17 @@ def test_daily_cap_default_defers_to_max_daily_entries():
         "the sidebar default must defer to MAX_DAILY_ENTRIES, as "
         "load_auto_paper_controls does"
     )
+
+
+def test_candidate_rank_limit_matches_the_daily_entry_cap():
+    """Rank must not be the binding constraint.
+
+    At 3 it was the largest single blocker of the first live session -- 79
+    events across 11 symbols, ahead of RR -- rejecting AMZN at RR 2.88 and PLTR
+    at setup 81 while the three trades taken ran at RR 2.4, 2.75 and 2.26 for
+    -0.47R. Throttling belongs to the limits that exist to manage risk.
+    """
+
+    from app.runtime.paper_automation_support import AUTO_PAPER_MAX_CANDIDATE_RANK
+
+    assert AUTO_PAPER_MAX_CANDIDATE_RANK == 5
