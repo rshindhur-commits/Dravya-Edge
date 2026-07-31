@@ -2328,10 +2328,17 @@ def maybe_send_scanner_entry_alert(
 
         return {"sent": False, "reason": "ENTRY_AWAITING_TRADE_OPEN"}
 
-    if action_status == "REVIEW_TV_CHART":
-
-        return {"sent": False, "reason": "REVIEW_ALERT_SUPPRESSED"}
-
+    # REVIEW_TV_CHART alerts again. A short-circuit added 2026-07-24 returned
+    # REVIEW_ALERT_SUPPRESSED here and made everything below it unreachable --
+    # the review path, its message builder and its dedup were dead code for a
+    # week. The scanner had already judged these candidates strong enough to be
+    # worth acting on, and `ALLOW_REVIEW_TV_CHART_AUTO_PAPER` lets them open a
+    # position, so suppressing the alert produced the one combination nobody
+    # wants: trades taken that subscribers were never told about.
+    #
+    # Volume is bounded by `_review_alert_key`, which keys on symbol, setup and
+    # date, so a candidate alerts once a day however many scans it appears in.
+    # On 2026-07-31 that is 11 alerts against 65 raw review events.
     if action_status != "REVIEW_TV_CHART":
 
         return {

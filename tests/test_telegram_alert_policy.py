@@ -83,7 +83,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             "relative_volume": 2,
         }
 
-    def test_scanner_review_alert_is_suppressed_by_lifecycle_contract(self):
+    def test_scanner_review_alert_is_sent(self):
 
         with patch.dict(
             "os.environ",
@@ -106,11 +106,11 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 **self._scanner_alert_kwargs()
             )
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
-        send_alert.assert_not_called()
+        self.assertTrue(result["sent"])
+        self.assertEqual(result["reason"], "SENT")
+        send_alert.assert_called_once()
 
-    def test_scanner_review_alert_remains_suppressed_despite_score_setting(self):
+    def test_scanner_review_alert_ignores_the_paper_entry_setup_floor(self):
 
         with patch.dict(
             "os.environ",
@@ -126,11 +126,12 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 **self._scanner_alert_kwargs()
             )
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
-        send_alert.assert_not_called()
+        # TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE is the floor for a position that
+        # opened, not for a chart-review nudge, so 100 must not gag this.
+        self.assertTrue(result["sent"])
+        send_alert.assert_called_once()
 
-    def test_scanner_review_alert_is_suppressed_under_real_review_policy(self):
+    def test_scanner_review_alert_is_sent_under_real_review_policy(self):
 
         with patch.dict(
             "os.environ",
@@ -146,9 +147,8 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 **self._scanner_alert_kwargs()
             )
 
-        self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
-        send_alert.assert_not_called()
+        self.assertTrue(result["sent"])
+        send_alert.assert_called_once()
 
     def test_scanner_entry_waits_for_confirmed_trade_open(self):
 
@@ -293,7 +293,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
         self.assertEqual(unchanged["reason"], "NO_MATERIAL_TRADE_CHANGE")
         self.assertEqual(send_alert.call_count, 1)
 
-    def test_scanner_review_alert_does_not_queue_or_mark_sent(self):
+    def test_scanner_review_alert_queues_through_the_dispatcher(self):
 
         with patch.dict(
             "os.environ",
@@ -318,10 +318,39 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 **self._scanner_alert_kwargs()
             )
 
+        # Queued dispatch reports "not yet sent" because the CRITICAL job has
+        # not run, not because the alert was refused.
+        self.assertEqual(result["reason"], "QUEUED")
+        self.assertTrue(result["queued"])
+        scheduler_factory.assert_called_once()
+
+    def test_scanner_review_alert_fires_once_per_symbol_and_setup_per_day(self):
+        """Dedup, not the removed suppression, is what bounds review volume.
+
+        `_review_alert_key` keys on symbol, setup and date, so a candidate that
+        appears in thirty scans alerts once. On 2026-07-31 that was 11 alerts
+        against 65 raw review events.
+        """
+
+        with patch.dict(
+            "os.environ",
+            {
+                "TELEGRAM_ALERTS_ENABLED": "1",
+                "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+            },
+            clear=False,
+        ), patch(
+            "app.alerts.telegram_alerts.alert_was_sent",
+            return_value=True
+        ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
+
+            result = maybe_send_scanner_entry_alert(
+                **self._scanner_alert_kwargs()
+            )
+
         self.assertFalse(result["sent"])
-        self.assertEqual(result["reason"], "REVIEW_ALERT_SUPPRESSED")
-        scheduler_factory.assert_not_called()
-        mark_sent.assert_not_called()
+        self.assertEqual(result["reason"], "DUPLICATE_ALERT")
+        send_alert.assert_not_called()
 
     def test_telegram_gate_accepts_enter_paper_candidate(self):
 
