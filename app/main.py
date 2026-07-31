@@ -3843,6 +3843,15 @@ def _persist_scan_outputs(
             f"{profile_result['path']}"
         )
 
+    # Not cancelable. Both of these are the scan's only record of itself, and
+    # `cancel_old_jobs` kills any QUEUED cancelable job belonging to an earlier
+    # scan the moment the next one starts. On 2026-07-31 that raced: the opening
+    # range runs a 120s cadence against a ~150s scan, so the next scan began
+    # ~5s after these were submitted and cancelled them before the worker could
+    # drain. 13 of 50 runs that day archived nothing and 9 stayed at STARTED,
+    # because `record_scanner_run_finish` lives inside persist_scan_artifacts.
+    # Shedding a scan's own audit trail under load is never the right trade --
+    # the work is bounded by one scan and drains during the next one.
     get_runtime_scheduler().submit_normal(
         RuntimeJob(
             name="persist_scan_artifacts_db",
@@ -3856,7 +3865,7 @@ def _persist_scan_outputs(
                 output_file,
                 observed_at.isoformat(),
             ),
-            cancelable=True,
+            cancelable=False,
             scan_id=scan_id,
         )
     )
@@ -3875,7 +3884,7 @@ def _persist_scan_outputs(
                     observed_at.isoformat(),
                     regression_market_snapshots,
                 ),
-                cancelable=True,
+                cancelable=False,
                 scan_id=scan_id,
             )
         )

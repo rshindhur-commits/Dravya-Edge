@@ -111,6 +111,36 @@ def _traded_candidates(evidence):
     return evidence.iloc[0:0]
 
 
+def _blocking_rule_counts(waterfalls):
+    """rule_name -> how many candidates that rule stopped.
+
+    Only rows flagged `blocking` count. A rule can fail on a row without being
+    the reason the candidate died -- once a candidate is stopped at Momentum no
+    option is ever priced, so Option Quality records 0.0 and "fails" on every
+    such row. Counting failures rather than blocks reads those cascade
+    artifacts as rejections and buries the rules that are actually deciding.
+    """
+
+    if waterfalls is None or waterfalls.empty:
+        return {}
+
+    if "blocking" not in waterfalls.columns or "rule_name" not in waterfalls.columns:
+        return {}
+
+    blocking = waterfalls[
+        waterfalls["blocking"].map(
+            lambda value: str(value).strip().lower() in {"true", "1", "t", "yes"}
+        )
+    ]
+
+    if blocking.empty:
+        return {}
+
+    counts = blocking["rule_name"].astype(str).value_counts()
+
+    return {str(rule): int(count) for rule, count in counts.items()}
+
+
 def build_daily_learning_summary(trading_day, v2_learning, comparisons, exits, waterfalls):
     v2_learning = v2_learning if v2_learning is not None else pd.DataFrame()
     if (
@@ -149,9 +179,52 @@ def build_daily_learning_summary(trading_day, v2_learning, comparisons, exits, w
         "avg_wait_one_bar_move": round(float(profit_1.mean()), 4) if profit_1.notna().any() else None,
         "avg_wait_two_bars_move": round(float(profit_2.mean()), 4) if profit_2.notna().any() else None,
         "blocking_stages": {str(stage): int(count) for stage, count in stages.items()},
+        # The rule that actually stopped each candidate, which is what
+        # `rule_performance(rule_name, blocked_count)` is named for.
+        # `blocking_stages` above counts every evaluated row by stage, so it
+        # cannot answer "which rule is doing the rejecting" -- a candidate that
+        # sails through Entry still contributes an Entry row to it.
+        "blocking_rules": _blocking_rule_counts(waterfalls),
         "market_distribution": {str(key): int(value) for key, value in regimes.items()},
         "lifecycle_distribution": {str(key): int(value) for key, value in lifecycles.items()},
     }
+
+
+def _waterfalls_for(trading_day, fallback=None):
+    """The day's decision waterfall, preferring the durable source.
+
+    There is no per-scan `decision_waterfall.csv` under data/daily -- only the
+    on-demand daily review export writes one -- so Postgres is the reliable
+    source here rather than merely the more durable one. `decision_waterfall`
+    carries a row per candidate per rule with the `blocking` flag set on the one
+    rule that actually stopped it, which is the signal `rule_performance` exists
+    to record.
+
+    Returns an empty frame rather than raising: a missing waterfall must not
+    take the rest of the daily summary down with it.
+    """
+
+    try:
+        from sqlalchemy import text
+
+        from app.db.connection import get_engine
+
+        with get_engine().connect() as connection:
+            rows = connection.execute(
+                text(
+                    "select symbol, stage, rule_name, passed, blocking "
+                    "from decision_waterfall where scan_id like :prefix"
+                ),
+                {"prefix": f"{trading_day}%"},
+            ).mappings().all()
+
+        if rows:
+            return pd.DataFrame([dict(row) for row in rows])
+
+    except Exception:
+        pass
+
+    return fallback if fallback is not None else pd.DataFrame()
 
 
 def _closed_trades_for(trading_day, paper_events):
@@ -196,7 +269,10 @@ def write_daily_learning_summary(trading_day):
         read("v2_learning_dataset.csv"),
         comparisons,
         read("trend_capture_analysis.csv"),
-        read("entry_exit_v2_shadow.csv"),
+        # Was `entry_exit_v2_shadow.csv`, which has no `stage` column and no
+        # `blocking` flag, so `blocking_stages` was always {} and
+        # `rule_performance` had never received a single row.
+        _waterfalls_for(trading_day, read("decision_waterfall.csv")),
     )
     try:
         evidence = read("candidate_evidence.csv")

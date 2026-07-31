@@ -92,7 +92,7 @@ class LearningEngineRepository(BestEffortRepository):
         results.append(self._batch_execute("""
             INSERT INTO rule_performance (trading_day,rule_name,blocked_count,payload) VALUES (CAST(:day AS DATE),:rule,:count,CAST(:payload AS JSONB))
             ON CONFLICT (trading_day,rule_name) DO UPDATE SET blocked_count=EXCLUDED.blocked_count,payload=EXCLUDED.payload
-        """, [{"day": day, "rule": stage, "count": count, "payload": payload} for stage, count in (summary.get("blocking_stages") or {}).items()]))
+        """, [{"day": day, "rule": rule, "count": count, "payload": payload} for rule, count in (summary.get("blocking_rules") or summary.get("blocking_stages") or {}).items()]))
         results.append(self._execute("""
             INSERT INTO exit_quality_metrics (trading_day,premature_exits,payload) VALUES (CAST(:day AS DATE),:premature,CAST(:payload AS JSONB))
             ON CONFLICT (trading_day) DO UPDATE SET premature_exits=EXCLUDED.premature_exits,payload=EXCLUDED.payload
