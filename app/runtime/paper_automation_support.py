@@ -48,7 +48,19 @@ REVIEW_VALIDATION_ENTRY_TYPES = KNOWN_SETUPS
 AUTO_PAPER_ENTRY_START = time(9, 45)
 AUTO_PAPER_ENTRY_END = time(15, 30)
 AUTO_PAPER_EOD_CLOSE = time(15, 55)
-AUTO_PAPER_MAX_CANDIDATE_RANK = 3
+# Raised 3 -> 5 on 2026-07-31 so it stops being the binding constraint. At 3 it
+# was the single largest blocker of the first live session -- 79 events across 11
+# symbols, ahead of RR -- and it was rejecting candidates that were not obviously
+# worse than the ones taken: AMZN at RR 2.88 and PLTR at setup 81 never got a
+# look, while the three trades that ran went off at RR 2.4, 2.75 and 2.26 for
+# -0.47R.
+#
+# 5 matches MAX_DAILY_ENTRIES, which hands the throttling job to the limits that
+# exist to manage risk -- daily entries, concurrent positions, per-direction
+# exposure, symbol cooldown -- rather than to a ranking cutoff that was never
+# chosen for that purpose. Note a candidate already passes when it is a named
+# TOP_1/2/3 in its direction, so this only admits ranks 4 and 5.
+AUTO_PAPER_MAX_CANDIDATE_RANK = 5
 DEFAULT_AUTO_PAPER_MIN_RR = 1.8
 DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0
 DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT = 6.0

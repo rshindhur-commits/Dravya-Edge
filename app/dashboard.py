@@ -3635,10 +3635,21 @@ def _auto_refresh_defaults():
 
     if "auto_paper_max_daily" not in st.session_state:
 
+        # Falls back to MAX_DAILY_ENTRIES, matching load_auto_paper_controls.
+        # A bare 3 here defeated that fallback rather than merely differing from
+        # it: on a fresh container the settings file does not exist, this default
+        # became the widget value, and the widget value is written straight back
+        # to auto_paper_settings.json. The backend then found the key present and
+        # never reached its own `or env_int("MAX_DAILY_ENTRIES", 3)`.
+        #
+        # So MAX_DAILY_ENTRIES=5 in Secrets was silently enforced as 3. On
+        # 2026-07-31 the cap bound the instant the third trade opened at
+        # 12:57:59 and blocked AMZN five times after that, at RR 2.88 -- a better
+        # ratio than any of the three trades actually taken.
         st.session_state["auto_paper_max_daily"] = int(
             saved_auto_settings.get(
                 "auto_paper_max_daily",
-                3
+                env_int("MAX_DAILY_ENTRIES", 3),
             )
         )
 
@@ -3749,7 +3760,7 @@ def _render_auto_paper_controls():
         "restore_multiday_positions": restore_multiday_positions,
     }
 
-    _save_auto_paper_settings({
+    persisted = {
         "auto_paper_enabled": controls["auto_paper_enabled"],
         "auto_paper_max_daily": controls["max_daily"],
         "auto_paper_min_setup": controls["min_setup"],
@@ -3757,10 +3768,52 @@ def _render_auto_paper_controls():
         "auto_paper_direction": controls["direction"],
         "auto_paper_eod_close_enabled": controls["eod_close_enabled"],
         "restore_multiday_positions": controls["restore_multiday_positions"],
-    })
+    }
+
+    # Only on an actual change. This wrote on every render, so simply loading
+    # the dashboard rewrote the settings file with that browser session's widget
+    # values -- and `session_state` is per session. Two devices stayed in step
+    # only while they agreed: change a control on the phone, let the laptop tab
+    # auto-refresh, and the laptop wrote its stale values back over it.
+    #
+    # Comparing against what is on disk rather than tracking a dirty flag means
+    # a session that never touches a control can never write, however it reruns.
+    if persisted != _load_auto_paper_settings():
+
+        _save_auto_paper_settings(persisted)
 
     return controls
 
+
+
+def _cadence_label_for_engine():
+    """The sidebar label matching the cadence the engine is actually running.
+
+    Falls back to the session-aware option when the engine has no override or
+    cannot be read, which is also the correct answer for a cold process.
+    """
+
+    try:
+        from app.runtime.scan_supervisor import status as scan_engine_status
+
+        seconds = scan_engine_status().get("interval_override_seconds")
+
+    except Exception:
+        seconds = None
+
+    if not seconds:
+
+        return next(iter(SCANNER_CADENCE_INTERVALS))
+
+    minutes = int(seconds) // 60
+
+    for label, value in SCANNER_CADENCE_INTERVALS.items():
+
+        if value == minutes:
+
+            return label
+
+    return next(iter(SCANNER_CADENCE_INTERVALS))
 
 
 def _render_scan_engine_status(cadence_override_minutes):
@@ -3776,13 +3829,32 @@ def _render_scan_engine_status(cadence_override_minutes):
 
     _prime_scanner_environment()
 
-    engine = ensure_started(
-        interval_override=(
-            cadence_override_minutes * 60
-            if cadence_override_minutes
-            else None
-        )
+    requested_override = (
+        cadence_override_minutes * 60
+        if cadence_override_minutes
+        else None
     )
+
+    # Only push a cadence this session has not already pushed. `ensure_started`
+    # calls `set_interval_override` unconditionally, so re-applying on every
+    # rerun let the most recently rendered browser session dictate the cadence
+    # for the whole process -- including a session that had merely been left
+    # open and auto-refreshed.
+    from app.runtime.scan_supervisor import status as scan_engine_status
+
+    engine = scan_engine_status()
+    cadence_changed = (
+        st.session_state.get("_applied_cadence_override", "unset")
+        != requested_override
+    )
+
+    # Still call ensure_started when the thread is down, whatever the cadence
+    # did -- restarting a dead engine matters more than not touching the
+    # override, and it is idempotent while the thread is alive.
+    if cadence_changed or not engine.get("thread_alive"):
+
+        engine = ensure_started(interval_override=requested_override)
+        st.session_state["_applied_cadence_override"] = requested_override
 
     st.sidebar.subheader("Scan Engine")
 
@@ -3848,6 +3920,19 @@ def _render_auto_refresh_controls():
     )
 
     interval_minutes = REFRESH_INTERVALS[interval_label]
+    # Seeded from the engine, not from this widget's default. `session_state` is
+    # per browser session, so without this a second device -- a phone opened at
+    # work while the laptop is still up -- initialises the selectbox to its first
+    # option and that render pushes `set_interval_override(None)` for the whole
+    # process. Merely *opening* the page changed the backend's cadence for
+    # everyone, with nobody having clicked anything.
+    #
+    # The sidebar is a view of backend state. It only writes when the operator
+    # actually picks something different.
+    if "scanner_cadence_label" not in st.session_state:
+
+        st.session_state["scanner_cadence_label"] = _cadence_label_for_engine()
+
     scanner_cadence_label = st.sidebar.selectbox(
         "Full Scanner Cadence",
         options=list(SCANNER_CADENCE_INTERVALS.keys()),
