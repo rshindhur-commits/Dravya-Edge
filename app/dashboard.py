@@ -2777,23 +2777,6 @@ def _dataframe_to_xlsx_bytes(df):
         return None
 
 
-def _scanner_output_download_bytes():
-
-    df = _load_scanner_output()
-
-    if df.empty:
-
-        return _read_download_file(SCANNER_FILE)
-
-    data = _dataframe_to_xlsx_bytes(df)
-
-    return data or _read_download_file(
-        LIVE_SCANNER_FILE
-        if LIVE_SCANNER_FILE.exists()
-        else SCANNER_FILE
-    )
-
-
 def _load_auto_paper_decision_log():
 
     return load_json_file(
@@ -3143,152 +3126,133 @@ Skip reason:
         return f"AI summary unavailable: {exc}", False
 
 
-def _render_download_exports():
+def _render_daily_review_export(report_date, container):
+    """The whole trading day in one archive, built only when asked for.
 
-    tools = st.sidebar.expander("Tools: Downloads", expanded=False)
+    Building it reads every daily artifact and rebuilds the decision waterfall
+    and rule evaluations from the scanner frame, so doing it eagerly charged the
+    container that work on every rerun for a button nobody had clicked.
+    """
+
+    session_key = f"daily_review_export_{report_date}"
+
+    if container.button("Build daily review export", key=f"build_{session_key}"):
+
+        try:
+
+            from app.analytics.daily_review_export import build_daily_review_export
+
+            st.session_state[session_key] = build_daily_review_export(report_date)
+
+        except Exception as exc:
+
+            st.session_state.pop(session_key, None)
+            container.caption(f"Daily review export unavailable: {exc}")
+
+    prepared = st.session_state.get(session_key)
+
+    if not prepared:
+
+        container.caption(
+            "Packages the day's analytics, audit and operator state, including "
+            "the artifacts nothing but this container holds."
+        )
+        return
+
+    archive, manifest = prepared
+    available = sum(
+        1 for item in manifest["artifacts"].values()
+        if item.get("available")
+    )
+
+    container.download_button(
+        label=f"Daily review export ({len(archive) // 1024} KB)",
+        data=archive,
+        file_name=f"review_{report_date}.zip",
+        mime="application/zip",
+        key=f"download_{session_key}",
+        help=f"{available} artifacts with content.",
+    )
+
+
+def _render_operator_file_downloads(report_date, container):
+    """Single-file grabs for what an operator reaches for on its own.
+
+    Everything else the day produced is in the review export. Dropped from the
+    old list: `scanner_output.xlsx` (root legacy file, and not what the page
+    reads -- the dashboard prefers `data/live/scanner_output_latest.csv`, so the
+    button could hand over a file that did not match the screen);
+    `trade_state.json` (legacy, promoted once on first lookup);
+    `auto_paper_decision_log.json` (the capped 500-row UI copy of a CSV that
+    Postgres also holds); `candidate_snapshots.csv` (never written -- the writer
+    prefers parquet and pyarrow is always present on Cloud); and
+    `candidate_snapshots.parquet`, `auto_paper_decisions.csv` and
+    `market_opportunity_audit.csv`, all of which are in Postgres.
+    """
+
+    files = container.expander("Individual files", expanded=False)
+
+    exports = [
+        ("paper_trade_events.csv",
+         daily_path(report_date, "paper_trade_events.csv"), "text/csv"),
+        ("scanner_output_close.csv",
+         daily_path(report_date, "scanner_output_close.csv"), "text/csv"),
+        ("signal_lifecycle_events.csv",
+         daily_path(report_date, "signal_lifecycle_events.csv"), "text/csv"),
+        ("paper_trade_state.json", PAPER_TRADE_STATE_FILE, "application/json"),
+        ("suggested_trade_state.json", SUGGESTED_TRADE_STATE_FILE, "application/json"),
+        ("telegram_dispatch_audit.jsonl",
+         TELEGRAM_DISPATCH_AUDIT_FILE, "application/x-ndjson"),
+    ]
+
+    for label, path, mime in exports:
+
+        _render_file_download_button(
+            f"Download {label}",
+            path,
+            file_name=label,
+            mime=mime,
+            key=f"download_file_{report_date}_{label}",
+            container=files
+        )
+
+
+def _render_download_exports():
+    """The one home for downloads.
+
+    These were previously split across the Operations block and a
+    `Tools: Downloads` expander, which between them served the validation
+    report, the replay summary and `scanner_output.xlsx` from two places each.
+    """
+
+    downloads = st.sidebar.expander("Downloads", expanded=False)
 
     report_date = st.session_state.get(
         "daily_validation_report_date",
         datetime.now(ZoneInfo("America/New_York")).date().isoformat()
     )
-    scanner_data = _scanner_output_download_bytes()
 
-    if scanner_data is None:
-
-        _render_file_download_button(
-            "Scanner Output",
-            SCANNER_FILE,
-            file_name="scanner_output.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_primary_scanner_output",
-            container=tools
-        )
-
-    else:
-
-        tools.download_button(
-            label="Scanner Output",
-            data=scanner_data,
-            file_name="scanner_output.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_primary_scanner_output"
-        )
+    _render_daily_review_export(report_date, downloads)
 
     _render_file_download_button(
-        "Validation Report",
+        "Validation report (.html)",
         daily_path(report_date, "daily_validation_report.html"),
         file_name=f"daily_validation_{report_date}.html",
         mime="text/html",
-        key=f"download_primary_validation_report_{report_date}",
-        container=tools
+        key=f"download_validation_report_{report_date}",
+        container=downloads
     )
 
     _render_file_download_button(
-        "Replay Report",
+        "Replay summary (.csv)",
         daily_path(report_date, "offline_replay_summary.csv"),
         file_name="offline_replay_summary.csv",
         mime="text/csv",
-        key=f"download_primary_replay_summary_{report_date}",
-        container=tools
+        key=f"download_replay_summary_{report_date}",
+        container=downloads
     )
 
-    try:
-        from app.analytics.daily_review_export import build_daily_review_export
-
-        review_archive, review_manifest = build_daily_review_export(report_date)
-        available_artifacts = sum(
-            1 for item in review_manifest["artifacts"].values()
-            if item["available"]
-        )
-        tools.download_button(
-            label="Daily Review Export",
-            data=review_archive,
-            file_name=f"review_{report_date}.zip",
-            mime="application/zip",
-            key=f"download_daily_review_{report_date}",
-            help=(
-                "Packages the selected day's analytics and audit artifacts. "
-                f"{available_artifacts} artifacts currently contain rows."
-            ),
-        )
-    except Exception as exc:
-        tools.caption(f"Daily Review Export unavailable: {exc}")
-
-    advanced_tools = tools.expander("Advanced files", expanded=False)
-
-    with advanced_tools:
-
-        exports = [
-            {
-                "label": "scanner_output.xlsx",
-                "path": SCANNER_FILE,
-                "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            },
-            {
-                "label": "trade_telemetry.csv",
-                "path": TELEMETRY_FILE,
-                "mime": "text/csv"
-            },
-            {
-                "label": "paper_trade_state.json",
-                "path": PAPER_TRADE_STATE_FILE,
-                "mime": "application/json"
-            },
-            {
-                "label": "auto_paper_decision_log.json",
-                "path": AUTO_PAPER_DECISION_LOG_FILE,
-                "mime": "application/json"
-            },
-            {
-                "label": "telegram_dispatch_audit.jsonl",
-                "path": TELEGRAM_DISPATCH_AUDIT_FILE,
-                "mime": "application/x-ndjson"
-            },
-            {
-                "label": "suggested_trade_state.json",
-                "path": SUGGESTED_TRADE_STATE_FILE,
-                "mime": "application/json"
-            },
-            {
-                "label": "trade_state.json",
-                "path": TRADE_STATE_FILE,
-                "mime": "application/json"
-            }
-        ]
-
-        for export in exports:
-
-            if export["path"] == SCANNER_FILE:
-
-                data = _scanner_output_download_bytes()
-
-            else:
-
-                data = _read_download_file(
-                    export["path"]
-                )
-
-            if data is None:
-
-                _render_file_download_button(
-                    f"Download {export['label']}",
-                    export["path"],
-                    file_name=export["label"],
-                    mime=export["mime"],
-                    key=f"download_{export['label']}",
-                    container=advanced_tools
-                )
-                continue
-
-            advanced_tools.download_button(
-                label=f"Download {export['label']}",
-                data=data,
-                file_name=export["label"],
-                mime=export["mime"],
-                key=f"download_{export['label']}"
-            )
-
-        _render_daily_artifact_downloads(report_date, container=advanced_tools)
+    _render_operator_file_downloads(report_date, downloads)
 
 
 def _generate_daily_validation_report(report_date, finalize_report=True):
@@ -3431,128 +3395,9 @@ def _render_daily_validation_report_controls():
             st.sidebar.error("Post-market generation failed.")
             st.sidebar.text(str(exc))
 
-    report_path = Path(
-        st.session_state.get(
-            "daily_validation_report_path",
-            ROOT_DIR / "reports" / f"daily_validation_{report_date}.html"
-        )
-    )
-    daily_report_path = (
-        ROOT_DIR
-        / "data"
-        / "daily"
-        / report_date
-        / "daily_validation_report.html"
-    )
-
-    download_path = (
-        daily_report_path
-        if daily_report_path.exists()
-        else report_path
-    )
-    _render_file_download_button(
-        "Download daily_validation_report.html",
-        download_path,
-        file_name=f"daily_validation_{report_date}.html",
-        mime="text/html",
-        key=f"download_daily_validation_report_{report_date}"
-    )
-
-    _render_file_download_button(
-        "Open Replay Summary",
-        daily_path(report_date, "offline_replay_summary.csv"),
-        file_name="offline_replay_summary.csv",
-        mime="text/csv",
-        key=f"download_sidebar_replay_summary_{report_date}"
-    )
-
-
-def _render_daily_artifact_downloads(report_date, container=None):
-
-    container = container or st.sidebar
-
-    daily_exports = [
-        {
-            "label": "full_auto_paper_decisions.csv",
-            "path": daily_path(report_date, "auto_paper_decisions.csv"),
-            "file_name": "auto_paper_decisions.csv",
-            "mime": "text/csv"
-        },
-        {
-            "label": "signal_lifecycle_events.csv",
-            "path": daily_path(report_date, "signal_lifecycle_events.csv"),
-            "file_name": "signal_lifecycle_events.csv",
-            "mime": "text/csv"
-        },
-        {
-            "label": "signal_state_transitions.csv",
-            "path": daily_path(report_date, "signal_state_transitions.csv"),
-            "file_name": "signal_state_transitions.csv",
-            "mime": "text/csv"
-        },
-        {
-            "label": "paper_trade_events.csv",
-            "path": daily_path(report_date, "paper_trade_events.csv"),
-            "file_name": "paper_trade_events.csv",
-            "mime": "text/csv"
-        },
-        {
-            "label": "market_opportunity_audit.csv",
-            "path": daily_path(report_date, "market_opportunity_audit.csv"),
-            "file_name": "market_opportunity_audit.csv",
-            "mime": "text/csv"
-        },
-        {
-            "label": "candidate_snapshots.csv",
-            "path": daily_path(report_date, "candidate_snapshots.csv"),
-            "file_name": "candidate_snapshots.csv",
-            "mime": "text/csv"
-        },
-        {
-            "label": "candidate_snapshots.parquet",
-            "path": daily_path(report_date, "candidate_snapshots.parquet"),
-            "file_name": "candidate_snapshots.parquet",
-            "mime": "application/octet-stream"
-        },
-        {
-            "label": "scanner_output_close.csv",
-            "path": daily_path(report_date, "scanner_output_close.csv"),
-            "file_name": "scanner_output_close.csv",
-            "mime": "text/csv"
-        }
-    ]
-
-    container.caption("Daily observability files")
-
-    for export in daily_exports:
-
-        _render_file_download_button(
-            f"Download {export['label']}",
-            export["path"],
-            file_name=export["file_name"],
-            mime=export["mime"],
-            key=f"download_daily_{report_date}_{export['label']}",
-            container=container
-        )
-
-
-def _render_runtime_key_status():
-
-    st.sidebar.subheader("Runtime Keys")
-
-    polygon_key = os.getenv("POLYGON_API_KEY", "").strip()
-    app_ai_key = os.getenv("OPENAI_API_KEY_APP", "").strip()
-
-    st.sidebar.caption(
-        "Polygon: loaded"
-        if polygon_key
-        else "Polygon: missing"
-    )
-    st.sidebar.caption(
-        "App AI key: loaded"
-        if app_ai_key
-        else "App AI key: not set"
-    )
+    # Downloads all live in the sidebar Downloads expander. Serving the report
+    # and the replay summary from here as well meant four buttons for two files.
+    st.sidebar.caption("Generated files are in Downloads.")
 
 
 def _is_market_hours():
@@ -5336,6 +5181,91 @@ def _inject_compact_dashboard_css():
             color: #475569;
         }
 
+        /* Operator console. Reuses the compact-card tones so the Trading page
+           reads as the same system, and adds the pieces a console needs that a
+           KPI grid does not: a page banner, a session pill, and position cards
+           with an R gauge. */
+
+        .op-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.6rem;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 10px;
+            padding: 0.5rem 0.8rem;
+            margin-bottom: 0.7rem;
+            background: var(--secondary-background-color);
+        }
+
+        .op-bar-title {
+            font-size: 0.95rem;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+        }
+
+        .op-pill {
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            padding: 0.16rem 0.55rem;
+            border-radius: 999px;
+            border: 1px solid rgba(148, 163, 184, 0.4);
+            white-space: nowrap;
+        }
+
+        .op-pill-live { border-color: #22c55e; color: #16a34a; }
+        .op-pill-post { border-color: #64748b; opacity: 0.9; }
+        .op-pill-bad { border-color: #ef4444; color: #dc2626; }
+
+        .pos-card {
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-left-width: 4px;
+            border-radius: 10px;
+            padding: 0.55rem 0.7rem;
+            margin-bottom: 0.5rem;
+            background: var(--secondary-background-color);
+        }
+
+        .pos-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+
+        .pos-symbol { font-size: 1.02rem; font-weight: 800; }
+        .pos-sub { font-size: 0.72rem; opacity: 0.75; font-weight: 650; }
+        .pos-r { font-size: 1.02rem; font-weight: 800; }
+
+        .r-track {
+            position: relative;
+            height: 7px;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, 0.22);
+            margin: 0.4rem 0 0.35rem 0;
+            overflow: hidden;
+        }
+
+        .r-fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; }
+        .r-zero {
+            position: absolute;
+            top: -2px;
+            bottom: -2px;
+            width: 1px;
+            background: rgba(148, 163, 184, 0.75);
+        }
+
+        .pos-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+            gap: 0.3rem 0.55rem;
+            margin-top: 0.15rem;
+        }
+
+        .pos-field { font-size: 0.72rem; opacity: 0.72; font-weight: 650; }
+        .pos-figure { font-size: 0.84rem; font-weight: 750; }
+
         .stDataFrame th,
         .stDataFrame table thead th,
         .stDataFrame table th,
@@ -5833,36 +5763,6 @@ def _render_entry_diagnostics(df):
                     st.code(str(raw_payload or "{}"), language="json")
 
 
-def _render_command_center(state, df, refresh_state):
-    """DEPRECATED: Trading now uses the state-driven Decision Center."""
-
-    st.subheader("Trading Command Center")
-    market_session = _dashboard_market_session()
-    age_minutes = _scanner_output_age_minutes()
-    latest_run = _short_datetime(_latest_scanner_run(df)) if df is not None and not df.empty else "missing"
-    generated = _short_datetime(state.get("generated_at"))
-    summary = state.get("summary") or {}
-    trade_status = "TRADES AVAILABLE" if summary.get("trades", 0) else "NO TRADES"
-    best_call = state.get("best_call") or {}
-    best_put = state.get("best_put") or {}
-
-    cards = [
-        ("Market", market_session),
-        ("Scanner", state.get("scanner") or "UNKNOWN"),
-        ("Last Scan", latest_run),
-        ("Scan Age", f"{age_minutes} min" if age_minutes is not None else "missing"),
-        ("Generated", generated),
-        ("Today", trade_status),
-        ("Market Bias", state.get("market_bias") or "UNKNOWN"),
-        ("Best CALL", best_call.get("symbol") or "None"),
-        ("Best PUT", best_put.get("symbol") or "None"),
-        ("Reason", state.get("reason") or "-"),
-        ("Telegram", state.get("telegram") or "UNKNOWN"),
-        ("Decision Engine", state.get("decision_engine") or "v4"),
-    ]
-    _render_compact_card_grid(cards)
-
-
 def _metadata_status(age_minutes, refresh_minutes):
 
     if age_minutes is None:
@@ -5974,182 +5874,6 @@ def _render_metadata_card(title, rows):
         with cols[index % 4]:
 
             kpi_card(label, str(value))
-
-
-def _render_current_opportunities(state):
-    """DEPRECATED: Trading now uses app.ui.pages.trading._render_ranked_opportunities."""
-
-    st.subheader("Current Opportunities")
-    candidates = state.get("top_candidates") or []
-
-    if not candidates:
-
-        st.info("No current opportunities in the latest scanner state.")
-        return
-
-    rows = []
-
-    for candidate in candidates[:10]:
-
-        rows.append(
-            {
-                "Side": candidate.get("direction"),
-                "Symbol": candidate.get("symbol"),
-                "Setup": candidate.get("setup"),
-                "Ready %": candidate.get("readiness"),
-                "RR": candidate.get("rr"),
-                "Option": candidate.get("option"),
-                "Blocked": candidate.get("blocked"),
-                "Needs": candidate.get("needs"),
-                "Next Trigger": candidate.get("next_trigger"),
-            }
-        )
-
-    st.dataframe(
-        _display_safe_dataframe(pd.DataFrame(rows)),
-        width="stretch",
-        hide_index=True
-    )
-
-
-def _render_today_performance(state):
-
-    performance = state.get("today_performance") or {}
-
-    st.subheader("Today's Performance")
-
-    if not performance.get("completed_trades"):
-
-        st.info("No completed trades yet")
-        return
-
-    _render_compact_card_grid([
-        ("Completed", performance.get("completed_trades", 0)),
-        ("Win Rate", _format_efficiency_pct(performance.get("win_rate"))),
-        ("Avg R", _format_efficiency_number(performance.get("average_r"))),
-        ("Trend Capture", _format_efficiency_pct(performance.get("average_trend_capture"))),
-        ("Avg TES", _format_efficiency_number(performance.get("average_tes"))),
-        ("Left On Table", _format_efficiency_pct(performance.get("left_on_table"))),
-    ])
-
-
-def _render_why_no_trade(state):
-    """DEPRECATED: retain until decision analysis is fully migrated to Validation."""
-
-    st.subheader("Why No Trade Today?")
-    summary = state.get("summary") or {}
-    cards = [
-        ("Scanned", summary.get("scanned", 0)),
-        ("Bullish", summary.get("bullish", 0)),
-        ("Bearish", summary.get("bearish", 0)),
-        ("Reached Entry", summary.get("entry", 0)),
-        ("Option Seen", summary.get("option", 0)),
-        ("Trades", summary.get("trades", 0)),
-    ]
-    _render_compact_card_grid(cards)
-
-    blockers = pd.DataFrame(state.get("blockers") or [])
-
-    if blockers.empty:
-
-        st.info("No blockers recorded yet.")
-        return
-
-    st.markdown("**Top blockers**")
-    st.dataframe(
-        _display_safe_dataframe(blockers.rename(columns={"blocker": "Blocker", "count": "Count"})),
-        width="stretch",
-        hide_index=True
-    )
-
-
-def _render_missed_opportunities(state):
-    """DEPRECATED: retain until missed-opportunity analysis is fully migrated to Validation."""
-
-    st.subheader("Missed Opportunities")
-    missed = state.get("missed_opportunities") or []
-
-    if not missed:
-
-        st.info("No missed opportunities identified in the current state.")
-        return
-
-    rows = []
-
-    for candidate in missed[:5]:
-
-        rows.append(
-            {
-                "Symbol": candidate.get("symbol"),
-                "Side": candidate.get("direction"),
-                "Closest Setup": candidate.get("setup"),
-                "Readiness": candidate.get("readiness"),
-                "Blocked": candidate.get("blocked"),
-                "Recommendation": candidate.get("needs"),
-            }
-        )
-
-    st.dataframe(
-        _display_safe_dataframe(pd.DataFrame(rows)),
-        width="stretch",
-        hide_index=True
-    )
-
-
-def _render_trading_page(state, df, refresh_state):
-    """DEPRECATED: page routing now uses app.ui.pages.trading.render."""
-
-    metadata = _scan_metadata(df, refresh_state=refresh_state)
-    _render_metadata_card(
-        "Trading Session",
-        [
-            ("Scanner Status", "LIVE OK"),
-            ("Current Scan ID", metadata["scan_id"]),
-            ("Scanner Started", metadata["scanner_started"]),
-            ("Scanner Finished", metadata["scanner_finished"]),
-            ("Last Refreshed", metadata["last_refreshed"]),
-            ("Scan Age", metadata["scan_age"]),
-            ("Symbols Scanned", metadata["symbols"]),
-            ("Status", _status_label(metadata["status"])),
-        ]
-    )
-    _render_command_center(state, df, refresh_state)
-    _render_current_opportunities(state)
-    _render_today_performance(state)
-    _render_why_no_trade(state)
-    _render_missed_opportunities(state)
-
-
-def _render_trading_page_from_state(state, refresh_state):
-    """DEPRECATED: page routing now uses app.ui.pages.trading.render_from_state."""
-
-    metadata = {
-        "scan_id": state.get("scan_id") or state.get("data_version") or "N/A",
-        "scanner_started": "cached",
-        "scanner_finished": state.get("generated_at") or "cached",
-        "last_refreshed": datetime.now(ZoneInfo("America/New_York")).strftime("%m/%d/%Y %H:%M:%S ET"),
-        "scan_age": "cached",
-        "symbols": (state.get("summary") or {}).get("scanned", 0),
-        "status": state.get("scanner") or "LIVE",
-    }
-    _render_metadata_card(
-        "Trading Session",
-        [
-            ("Scanner Status", _status_label(metadata["status"])),
-            ("Current Scan ID", metadata["scan_id"]),
-            ("Scanner Started", metadata["scanner_started"]),
-            ("Scanner Finished", metadata["scanner_finished"]),
-            ("Last Refreshed", metadata["last_refreshed"]),
-            ("Scan Age", metadata["scan_age"]),
-            ("Symbols Scanned", metadata["symbols"]),
-            ("Status", _status_label(metadata["status"])),
-        ]
-    )
-    _render_command_center(state, pd.DataFrame(), refresh_state)
-    _render_current_opportunities(state)
-    _render_today_performance(state)
-    _render_why_no_trade(state)
-    _render_missed_opportunities(state)
 
 
 def _render_validation_page(df):

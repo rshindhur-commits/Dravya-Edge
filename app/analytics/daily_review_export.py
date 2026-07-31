@@ -14,7 +14,7 @@ from app.analytics.decision_waterfall import (
 from app.analytics.rank_outcome_calibration import load_rank_outcome_calibration
 from app.analytics.rule_attribution import build_rule_outcome_attribution
 from app.gates.rule_evaluation import build_rule_evaluations
-from app.storage.daily_paths import daily_path
+from app.storage.daily_paths import daily_path, state_path
 
 
 REVIEW_ARTIFACTS = (
@@ -34,6 +34,43 @@ REVIEW_ARTIFACTS = (
     "trade.csv",
     "exit_quality_metrics.csv",
 )
+
+# Daily artifacts that live *only* on the container filesystem. Postgres holds
+# candidate snapshots, evidence, activity trace, auto-paper decisions, gate
+# decisions and the waterfall, so those survive a restart on their own -- these
+# do not, and a Streamlit Cloud redeploy is the last moment they exist. Copied
+# verbatim rather than rebuilt, so an operator gets the file the engine wrote.
+FILE_ONLY_ARTIFACTS = (
+    "trade_exit_snapshots.csv",
+    "signal_lifecycle_events.csv",
+    "signal_state_transitions.csv",
+    "entry_exit_v2_shadow.csv",
+    "engine_trade_events.csv",
+    "engine_trade_comparisons.csv",
+    "engine_differences.csv",
+    "engine_trend_outcomes.csv",
+    "market_opportunity_audit.csv",
+    "option_liquidity_audit.csv",
+    "option_liquidity_attempts.csv",
+    "candidate_intelligence.csv",
+    "quote_attribution.csv",
+    "scanner_stage_profile.csv",
+    "runtime_performance.csv",
+    "trade_telemetry.csv",
+    "scanner_output_close.csv",
+    "auto_paper_decisions.csv",
+    "candles_5m.csv",
+)
+
+# Operator state. `paper_trade_state.json` is the live book and is wiped by every
+# redeploy; `auto_paper_settings.json` is gitignored, so a fresh container cannot
+# tell you what the controls were set to when the day ran.
+STATE_ARTIFACTS = (
+    "paper_trade_state.json",
+    "suggested_trade_state.json",
+    "auto_paper_settings.json",
+)
+
 EVIDENCE_STATUS_ARTIFACT = "candidate_evidence_status.json"
 
 
@@ -127,10 +164,31 @@ def _generated_review_frames(trading_day, directory: Path):
     }
 
 
+def _raw_copies(directory):
+    """Verbatim copies of the artifacts nothing else preserves."""
+    copies = {}
+    for name in FILE_ONLY_ARTIFACTS:
+        path = directory / name
+        try:
+            if path.exists() and path.stat().st_size:
+                copies[f"raw/{name}"] = path.read_bytes()
+        except OSError:
+            continue
+    for name in STATE_ARTIFACTS:
+        try:
+            path = state_path(name)
+            if path.exists() and path.stat().st_size:
+                copies[f"state/{name}"] = path.read_bytes()
+        except OSError:
+            continue
+    return copies
+
+
 def build_daily_review_export(trading_day, directory=None):
     directory = Path(directory) if directory is not None else daily_path(trading_day, "review_export.zip").parent
     frames = _generated_review_frames(trading_day, directory)
     evidence_status = _read_json(directory / EVIDENCE_STATUS_ARTIFACT)
+    raw_copies = _raw_copies(directory)
     manifest = {
         "trading_day": trading_day,
         "artifacts": {
@@ -140,16 +198,22 @@ def build_daily_review_export(trading_day, directory=None):
         "notes": [
             "Rule attribution is observational matched-cohort association, not causal attribution.",
             "Empty CSV files mean the selected daily artifact was not available.",
+            "raw/ holds verbatim copies of artifacts that exist nowhere but this "
+            "container's filesystem; state/ holds the operator state at export time.",
         ],
     }
     manifest["artifacts"][EVIDENCE_STATUS_ARTIFACT] = {
         "rows": evidence_status.get("evidence_rows") if evidence_status else 0,
         "available": bool(evidence_status),
     }
+    for name, payload in raw_copies.items():
+        manifest["artifacts"][name] = {"bytes": len(payload), "available": True}
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name in REVIEW_ARTIFACTS:
             archive.writestr(name, frames[name].to_csv(index=False))
+        for name, payload in raw_copies.items():
+            archive.writestr(name, payload)
         archive.writestr(
             EVIDENCE_STATUS_ARTIFACT,
             json.dumps(

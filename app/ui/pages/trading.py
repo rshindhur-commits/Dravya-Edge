@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -9,6 +9,8 @@ import pandas as pd
 ROOT_DIR = Path(__file__).resolve().parents[3]
 ET_TZ = ZoneInfo("America/New_York")
 TELEGRAM_AUDIT_FILE = ROOT_DIR / "data" / "live" / "telegram_dispatch_audit.jsonl"
+MARKET_CLOSE = time(16, 0)
+STALE_SCAN_MINUTES = 15
 
 
 def _action_label(value):
@@ -62,42 +64,223 @@ def _telegram_rows(trading_day):
     ]
 
 
-def _position_rows(positions, telegram_rows):
-    delivered_trade_ids = {
-        str(row.get("trade_id"))
-        for row in telegram_rows
-        if row.get("event") == "SENT" and row.get("trade_id")
+def _is_post_market(now=None):
+    now = now or datetime.now(ET_TZ)
+    return now.weekday() >= 5 or now.time() >= MARKET_CLOSE
+
+
+def _minutes_since(value):
+    stamp = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(stamp):
+        return None
+    return (pd.Timestamp.now(tz="UTC") - stamp).total_seconds() / 60.0
+
+
+def _paper_events(trading_day):
+    path = ROOT_DIR / "data" / "daily" / str(trading_day) / "paper_trade_events.csv"
+    if not path.exists() or not path.stat().st_size:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _entries_used(trading_day):
+    """Entries opened on this trading day, counted off the trade key.
+
+    Counting OPEN events undercounts: the 2026-07-30 file holds an AUTO_EXIT for
+    a trade whose OPEN row never landed, so the day reported zero entries while
+    a position had plainly been taken. The key embeds its own open timestamp
+    (`SYMBOL|OPTION|YYYY-MM-DD HH:MM:SS`), which survives a missing event row and
+    also keeps a next-day close from counting as a fresh entry.
+    """
+    events = _paper_events(trading_day)
+    if events.empty or "trade_key" not in events.columns:
+        return 0
+
+    day = str(trading_day)
+    keys = {
+        key for key in events["trade_key"].dropna().astype(str)
+        if key.rsplit("|", 1)[-1].strip().startswith(day)
     }
-    rows = []
-    for trade in positions:
-        trade_id = str(trade.get("trade_id") or "")
-        rows.append({
-            "Symbol": trade.get("symbol"),
-            "State": trade.get("status"),
-            "R": trade.get("rr_progress"),
-            "Qty": trade.get("option_contracts") or 1,
-            "Hold": trade.get("holding_profile") or "INTRADAY",
-            "Next Action": _action_label(trade.get("trade_action") or "HOLD"),
-            "Telegram": "SENT" if trade_id and trade_id in delivered_trade_ids else "PENDING",
-        })
-    return rows
+    return len(keys)
+
+
+def _engine_status():
+    try:
+        from app.runtime.scan_supervisor import status
+
+        return status()
+    except Exception:
+        return {}
+
+
+def _db_writes_active():
+    try:
+        from app.db.persistence import db_writes_enabled
+
+        return bool(db_writes_enabled())
+    except Exception:
+        return False
+
+
+def _health_cells(state):
+    """The six facts an operator needs before trusting anything else on the page.
+
+    Every one of these was previously either absent or buried in the sidebar, so
+    a stalled engine or a dead DB writer looked identical to a quiet market.
+    """
+    engine = _engine_status()
+    positions = _active_positions()
+    trading_day = _trading_day(state)
+    telegram = _telegram_rows(trading_day)
+    sent = sum(1 for row in telegram if row.get("event") == "SENT")
+    failed = sum(1 for row in telegram if row.get("event") == "FAILED")
+
+    scan_age = _minutes_since(
+        ((state or {}).get("scanner_health") or {}).get("timestamp")
+        or ((state or {}).get("metadata") or {}).get("created_at")
+        or (state or {}).get("generated_at")
+    )
+    entries = _entries_used(trading_day)
+    max_daily = 0
+    try:
+        from app.runtime.paper_automation_support import load_auto_paper_controls
+
+        max_daily = int(load_auto_paper_controls().get("max_daily") or 0)
+    except Exception:
+        pass
+
+    alive = bool(engine.get("thread_alive"))
+    failures = int(engine.get("failures") or 0)
+    db_active = _db_writes_active()
+    post_market = _is_post_market()
+
+    if scan_age is None:
+        scan_tone, scan_text = ("neutral" if post_market else "bad"), "never"
+    else:
+        scan_text = f"{scan_age:.0f}m ago"
+        # After the close the engine is meant to be quiet, so an ageing scan is
+        # only a fault during the session.
+        scan_tone = (
+            "neutral" if post_market
+            else "ok" if scan_age <= STALE_SCAN_MINUTES
+            else "warn" if scan_age <= STALE_SCAN_MINUTES * 3
+            else "bad"
+        )
+
+    return [
+        ("Engine",
+         str(engine.get("status") or "IDLE") if alive else "NOT RUNNING",
+         "ok" if alive else "bad"),
+        ("Last scan", scan_text, scan_tone),
+        ("Scans / fails",
+         f"{int(engine.get('scans') or 0)} / {failures}",
+         "warn" if failures else "ok"),
+        ("DB writes",
+         "ACTIVE" if db_active else "OFF",
+         "ok" if db_active else "bad"),
+        ("Telegram",
+         f"{sent} sent / {failed} failed",
+         "bad" if failed else "ok"),
+        ("Book",
+         f"{len(positions)} open | {entries}"
+         + (f"/{max_daily}" if max_daily else "") + " entries",
+         "warn" if max_daily and entries >= max_daily else "neutral"),
+    ]
+
+
+def _render_header(state):
+    """Page identity, session mode, and the six facts that gate trust."""
+    import streamlit as st
+
+    from app.ui.components import operator_bar, status_card_grid
+
+    engine = _engine_status()
+    post_market = _is_post_market()
+    trading_day = _trading_day(state)
+    pills = [
+        (trading_day, "neutral"),
+        ("POST-MARKET" if post_market else "LIVE SESSION",
+         "post" if post_market else "live"),
+        ("ENGINE DOWN", "bad") if not engine.get("thread_alive")
+        else ("ENGINE " + str(engine.get("status") or "IDLE"), "live"),
+    ]
+    operator_bar("Operator Console", pills)
+
+    status_card_grid(_health_cells(state))
+
+    if not engine.get("thread_alive"):
+        st.error(
+            "Scan engine thread is not running. No scans are happening until "
+            "Streamlit restarts."
+        )
+    elif engine.get("last_error") and int(engine.get("failures") or 0):
+        st.warning(f"Last scan error: {engine['last_error']}")
+
+
+def _position_tone(trade):
+    """How close this position is to needing a decision."""
+    r_progress = _number(trade.get("rr_progress"))
+    confidence = _number(trade.get("last_exit_confidence_score"))
+    phase = str(trade.get("last_exit_phase") or "").upper()
+
+    if (r_progress is not None and r_progress <= -0.8) or phase in {
+        "TREND_FAILURE", "HARD_STOP"
+    }:
+        return "bad"
+    if (confidence is not None and confidence >= 90) or phase == "END_OF_DAY":
+        return "warn"
+    if r_progress is not None and r_progress > 0:
+        return "ok"
+    return "neutral"
 
 
 def _render_live_positions(state):
     import streamlit as st
 
+    from app.ui.components import position_card
+
     positions = _active_positions()
     telegram_rows = _telegram_rows(_trading_day(state))
-    st.subheader("Live Positions")
+    st.subheader("Book")
     if not positions:
         st.caption("No active paper positions.")
         return
 
-    rows = _position_rows(positions, telegram_rows)
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    delivered = {
+        str(row.get("trade_id"))
+        for row in telegram_rows
+        if row.get("event") == "SENT" and row.get("trade_id")
+    }
+
     for trade in positions:
         symbol = trade.get("symbol") or "Unknown"
-        with st.expander(f"{symbol} position details"):
+        trade_id = str(trade.get("trade_id") or "")
+        position_card(
+            symbol,
+            " · ".join(str(part) for part in (
+                trade.get("status") or "OPEN",
+                trade.get("holding_profile") or "INTRADAY",
+                _action_label(trade.get("trade_action") or "HOLD"),
+            )),
+            _number(trade.get("rr_progress")),
+            [
+                ("Entry", trade.get("entry_price")),
+                ("Current", trade.get("current_price") or trade.get("close_price")),
+                ("Stop", trade.get("stop_loss")),
+                ("Target", trade.get("take_profit")),
+                ("Trend", trade.get("last_trend_health_status") or trade.get("trend_health")),
+                ("Exit conf", trade.get("last_exit_confidence_score")),
+                ("Telegram", "SENT" if trade_id and trade_id in delivered else "PENDING"),
+            ],
+            tone=_position_tone(trade),
+        )
+
+    for trade in positions:
+        symbol = trade.get("symbol") or "Unknown"
+        with st.expander(f"{symbol} chart and detail"):
             details = [
                 ("Entry", trade.get("entry_price")),
                 ("Current", trade.get("current_price") or trade.get("close_price")),
@@ -111,7 +294,28 @@ def _render_live_positions(state):
                 ("Opened", trade.get("opened_at_et") or trade.get("opened_at")),
                 ("Trade ID", trade.get("trade_id")),
             ]
-            st.dataframe(pd.DataFrame(details, columns=["Field", "Value"]), width="stretch", hide_index=True)
+            left, right = st.columns([2, 3])
+            with left:
+                # Values are deliberately mixed types; casting keeps Arrow from
+                # trying to make one numeric column out of prices and labels.
+                st.dataframe(
+                    pd.DataFrame(
+                        [(label, "-" if value in (None, "") else str(value))
+                         for label, value in details],
+                        columns=["Field", "Value"],
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+            with right:
+                from app.ui.trade_chart import build_markers, render_chart
+
+                render_chart(
+                    symbol,
+                    _trading_day(state),
+                    markers=build_markers(trade),
+                    key=f"position_chart_{trade.get('trade_id') or symbol}",
+                )
 
 
 def _activity_category(event, source):
@@ -353,11 +557,14 @@ def _render_opportunity_board(state):
     if not candidates:
         st.caption("No ranked opportunities in the latest scan.")
         return
+    from app.ui.trade_chart import tradingview_url
+
     rows = []
     for candidate in candidates[:10]:
         rows.append({
             "Rank": candidate.get("candidate_rank"),
             "Symbol": candidate.get("symbol"),
+            "Chart": tradingview_url(candidate.get("symbol")),
             "Scanner Recommendation": _action_label(
                 candidate.get("scanner_recommendation") or candidate.get("action")
             ),
@@ -375,7 +582,151 @@ def _render_opportunity_board(state):
             "Timing": candidate.get("entry_timing_grade"),
             "Holding": candidate.get("holding_profile") or "-",
         })
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.dataframe(
+        pd.DataFrame(rows),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Chart": st.column_config.LinkColumn(
+                "Chart",
+                display_text="TV",
+                help="Open this symbol on TradingView at 5m",
+            )
+        },
+    )
+
+    symbols = [str(candidate.get("symbol")) for candidate in candidates[:10]
+               if candidate.get("symbol")]
+    if not symbols:
+        return
+    with st.expander("Candidate chart", expanded=False):
+        chosen = st.selectbox("Symbol", symbols, key="opportunity_chart_symbol")
+        candidate = next(
+            (item for item in candidates if str(item.get("symbol")) == chosen), {}
+        )
+        from app.ui.trade_chart import build_markers, render_chart
+
+        render_chart(
+            chosen,
+            _trading_day(state),
+            markers=build_markers(candidate),
+            key=f"opportunity_chart_{chosen}",
+        )
+
+
+def _closed_trades(trading_day):
+    """Today's completed trades, entry and exit stitched back into one row.
+
+    `paper_trade_events.csv` is append-only and one-sided: the OPEN row carries
+    the entry time, the close row carries the exit. Charting a trade needs both.
+    """
+    events = _paper_events(trading_day)
+    if events.empty or "event_type" not in events.columns:
+        return []
+
+    events["event_type"] = events["event_type"].astype(str).str.upper()
+    opens = {
+        str(row.get("trade_key")): row
+        for _, row in events[events["event_type"] == "OPEN"].iterrows()
+    }
+    closes = events[events["event_type"].isin({"MANUAL_CLOSE", "AUTO_EXIT"})]
+
+    trades = []
+    for _, close in closes.iterrows():
+        opened = opens.get(str(close.get("trade_key")), {})
+        trades.append({
+            "trade_key": close.get("trade_key"),
+            "symbol": close.get("symbol"),
+            "direction": close.get("direction"),
+            "entry_price": close.get("entry_price"),
+            "exit_price": close.get("exit_price"),
+            "r_multiple": close.get("r_multiple"),
+            "exit_reason": close.get("exit_reason"),
+            "entry_time": opened.get("event_time_et") if len(opened) else None,
+            "exit_time": close.get("event_time_et"),
+            "closed_how": close.get("event_type"),
+        })
+    return trades
+
+
+def _render_todays_result(state):
+    """Post-market replacement for the Opportunity Board.
+
+    After the close the board is stale by definition -- what the operator needs
+    then is what the day actually did, and the chart to judge whether each exit
+    was the right one.
+    """
+    import streamlit as st
+
+    st.subheader("Today's Result")
+    performance = (state or {}).get("today_performance") or {}
+    trading_day = _trading_day(state)
+    trades = _closed_trades(trading_day)
+
+    from app.ui.components import status_card_grid
+
+    average_r = _number(performance.get("average_r"))
+    win_rate = _number(performance.get("win_rate"))
+    capture = _number(performance.get("average_trend_capture"))
+    too_early = int(performance.get("exit_too_early") or 0)
+    status_card_grid([
+        ("Completed", str(performance.get("completed_trades") or len(trades)), "neutral"),
+        ("Avg R",
+         "-" if average_r is None else f"{average_r:+.2f}",
+         "neutral" if average_r is None else "ok" if average_r >= 0 else "bad"),
+        ("Win rate",
+         "-" if win_rate is None else f"{win_rate:.0f}%",
+         "neutral" if win_rate is None else "ok" if win_rate >= 50 else "warn"),
+        ("Trend capture",
+         "-" if capture is None else f"{capture:.0f}%",
+         "neutral" if capture is None else "ok" if capture >= 50 else "warn"),
+        ("Exits too early", str(too_early), "warn" if too_early else "ok"),
+        ("Excellent exits", str(performance.get("excellent_exits") or 0), "neutral"),
+    ])
+
+    if not trades:
+        st.caption("No completed trades recorded for this day.")
+        return
+
+    from app.ui.trade_chart import build_markers, render_chart, tradingview_url
+
+    table = pd.DataFrame([{
+        "Symbol": trade["symbol"],
+        "Chart": tradingview_url(trade["symbol"]),
+        "Direction": trade["direction"],
+        "Entry": trade["entry_price"],
+        "Exit": trade["exit_price"],
+        "R": trade["r_multiple"],
+        "Closed By": trade["closed_how"],
+        "Exit Reason": trade["exit_reason"],
+    } for trade in trades])
+    st.dataframe(
+        table,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Chart": st.column_config.LinkColumn(
+                "Chart", display_text="TV", help="Open on TradingView at 5m"
+            )
+        },
+    )
+
+    labels = {
+        f"{trade['symbol']} {trade['exit_time'] or ''} ({trade['r_multiple']}R)": trade
+        for trade in trades
+    }
+    chosen = st.selectbox("Review trade", list(labels), key="result_chart_trade")
+    trade = labels[chosen]
+    render_chart(
+        trade["symbol"],
+        trading_day,
+        markers=build_markers(trade),
+        key=f"result_chart_{trade['trade_key']}",
+    )
+    st.caption(
+        f"Exit reason: {trade['exit_reason'] or 'unknown'} | "
+        f"closed by {trade['closed_how']}"
+    )
 
 
 def _risk_alerts(positions):
@@ -426,19 +777,6 @@ def _render_risk_monitor(state):
     )
 
 
-def _render_telegram_status(state):
-    import streamlit as st
-
-    st.markdown("#### Telegram")
-    rows = _telegram_rows(_trading_day(state))
-    sent = [row for row in rows if row.get("event") == "SENT"]
-    failed = [row for row in rows if row.get("event") == "FAILED"]
-    pending = [row for row in rows if row.get("event") == "ATTEMPT"]
-    health = "HEALTHY" if not failed else "ATTENTION"
-    latency = f"{sent[-1].get('latency_ms', 0) / 1000:.1f}s" if sent else "-"
-    st.caption(f"{health} | Sent {len(sent)} | Pending {len(pending)} | Failed {len(failed)} | Last {latency}")
-
-
 def _render_market_pulse(state):
     import streamlit as st
 
@@ -459,18 +797,25 @@ def _render_market_pulse(state):
 def _render_trader_workspace(state, df):
     import streamlit as st
 
-    _render_live_positions(state)
+    _render_header(state)
+    _render_market_pulse(state)
+
     left, right = st.columns([3, 2])
     with left:
-        _render_activity_feed(state, df)
+        _render_live_positions(state)
     with right:
         _render_risk_monitor(state)
-    _render_opportunity_board(state)
-    left, right = st.columns(2)
-    with left:
-        _render_telegram_status(state)
-    with right:
-        _render_market_pulse(state)
+
+    if _is_post_market():
+        _render_todays_result(state)
+    else:
+        _render_opportunity_board(state)
+
+    # The activity feed reads the full activity trace -- 17,742 rows on
+    # 2026-07-31 -- and re-sorts it on every rerun. It is a forensic tool, not an
+    # operator one, so it no longer costs anything until it is opened.
+    with st.expander("Activity feed", expanded=False):
+        _render_activity_feed(state, df)
 
 
 def render(state, df, refresh_state):
