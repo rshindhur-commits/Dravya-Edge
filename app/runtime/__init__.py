@@ -15,6 +15,7 @@ from app.runtime.runtime_scheduler import (
 )
 from app.runtime.telegram_dispatcher import (
     dispatch_telegram_message,
+    drain_telegram_dispatches,
     recover_pending_telegram_dispatches,
     telegram_dispatch_mode,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "RuntimeScheduler",
     "append_runtime_performance",
     "dispatch_telegram_message",
+    "drain_telegram_dispatches",
     "get_runtime_scheduler",
     "measure_runtime",
     "recover_pending_telegram_dispatches",

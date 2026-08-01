@@ -35,9 +35,10 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             "app.alerts.telegram_alerts.get_telegram_credentials",
             return_value=("token", "chat-id"),
         ), patch(
-            "app.alerts.telegram_alerts.requests.post",
-            return_value=response,
-        ):
+            "app.alerts.telegram_alerts.get_telegram_session"
+        ) as session_factory:
+
+            session_factory.return_value.post.return_value = response
 
             with self.assertRaises(TelegramDeliveryError) as error:
 
@@ -309,8 +310,8 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             "app.alerts.telegram_alerts._load_alert_state",
             return_value={}
         ), patch(
-            "app.runtime.telegram_dispatcher.get_runtime_scheduler"
-        ) as scheduler_factory, patch(
+            "app.runtime.telegram_dispatcher.get_telegram_sender"
+        ) as sender_factory, patch(
             "app.alerts.telegram_alerts.mark_alert_sent"
         ) as mark_sent:
 
@@ -318,11 +319,11 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 **self._scanner_alert_kwargs()
             )
 
-        # Queued dispatch reports "not yet sent" because the CRITICAL job has
-        # not run, not because the alert was refused.
+        # Queued dispatch reports "not yet sent" because the send has been handed
+        # to the dedicated dispatcher thread, not because the alert was refused.
         self.assertEqual(result["reason"], "QUEUED")
         self.assertTrue(result["queued"])
-        scheduler_factory.assert_called_once()
+        sender_factory.return_value.submit.assert_called_once()
 
     def test_scanner_review_alert_fires_once_per_symbol_and_setup_per_day(self):
         """Dedup, not the removed suppression, is what bounds review volume.

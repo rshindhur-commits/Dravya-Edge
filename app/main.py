@@ -4350,7 +4350,10 @@ def _run_scanner_impl():
                         market_data_status = refreshed_status
                         market_data_status["forced_refresh_attempted"] = True
 
-            time.sleep(1)
+            # No pacing sleep here. Polygon calls are already governed by the
+            # token bucket in app/utils/polygon_client.py (acquire_rate_limit),
+            # and market data for the whole watchlist is prefetched in parallel
+            # before this loop, so most iterations make no network call at all.
 
             # =====================================
             # Build higher timeframes internally
@@ -7576,7 +7579,6 @@ def _run_scanner_impl():
 
             symbol_failures[symbol] = str(e)
 
-        time.sleep(0.5)
         symbol_runtimes[symbol] = time.perf_counter() - symbol_start
 
     # =========================

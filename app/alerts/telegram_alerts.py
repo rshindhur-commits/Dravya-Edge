@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from inspect import signature
 from pathlib import Path
+from threading import Lock
 from zoneinfo import ZoneInfo
 
 import requests
@@ -20,6 +21,36 @@ from app.utils.json_store import load_json_file, save_json_file
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+
+# Pooled connection to api.telegram.org. A bare `requests.post` opens a fresh
+# TCP+TLS handshake per message, which showed up as a near-constant ~0.9s per
+# send in data/live/telegram_dispatch_audit.jsonl (eight alerts on 2026-07-27
+# took ~10s of wall clock). Keeping the connection alive amortises the handshake
+# across a burst, so only the first send in a run pays for it.
+_TELEGRAM_SESSION = None
+_TELEGRAM_SESSION_LOCK = Lock()
+
+
+def get_telegram_session():
+
+    global _TELEGRAM_SESSION
+
+    with _TELEGRAM_SESSION_LOCK:
+
+        if _TELEGRAM_SESSION is None:
+
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=1,
+                pool_maxsize=4,
+                max_retries=0,
+            )
+            session.mount("https://", adapter)
+            _TELEGRAM_SESSION = session
+
+        return _TELEGRAM_SESSION
+
+
 ALERT_STATE_FILE = state_path("telegram_alert_state.json")
 MAX_SENT_ALERTS = 1000
 ENTRY_EVENT_TYPE = "ENTRY"
@@ -523,7 +554,7 @@ def _send_telegram_alert_direct(message):
         "send_telegram_alert"
     ):
 
-        response = requests.post(
+        response = get_telegram_session().post(
             url,
             json=payload,
             timeout=10
