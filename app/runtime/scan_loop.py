@@ -32,6 +32,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.runtime.market_calendar import idle_reason  # noqa: E402
+
 ET = ZoneInfo("America/New_York")
 
 # Cadence per market session, in seconds. Denser through the regular session where
@@ -70,22 +72,17 @@ def interval_for_session(session, override=None):
 def _publish_heartbeat(status, **fields):
     """Tell Postgres this engine is alive. Never allowed to break the loop.
 
-    Owner defaults to `worker` here rather than to the shared default: this module
-    *is* the standalone engine, so `python -m app.runtime.scan_loop` identifies
-    itself correctly on Render with no extra configuration. An explicit
-    SCAN_ENGINE_OWNER still wins.
+    Always publishes as `worker`, never as `scan_engine_owner()`. Identity is what
+    this module *is*; SCAN_ENGINE_OWNER says who *should* scan. Letting the
+    variable pick the identity means a misconfigured host publishes under the
+    other engine's key and silently overwrites its row -- which is how the
+    dashboard came to hide the real Render worker on 2026-08-01.
     """
-
-    import os
 
     try:
         from app.runtime.scan_engine_heartbeat import record_heartbeat
 
-        record_heartbeat(
-            status,
-            owner=str(os.getenv("SCAN_ENGINE_OWNER", "worker")).strip().lower(),
-            **fields,
-        )
+        record_heartbeat(status, owner="worker", **fields)
 
     except Exception as exc:
         print(f"[SCAN LOOP WARNING] heartbeat failed: {exc}")
@@ -133,16 +130,24 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=False):
 
         session = current_session()
 
-        if skip_closed and str(session).upper() == "CLOSED":
+        # The full calendar, not just the CLOSED session. `get_market_session` is
+        # clock-only: at 11:00 on a Saturday it returns REGULAR. This loop used to
+        # check only for CLOSED, so once the Render worker took over scanning it
+        # scanned all weekend against stale data while the dashboard supervisor --
+        # which has had this guard for a while -- correctly slept. Shared with the
+        # supervisor rather than reimplemented; see app/runtime/market_calendar.py.
+        idle = idle_reason(session, datetime.now(ET)) if skip_closed else None
+
+        if idle:
             wait = interval_for_session(session, interval_override)
             # Still report. A quiet engine and a dead one look identical from the
-            # dashboard otherwise, and "CLOSED" is the answer to that question.
+            # dashboard otherwise, and the reason is the answer to that question.
             _publish_heartbeat(
-                "SLEEPING", session=session, scans=scans, failures=failures,
+                idle, session=session, scans=scans, failures=failures,
                 interval_seconds=wait,
                 next_due_at=(datetime.now(ET) + timedelta(seconds=wait)).isoformat(),
             )
-            print(f"[SCAN LOOP] market CLOSED; sleeping {wait}s without scanning.")
+            print(f"[SCAN LOOP] {idle}; sleeping {wait}s without scanning.")
             _sleep(wait)
             continue
 
