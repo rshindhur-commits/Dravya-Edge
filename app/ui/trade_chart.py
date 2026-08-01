@@ -11,6 +11,7 @@ Pure helpers here stay import-safe without streamlit so they remain testable.
 
 from __future__ import annotations
 
+import json
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -96,19 +97,90 @@ def _select_grid(bars, window):
     return max(groups, key=rank)[1]
 
 
+def _query_archive(trading_day, symbol):
+    """The newest archived `market_payload` for one symbol, or None."""
+    from sqlalchemy import text
+
+    from app.db.connection import get_engine
+
+    with get_engine().connect() as connection:
+        row = connection.execute(text("""
+            SELECT market_payload
+            FROM scanner_snapshot
+            WHERE trading_day = CAST(:trading_day AS DATE)
+              AND upper(symbol) = :symbol
+            ORDER BY scan_timestamp DESC
+            LIMIT 1
+        """), {"trading_day": str(trading_day), "symbol": symbol}).scalar()
+
+    if not row:
+        return None
+    return row if isinstance(row, dict) else json.loads(row)
+
+
+def _load_archived_candles(trading_day, symbol):
+    """5m bars out of the Neon regression archive.
+
+    `candles_5m.csv` lives on the container filesystem, which a redeploy wipes --
+    that is how 2026-07-31's bars were lost. The regression archive already
+    stores the same bars durably: every `scanner_snapshot` row carries a
+    `market_payload` with the last 200 5m, 80 15m and 40 1h bars. Reading them
+    back costs no new storage and makes a wiped container recoverable.
+
+    Only the most recent scan's bars are used, for the same reason
+    `_select_grid` exists: each scan is one internally consistent grid.
+    """
+    try:
+        payload = _query_archive(trading_day, symbol)
+    except Exception as exc:
+        print(f"[TRADE CHART WARNING] archive lookup failed for {symbol}: {exc}")
+        return pd.DataFrame()
+
+    if not payload:
+        return pd.DataFrame()
+
+    bars = payload.get("bars_5m") or []
+    if not bars:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(bars).rename(columns={
+        "Datetime": "timestamp",
+        "Open": "open",
+        "High": "high",
+        "Low": "low",
+        "Close": "close",
+        "Volume": "volume",
+    })
+    if "timestamp" not in frame.columns:
+        return pd.DataFrame()
+
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
+    frame = frame.dropna(subset=["timestamp"])
+    frame["symbol"] = symbol
+    frame["scan_id"] = "archive"
+    return frame.sort_values("timestamp").reset_index(drop=True)
+
+
 def load_candles(trading_day, symbol, limit=120, around=None):
     """5m bars for one symbol on a single consistent grid, oldest first, in ET.
 
     `around` is an (entry, exit) pair of moments. When supplied the window is
     centred on the trade with context either side, which is what makes an exit
     judgeable -- a blind tail() of the file can land entirely after the trade.
-    """
-    frame = _load_day_candles(trading_day)
-    if frame.empty:
-        return pd.DataFrame()
 
+    Falls back to the Neon archive when the local file has nothing for this
+    symbol, so a redeployed container can still draw the day.
+    """
     symbol = str(symbol or "").strip().upper()
-    bars = frame[frame["symbol"].astype(str).str.upper() == symbol].copy()
+    frame = _load_day_candles(trading_day)
+
+    bars = pd.DataFrame()
+    if not frame.empty:
+        bars = frame[frame["symbol"].astype(str).str.upper() == symbol].copy()
+
+    if bars.empty:
+        bars = _load_archived_candles(trading_day, symbol)
+
     if bars.empty:
         return pd.DataFrame()
 

@@ -53,14 +53,28 @@ def _health_cells(context):
             else "bad"
         )
 
+    scans = int(engine.get("scans") or 0)
+    archived = context.archived_scans
+
+    if archived is None:
+        archive_text, archive_tone = "unavailable", "neutral"
+    elif archived == 0 and scans:
+        # The 2026-07-31 signature: the engine ran all day and nothing reached
+        # the archive, so once the container was recycled the session was gone.
+        archive_text, archive_tone = "NOT RECORDING", "bad"
+    else:
+        archive_text = f"{archived} scans"
+        archive_tone = "warn" if scans and archived * 2 < scans else "ok"
+
     return [
         ("Engine",
          str(engine.get("status") or "IDLE") if alive else "NOT RUNNING",
          "ok" if alive else "bad"),
         ("Last scan", scan_text, scan_tone),
         ("Scans / fails",
-         f"{int(engine.get('scans') or 0)} / {failures}",
+         f"{scans} / {failures}",
          "warn" if failures else "ok"),
+        ("Archive", archive_text, archive_tone),
         ("DB writes",
          "ACTIVE" if context.db_writes_active else "OFF",
          "ok" if context.db_writes_active else "bad"),

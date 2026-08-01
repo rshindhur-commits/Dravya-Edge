@@ -114,3 +114,52 @@ def test_build_markers_reads_both_spellings_and_rejects_unusable_prices():
     assert empty["entry_price"] is None
     assert empty["stop_price"] is None
     assert empty["exit_time"] is None
+
+
+def _archive_bars(count=6, start="2026-07-31 13:00:00"):
+    stamp = pd.Timestamp(start, tz="UTC")
+    return {"bars_5m": [{
+        "Datetime": (stamp + pd.Timedelta(minutes=5 * step)).isoformat(),
+        "Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.5, "Volume": 1000,
+    } for step in range(count)]}
+
+
+def test_the_archive_supplies_bars_when_the_container_file_is_gone(tmp_path, monkeypatch):
+    """`candles_5m.csv` lives on an ephemeral filesystem a redeploy wipes, which
+    is how 2026-07-31's bars were lost. The regression archive holds the same
+    bars in Neon."""
+    _patch_candles(monkeypatch, tmp_path / "absent.csv")
+    monkeypatch.setattr(trade_chart, "_query_archive", lambda day, symbol: _archive_bars())
+
+    bars = trade_chart.load_candles("2026-07-31", "NVDA")
+
+    assert len(bars) == 6
+    assert str(bars["timestamp"].dt.tz) == "America/New_York"
+    assert set(bars["symbol"]) == {"NVDA"}
+
+
+def test_no_file_and_no_archive_is_still_empty(tmp_path, monkeypatch):
+    _patch_candles(monkeypatch, tmp_path / "absent.csv")
+    monkeypatch.setattr(trade_chart, "_query_archive", lambda day, symbol: None)
+
+    assert trade_chart.load_candles("2026-07-31", "NVDA").empty
+
+
+def test_the_local_file_is_preferred_over_the_archive(tmp_path, monkeypatch):
+    _patch_candles(monkeypatch, _write_candles(tmp_path, _bars("2026-07-31_100000", "2026-07-31 14:00:00")))
+    monkeypatch.setattr(trade_chart, "_query_archive", lambda day, symbol: _archive_bars(99))
+
+    bars = trade_chart.load_candles("2026-07-31", "NVDA")
+
+    assert len(bars) == 12
+    assert set(bars["scan_id"]) == {"2026-07-31_100000"}
+
+
+def test_an_unreachable_archive_degrades_to_empty_rather_than_raising(tmp_path, monkeypatch):
+    def _explode(day, symbol):
+        raise RuntimeError("DATABASE_URL is not configured")
+
+    _patch_candles(monkeypatch, tmp_path / "absent.csv")
+    monkeypatch.setattr(trade_chart, "_query_archive", _explode)
+
+    assert trade_chart.load_candles("2026-07-31", "NVDA").empty

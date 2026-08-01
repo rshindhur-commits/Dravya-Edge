@@ -141,6 +141,30 @@ def closed_trades(events):
     return trades
 
 
+def archived_scan_count(trading_day):
+    """Scans archived to Neon today, or None when the archive cannot be read.
+
+    This is the number that was silently zero all of 2026-07-31: the engine ran
+    120 scans and the archive stopped at 09:25 ET, which nothing surfaced until
+    the day was over and the container's own files had been wiped. The archive is
+    what makes a session reconstructable after a redeploy, so its health belongs
+    on the page rather than in a query someone remembers to run.
+    """
+    try:
+        from sqlalchemy import text
+
+        from app.db.connection import get_engine
+
+        with get_engine().connect() as connection:
+            return int(connection.execute(text("""
+                SELECT COUNT(DISTINCT scan_id)
+                FROM scanner_snapshot
+                WHERE trading_day = CAST(:trading_day AS DATE)
+            """), {"trading_day": str(trading_day)}).scalar() or 0)
+    except Exception:
+        return None
+
+
 def engine_status():
     try:
         from app.runtime.scan_supervisor import status
@@ -222,6 +246,10 @@ class RenderContext:
             for row in self.telegram
             if row.get("event") == "SENT" and row.get("trade_id")
         }
+
+    @cached_property
+    def archived_scans(self):
+        return archived_scan_count(self.trading_day)
 
     @cached_property
     def scan_age_minutes(self):

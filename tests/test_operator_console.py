@@ -22,6 +22,7 @@ class FakeContext:
         self.db_writes_active = True
         self.scan_age_minutes = 3.0
         self.post_market = False
+        self.archived_scans = 12
         self.__dict__.update(overrides)
 
 
@@ -201,3 +202,38 @@ def test_review_export_skips_empty_and_absent_artifacts(tmp_path, monkeypatch):
     assert json.loads(
         zipfile.ZipFile(io.BytesIO(archive)).read("manifest.json")
     )["trading_day"] == "2026-07-31"
+
+
+def test_a_silent_archive_is_called_out_while_the_engine_is_running():
+    """2026-07-31's signature: 120 scans ran, the archive stopped at 09:25 ET,
+    nothing said so, and the container's own files were wiped on the next
+    deploy. By the time it was noticed the session was unreconstructable."""
+    cells = {label: (value, tone) for label, value, tone
+             in trading._health_cells(FakeContext(archived_scans=0))}
+
+    assert cells["Archive"] == ("NOT RECORDING", "bad")
+
+
+def test_an_idle_engine_with_an_empty_archive_is_not_an_alarm():
+    """Before the first scan of the day there is nothing to have archived."""
+    cells = {label: (value, tone) for label, value, tone in trading._health_cells(
+        FakeContext(archived_scans=0, engine={"thread_alive": True, "status": "IDLE", "scans": 0})
+    )}
+
+    assert cells["Archive"][1] == "ok"
+
+
+def test_an_archive_falling_behind_the_scan_count_warns():
+    cells = {label: (value, tone) for label, value, tone in trading._health_cells(
+        FakeContext(archived_scans=3, engine={"thread_alive": True, "status": "RUNNING",
+                                              "scans": 40, "failures": 0})
+    )}
+
+    assert cells["Archive"] == ("3 scans", "warn")
+
+
+def test_an_unreadable_archive_is_reported_as_unknown_not_as_healthy():
+    cells = {label: (value, tone) for label, value, tone
+             in trading._health_cells(FakeContext(archived_scans=None))}
+
+    assert cells["Archive"] == ("unavailable", "neutral")
