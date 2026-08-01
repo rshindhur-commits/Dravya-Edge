@@ -37,6 +37,86 @@ def strategy_trades_only(trades):
     return trades[~excluded]
 
 
+def _premium_measurable(trades):
+    """Trades whose premium P&L can actually be reconstructed.
+
+    Requires `option_entry_ask`, frozen at open since `eb56f75`. A trade without
+    it has no knowable entry price, so its `option_pnl_pct_net` is the pre-fix
+    artifact rather than a measurement. Absent column means nothing qualifies.
+    """
+
+    if trades is None or not len(trades):
+        return trades if trades is not None else pd.DataFrame()
+
+    if "option_entry_ask" not in getattr(trades, "columns", []):
+        return trades.iloc[0:0]
+
+    return trades[pd.to_numeric(trades["option_entry_ask"], errors="coerce").notna()]
+
+
+def build_spread_calibration(trades):
+    """Does `option_quality_score` predict what the round trip actually costs?
+
+    The open question from 2026-08-01. A contract scoring 95 that costs 11% to
+    round-trip would mean the score is blind to the cost that decides the trade.
+    That claim was first made against pre-`eb56f75` data and did not survive --
+    every figure behind it was the measurement artifact. This block accumulates
+    the clean version, one day at a time, so the question gets settled by data
+    instead of re-argued.
+
+    `entry_spread_pct` is what was quoted when the position was opened;
+    `realised_cost_pct` is both legs actually paid. They should be close. A wide
+    gap means the spread moved while the trade was held, which is a separate
+    risk nothing currently models.
+    """
+
+    priced = _premium_measurable(
+        strategy_trades_only(trades if trades is not None else pd.DataFrame())
+    )
+
+    if priced is None or not len(priced):
+        return {"measurable_trades": 0, "rows": [], "quality_vs_cost_gap": None}
+
+    quality = pd.to_numeric(priced.get("option_quality_score", pd.Series(dtype=float)), errors="coerce")
+    entry_spread = pd.to_numeric(priced.get("option_entry_spread_pct", pd.Series(dtype=float)), errors="coerce")
+    realised = pd.to_numeric(priced.get("option_spread_cost_pct", pd.Series(dtype=float)), errors="coerce")
+
+    rows = []
+
+    for position in range(len(priced)):
+        rows.append({
+            "symbol": priced.iloc[position].get("symbol"),
+            "option_quality_score": _none_or_round(quality.iloc[position]),
+            "entry_spread_pct": _none_or_round(entry_spread.iloc[position]),
+            "realised_cost_pct": _none_or_round(realised.iloc[position]),
+            # The failure this is watching for: a high score on an expensive
+            # round trip. Threshold matches watchlist 2.6.
+            "high_score_wide_spread": bool(
+                pd.notna(quality.iloc[position])
+                and pd.notna(realised.iloc[position])
+                and quality.iloc[position] >= 80
+                and realised.iloc[position] > 6
+            ),
+        })
+
+    both = pd.notna(entry_spread) & pd.notna(realised)
+
+    return {
+        "measurable_trades": int(len(priced)),
+        "rows": rows,
+        "high_score_wide_spread_count": int(sum(row["high_score_wide_spread"] for row in rows)),
+        # Positive means the spread widened while the position was held.
+        "quality_vs_cost_gap": (
+            round(float((realised[both] - entry_spread[both]).mean()), 2)
+            if both.any() else None
+        ),
+    }
+
+
+def _none_or_round(value, digits=2):
+    return None if pd.isna(value) else round(float(value), digits)
+
+
 def build_performance_statistics(trades):
     """Daily performance, in R and in the premium actually paid.
 
@@ -62,8 +142,16 @@ def build_performance_statistics(trades):
     gross_profit = float(wins.sum()) if len(wins) else 0.0
     gross_loss = abs(float(losses.sum())) if len(losses) else 0.0
 
-    net = pd.to_numeric(trades.get("option_pnl_pct_net", pd.Series(dtype=float)), errors="coerce").dropna()
-    spread = pd.to_numeric(trades.get("option_spread_cost_pct", pd.Series(dtype=float)), errors="coerce").dropna()
+    # Premium figures are only meaningful for trades whose entry ask was frozen
+    # at open (`eb56f75`). Before that, `option_pnl_pct_net` read the entry ask
+    # and the close ask from the same live-refreshed key and evaluated to minus
+    # the current spread on every trade regardless of outcome -- the tell is
+    # `net == -option_spread_pct` exactly, which holds for all four pre-fix
+    # trades on record. Averaging those produces a confident-looking number that
+    # measures nothing, so they count as unpriced rather than as data points.
+    priced = _premium_measurable(trades)
+    net = pd.to_numeric(priced.get("option_pnl_pct_net", pd.Series(dtype=float)), errors="coerce").dropna()
+    spread = pd.to_numeric(priced.get("option_spread_cost_pct", pd.Series(dtype=float)), errors="coerce").dropna()
     net_wins = net[net > 0]
 
     return {

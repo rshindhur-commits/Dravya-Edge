@@ -4094,6 +4094,23 @@ def _finalize_scan_outputs(
             scan_id=scan_id
         )
 
+        # Weekly subscriber results. Checked every scan and gated twice -- the
+        # due window (Friday close through the weekend) and a once-per-ISO-week
+        # dedup key -- so this is a no-op on all but one scan a week.
+        try:
+
+            from app.analytics.weekly_summary import dispatch_weekly_summary_if_due
+
+            weekly_summary_result = dispatch_weekly_summary_if_due(scan_id=scan_id)
+
+            if weekly_summary_result.get("sent") or weekly_summary_result.get("queued"):
+
+                print("[WEEKLY SUMMARY] dispatched to subscribers")
+
+        except Exception as exc:
+
+            print(f"[WEEKLY SUMMARY WARNING] {exc}")
+
     candidate_funnel = _build_candidate_funnel(
         df_results,
         telegram_summary

@@ -1,12 +1,12 @@
 {
   "trading_day": "2026-08-01",
-  "source_rows": 156,
-  "evidence_rows": 52,
-  "rows_expected": 156,
-  "rows_written": 52,
-  "duplicates_removed": 104,
-  "local_path": "D:\\Dravya_Trade_Works\\data\\daily\\2026-08-01\\candidate_evidence.parquet",
-  "database_rows": 52,
-  "db_rows_persisted": 52,
+  "source_rows": 364,
+  "evidence_rows": 63,
+  "rows_expected": 364,
+  "rows_written": 63,
+  "duplicates_removed": 301,
+  "local_path": "D:\\Dravya_Trade_Works\\data\\daily\\2026-08-01\\candidate_evidence.csv",
+  "database_rows": 63,
+  "db_rows_persisted": 63,
   "database_status": "PERSISTED"
 }

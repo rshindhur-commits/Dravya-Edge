@@ -82,39 +82,37 @@ class PaperTradeRepository(BestEffortRepository):
             )
         ]
 
-    def fetch_closed(self, trading_day):
-        """Closed trades for a trading day, flattened for the analytics layer.
+    def fetch_closed_between(self, start_day, end_day):
+        """Closed trades over an inclusive date range, flattened like `fetch_closed`.
 
-        The learning engine used to source completed trades only from
-        `paper_trade_events.csv` under data/daily/. On Streamlit Cloud that
-        directory is ephemeral and is wiped whenever the container restarts, so the
-        file was routinely absent and every learning metric reported
-        `completed_trades: 0`. `exit_quality_metrics` last recorded anything on
-        2026-07-25 for exactly this reason -- the trades were real, the measurement
-        was reading a file that no longer existed.
-
-        Postgres survives the restart, so it is the durable source. Fields the
-        analytics layer needs live in the JSONB payload; they are lifted to the top
-        level here so callers can treat this like the CSV it replaces.
+        The weekly subscriber summary needs a week at a time, and calling
+        `fetch_closed` seven times would be seven round trips to Neon for a report
+        that runs once. `end_day` is inclusive: callers think in trading days, not
+        half-open intervals, and an exclusive bound silently drops Friday.
         """
 
-        rows = self._fetch(
-            """
-            SELECT symbol, direction, status, entry_price, close_price,
-                   pnl_pct, r_multiple, option_entry_mid, option_close_mid,
-                   holding_profile, opened_at, closed_at, payload
-            FROM paper_trades
-            WHERE closed_at IS NOT NULL
-              AND closed_at >= CAST(:trading_day AS date)
-              AND closed_at < CAST(:trading_day AS date) + INTERVAL '1 day'
-            ORDER BY closed_at
-            """,
-            {"trading_day": str(trading_day)},
+        return self._flatten_closed(
+            self._fetch(
+                """
+                SELECT symbol, direction, status, entry_price, close_price,
+                       pnl_pct, r_multiple, option_entry_mid, option_close_mid,
+                       holding_profile, opened_at, closed_at, payload
+                FROM paper_trades
+                WHERE closed_at IS NOT NULL
+                  AND closed_at >= CAST(:start_day AS date)
+                  AND closed_at < CAST(:end_day AS date) + INTERVAL '1 day'
+                ORDER BY closed_at
+                """,
+                {"start_day": str(start_day), "end_day": str(end_day)},
+            )
         )
+
+    def _flatten_closed(self, rows):
+        """Lift the fields analytics needs out of the JSONB payload."""
 
         flattened = []
 
-        for row in rows:
+        for row in rows or []:
             payload = row.get("payload") or {}
             record = {key: value for key, value in row.items() if key != "payload"}
 
@@ -134,3 +132,35 @@ class PaperTradeRepository(BestEffortRepository):
             flattened.append(record)
 
         return flattened
+
+    def fetch_closed(self, trading_day):
+        """Closed trades for a trading day, flattened for the analytics layer.
+
+        The learning engine used to source completed trades only from
+        `paper_trade_events.csv` under data/daily/. On Streamlit Cloud that
+        directory is ephemeral and is wiped whenever the container restarts, so the
+        file was routinely absent and every learning metric reported
+        `completed_trades: 0`. `exit_quality_metrics` last recorded anything on
+        2026-07-25 for exactly this reason -- the trades were real, the measurement
+        was reading a file that no longer existed.
+
+        Postgres survives the restart, so it is the durable source. Fields the
+        analytics layer needs live in the JSONB payload; they are lifted to the top
+        level here so callers can treat this like the CSV it replaces.
+        """
+
+        return self._flatten_closed(
+            self._fetch(
+                """
+                SELECT symbol, direction, status, entry_price, close_price,
+                       pnl_pct, r_multiple, option_entry_mid, option_close_mid,
+                       holding_profile, opened_at, closed_at, payload
+                FROM paper_trades
+                WHERE closed_at IS NOT NULL
+                  AND closed_at >= CAST(:trading_day AS date)
+                  AND closed_at < CAST(:trading_day AS date) + INTERVAL '1 day'
+                ORDER BY closed_at
+                """,
+                {"trading_day": str(trading_day)},
+            )
+        )

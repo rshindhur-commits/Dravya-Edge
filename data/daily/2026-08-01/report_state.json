@@ -1,13 +1,13 @@
 {
   "metadata": {
-    "scan_id": "2026-08-01_002154",
-    "generation": "ec978f4e-ba75-458b-b197-3a69721ea37f",
+    "scan_id": "2026-08-01_094627",
+    "generation": "293cfdd5-683a-47ee-8e95-24ec15b70247",
     "schema": 1,
-    "created_at": "2026-08-01T04:21:54.177229Z"
+    "created_at": "2026-08-01T13:46:27.508640Z"
   },
-  "generated_at": "2026-08-01T04:24:01.940457+00:00",
+  "generated_at": "2026-08-01T13:49:11.108452+00:00",
   "trading_day": "2026-08-01",
-  "scan_id": "2026-08-01_002154",
+  "scan_id": "2026-08-01_094627",
   "status": "MISSING",
   "daily_report": {
     "exists": false,
@@ -24,8 +24,8 @@
   "scanner_snapshot": {
     "exists": true,
     "path": "D:\\Dravya_Trade_Works\\data\\daily\\2026-08-01\\scanner_output_close.csv",
-    "size_bytes": 224135,
-    "mtime": "2026-08-01T04:22:34.046873+00:00"
+    "size_bytes": 22906,
+    "mtime": "2026-08-01T13:46:45.132311+00:00"
   },
   "historical_trade_efficiency": {
     "daily": [
@@ -102,9 +102,9 @@
     "daily": [
       {
         "Trading Day": "2026-08-01",
-        "Average Entry Timing": 47.42,
-        "Late Entries": 14,
-        "Average TQS": 38.24,
+        "Average Entry Timing": null,
+        "Late Entries": 0,
+        "Average TQS": 20.0,
         "Average Rank": 10.5
       },
       {
@@ -120,15 +120,9 @@
     "daily": [
       {
         "Trading Day": "2026-08-01",
-        "Stage": "Entry",
-        "Count": 17,
-        "Percentage": 65.4
-      },
-      {
-        "Trading Day": "2026-08-01",
         "Stage": "Momentum",
-        "Count": 9,
-        "Percentage": 34.6
+        "Count": 26,
+        "Percentage": 100.0
       },
       {
         "Trading Day": "2026-07-31",
@@ -146,9 +140,9 @@
     "dominant_daily": [
       {
         "Trading Day": "2026-08-01",
-        "Dominant Blocking Stage": "Entry",
-        "Count": 17,
-        "Percentage": 65.4
+        "Dominant Blocking Stage": "Momentum",
+        "Count": 26,
+        "Percentage": 100.0
       },
       {
         "Trading Day": "2026-07-31",

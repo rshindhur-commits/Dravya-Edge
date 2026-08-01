@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -159,3 +160,65 @@ class ValidationStateBuilderTests(unittest.TestCase):
 if __name__ == "__main__":
 
     unittest.main()
+
+class SpreadCalibrationSurfacingTests(unittest.TestCase):
+    """The open question in watchlist 2.6 has to reach a human to get answered.
+
+    It is computed by the learning engine into `daily_engine_summary.json` and
+    lifted into the validation payload, so the dashboard reads one cached file
+    rather than making its own Postgres round trip.
+    """
+
+    def _payload_with_summary(self, summary):
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            day_dir = Path(temp_dir) / "2026-08-03"
+            day_dir.mkdir(parents=True)
+
+            if summary is not None:
+
+                (day_dir / "daily_engine_summary.json").write_text(
+                    json.dumps(summary), encoding="utf-8"
+                )
+
+            with patch(
+                "app.ui.cache.validation_state_builder.daily_path",
+                side_effect=lambda day, name: Path(temp_dir) / day / name,
+            ):
+
+                return build_validation_state_payload(
+                    "2026-08-03",
+                    scanner=pd.DataFrame(),
+                    paper_events=pd.DataFrame(),
+                    trend_capture=pd.DataFrame(),
+                )
+
+    def test_calibration_is_lifted_into_the_payload(self):
+
+        payload = self._payload_with_summary({
+            "spread_calibration": {
+                "measurable_trades": 2,
+                "high_score_wide_spread_count": 1,
+                "quality_vs_cost_gap": 3.4,
+                "rows": [{"symbol": "NVDA"}],
+            }
+        })
+
+        calibration = payload["spread_calibration"]
+
+        self.assertEqual(calibration["measurable_trades"], 2)
+        self.assertEqual(calibration["high_score_wide_spread_count"], 1)
+        self.assertEqual(calibration["quality_vs_cost_gap"], 3.4)
+
+    def test_missing_summary_yields_an_empty_block_not_a_crash(self):
+        """The learning engine writes first, but a failed scan can leave the
+        file absent. An empty dict renders as 'nothing measured yet'."""
+
+        self.assertEqual(self._payload_with_summary(None)["spread_calibration"], {})
+
+    def test_summary_without_the_key_yields_an_empty_block(self):
+
+        self.assertEqual(
+            self._payload_with_summary({"performance": {}})["spread_calibration"], {}
+        )

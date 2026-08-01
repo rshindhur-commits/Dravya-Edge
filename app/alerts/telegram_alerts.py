@@ -56,6 +56,7 @@ MAX_SENT_ALERTS = 1000
 ENTRY_EVENT_TYPE = "ENTRY"
 REVIEW_EVENT_TYPE = "REVIEW"
 UPDATE_EVENT_TYPE = "UPDATE"
+WEEKLY_SUMMARY_EVENT_TYPE = "WEEKLY_SUMMARY"
 
 
 EXIT_ALERT_TRADE_MODES = {
@@ -1418,9 +1419,7 @@ def _option_lifecycle_lines(trade, scanner_context=None):
 
 def _entry_reasons(scanner_context, setup):
 
-    setup_label = str(setup).replace("_", " ").title()
-    setup_label = setup_label.replace("Ema", "EMA").replace("Vwap", "VWAP")
-    reasons = [setup_label]
+    reasons = [_setup_label(setup)]
     health = str(scanner_context.get("V2 Trend Health Status") or "").upper()
     if health in {"STRONG", "HEALTHY"}:
 
@@ -1546,15 +1545,150 @@ def build_paper_entry_alert_message(trade, scanner_context, reason=None):
     return "\n".join([line for line in lines if line])
 
 
-def build_review_alert_message(symbol, entry_type, next_condition):
+def _setup_label(entry_type):
 
-    return "\n".join([
+    label = str(entry_type or "").replace("_", " ").title()
+
+    return label.replace("Ema", "EMA").replace("Vwap", "VWAP")
+
+
+def _review_evidence(
+    setup_score=None,
+    alignment_score=None,
+    relative_volume=None,
+    rs_rank_score=None
+):
+    """The measurable reasons a watch candidate earned a message.
+
+    Only facts that actually cleared a bar are listed, so an empty list means the
+    candidate has nothing to show for itself. That is the case
+    `TELEGRAM_MIN_REVIEW_SETUP_SCORE` is meant to stop reaching subscribers.
+    """
+
+    evidence = []
+
+    score = _number(setup_score)
+    if score is not None and score > 0:
+
+        evidence.append(f"Setup strength {score:.0f}%")
+
+    alignment = _number(alignment_score)
+    if alignment is not None and abs(alignment) > 0:
+
+        evidence.append(f"Timeframe alignment {alignment:+.0f}")
+
+    volume = _number(relative_volume)
+    if volume is not None and volume >= 1:
+
+        evidence.append(f"Volume {volume:.1f}x average")
+
+    rs_rank = _number(rs_rank_score)
+    if rs_rank is not None and abs(rs_rank) > 0:
+
+        evidence.append(f"Relative strength {rs_rank:+.0f}")
+
+    return evidence
+
+
+def build_review_alert_message(
+    symbol,
+    entry_type,
+    next_condition,
+    direction=None,
+    latest_price=None,
+    setup_score=None,
+    alignment_score=None,
+    relative_volume=None,
+    rs_rank_score=None,
+    risk_reward=None,
+    option_contract=None,
+    bar_timestamp=None
+):
+    """A watch candidate, with the evidence behind it and the level that decides it.
+
+    This message used to carry ticker, setup and next condition and nothing else
+    -- no price, no direction, no evidence, no levels. Review alerts are the bulk
+    of channel volume (11 of roughly 14 messages on 2026-07-31), so the thinnest
+    message in the system was also the one subscribers saw most. Every field
+    added here was already available at the call site and simply was not passed
+    through.
+
+    Everything stays optional so the shape degrades rather than breaks when a
+    field is missing: a section is omitted entirely rather than printing a dash.
+    """
+
+    option_contract = option_contract or {}
+
+    header = [_fmt(symbol)]
+
+    if direction:
+
+        header.append(_fmt(direction))
+
+    if _number(latest_price) is not None:
+
+        header.append(_money(latest_price))
+
+    lines = [
         "⚪ <b>WATCHLIST REVIEW</b>",
-        f"Ticker: {_fmt(symbol)}",
-        f"Setup: {_fmt(entry_type)}",
-        f"Required confirmation: {_fmt(next_condition)}",
-        "Status: Waiting for entry readiness. No action yet."
-    ])
+        " · ".join(header),
+        _format_alert_timestamp(bar_timestamp),
+        f"Setup: {_setup_label(entry_type)}",
+    ]
+
+    evidence = _review_evidence(
+        setup_score,
+        alignment_score,
+        relative_volume,
+        rs_rank_score
+    )
+
+    if evidence:
+
+        lines.append("")
+        lines.append("<b>WHY IT IS ON THE LIST</b>")
+        lines.extend(f"✅ {item}" for item in evidence)
+
+    lines.append("")
+    lines.append("<b>WHAT WOULD MAKE IT ACTIONABLE</b>")
+    lines.append(_fmt(next_condition))
+
+    planned = []
+
+    risk_reward_value = _number(risk_reward)
+    if risk_reward_value is not None and risk_reward_value > 0:
+
+        planned.append(f"Planned RR: {risk_reward_value:.1f}R")
+
+    if option_contract.get("ticker"):
+
+        planned.append(f"Contract: {_fmt(option_contract.get('ticker'))}")
+
+        detail = []
+
+        if _number(option_contract.get("contract_cost")) is not None:
+
+            detail.append(f"Cost {_money(option_contract.get('contract_cost'))}")
+
+        spread = _number(option_contract.get("spread_pct"))
+        if spread is not None:
+
+            detail.append(f"Spread {spread:.1f}%")
+
+        if detail:
+
+            planned.append(" · ".join(detail))
+
+    if planned:
+
+        lines.append("")
+        lines.append("<b>IF IT CONFIRMS</b>")
+        lines.extend(planned)
+
+    lines.append("")
+    lines.append("Status: Watch only. No position taken, no action required.")
+
+    return "\n".join(line for line in lines if line is not None)
 
 
 def _trade_r_multiple(trade, current_price):
@@ -2379,6 +2513,37 @@ def maybe_send_scanner_entry_alert(
 
     option_contract = option_contract or {}
 
+    # Volume valve, off by default. Checked before dedup on purpose: a candidate
+    # rejected here has not consumed its once-a-day key, so the same setup can
+    # still alert later in the session if it strengthens.
+    #
+    # Defaults to 0 because calibration against production said the setup score
+    # is the wrong axis to filter on. Across 9 sessions and 64 live
+    # REVIEW_TV_CHART candidates, scores ran min 38 / median 86 / p75 92, so a
+    # floor of 60 removed 1 of 42 deduped alerts and a floor of 70 removed the
+    # same 1. Anything that actually bites (80+) starts cutting candidates the
+    # scanner rates highly. Review volume was also 4.7/day, not the 11/day quoted
+    # in the watchlist -- 11 was a single-day peak on 07-31.
+    #
+    # Kept rather than deleted because the watchlist's own failure mode (">20 in
+    # a session means the dedup key is not holding") needs a dial that can be
+    # turned mid-session without a deploy. It is a circuit breaker, NOT a quality
+    # filter -- these candidates are already high-scoring by construction.
+    min_review_setup = _float_setting(
+        "TELEGRAM_MIN_REVIEW_SETUP_SCORE",
+        0.0
+    )
+    review_setup_score = _number(setup_score, 0.0) or 0.0
+
+    if review_setup_score < min_review_setup:
+
+        return {
+            "sent": False,
+            "reason": "REVIEW_SETUP_BELOW_FLOOR",
+            "setup_score": review_setup_score,
+            "floor": min_review_setup
+        }
+
     option_ticker = option_contract.get("ticker") or "NO_CONTRACT"
     alert_key = _review_alert_key(symbol, entry_type)
 
@@ -2393,7 +2558,16 @@ def maybe_send_scanner_entry_alert(
     message = build_review_alert_message(
         symbol,
         entry_type,
-        next_condition
+        next_condition,
+        direction=option_contract.get("type") or final_signal,
+        latest_price=latest_price,
+        setup_score=review_setup_score,
+        alignment_score=alignment_score,
+        relative_volume=relative_volume,
+        rs_rank_score=rs_rank_score,
+        risk_reward=(risk_setup or {}).get("risk_reward"),
+        option_contract=option_contract,
+        bar_timestamp=bar_timestamp
     )
 
     metadata = {
@@ -2534,4 +2708,185 @@ def maybe_send_trade_cancelled_alert(suggestion, reason=None, event_timestamp=No
         after_success=lambda _result: mark_alert_sent(alert_key, metadata),
         dispatch_metadata={"alert_key": alert_key, "metadata": metadata},
     )
+    return _queued_send_result(send_result, alert_key)
+
+def telegram_weekly_summary_enabled():
+
+    return _telegram_alert_type_enabled("TELEGRAM_WEEKLY_SUMMARY_ENABLED")
+
+
+def _weekly_summary_alert_key(start_day):
+    """One summary per ISO week, whatever day it is generated on.
+
+    Keyed on the week rather than the run date so a retry, a manual re-run or a
+    container restart on Saturday cannot post the same week twice.
+    """
+
+    iso_year, iso_week, _ = start_day.isocalendar()
+
+    return f"WEEKLY_SUMMARY_{iso_year}W{iso_week:02d}"
+
+
+def _pct(value, digits=0):
+
+    number = _number(value)
+    if number is None:
+
+        return None
+
+    return f"{number:.{digits}f}%"
+
+
+def _signed_r(value, digits=2):
+
+    number = _number(value)
+    if number is None:
+
+        return None
+
+    return f"{number:+.{digits}f}R"
+
+
+def build_weekly_outcome_summary_message(stats, start_day, end_day):
+    """The week's scorecard, in R and in premium.
+
+    Losses are stated as plainly as wins. A summary that only appears in good
+    weeks is worth less than no summary at all, because subscribers learn to read
+    its absence -- and the point of publishing results is that the channel can be
+    checked rather than believed.
+    """
+
+    stats = stats or {}
+    window = f"{start_day:%d %b} – {end_day:%d %b %Y}"
+
+    lines = [
+        "📊 <b>WEEKLY RESULTS</b>",
+        window,
+    ]
+
+    completed = int(stats.get("completed_trades") or 0)
+
+    if not completed:
+
+        lines += [
+            "",
+            "No positions were closed this week.",
+            "",
+            "Nothing to report is a result too — no setup met the entry bar, "
+            "so no trade was taken.",
+        ]
+
+        return "\n".join(lines)
+
+    wins = int(stats.get("wins") or 0)
+    losses = int(stats.get("losses") or 0)
+
+    lines += [
+        "",
+        "<b>TRADES</b>",
+        f"Closed: {completed}",
+        f"Won {wins} · Lost {losses}"
+        + (f" ({_pct(stats.get('win_rate'))} win rate)" if _pct(stats.get("win_rate")) else ""),
+    ]
+
+    risk_lines = []
+
+    if _signed_r(stats.get("average_r")):
+
+        risk_lines.append(f"Average per trade: {_signed_r(stats.get('average_r'))}")
+
+    if _signed_r(stats.get("total_r")):
+
+        risk_lines.append(f"Total: {_signed_r(stats.get('total_r'))}")
+
+    if _number(stats.get("profit_factor")) is not None:
+
+        risk_lines.append(f"Profit factor: {_number(stats.get('profit_factor')):.2f}")
+
+    if _signed_r(stats.get("max_drawdown_r")):
+
+        risk_lines.append(f"Max drawdown: {_number(stats.get('max_drawdown_r')):.2f}R")
+
+    if risk_lines:
+
+        lines += ["", "<b>IN R (risk units)</b>"] + risk_lines
+
+    # Premium is the honest instrument: R is measured on the underlying, but what
+    # was actually bought is the option, spread included.
+    priced = int(stats.get("priced_trades") or 0)
+    premium_lines = []
+
+    if priced:
+
+        if _pct(stats.get("net_win_rate")) is not None:
+
+            premium_lines.append(f"Win rate after costs: {_pct(stats.get('net_win_rate'))}")
+
+        if _pct(stats.get("average_option_pnl_pct"), 1) is not None:
+
+            premium_lines.append(
+                f"Average per trade: {_number(stats.get('average_option_pnl_pct')):+.1f}%"
+            )
+
+        if _pct(stats.get("average_spread_cost_pct"), 1) is not None:
+
+            premium_lines.append(
+                f"Average spread cost: {_number(stats.get('average_spread_cost_pct')):.1f}%"
+            )
+
+    if premium_lines:
+
+        lines += [
+            "",
+            f"<b>IN PREMIUM (what was actually paid, {priced} of {completed} priced)</b>",
+        ] + premium_lines
+
+    if not stats.get("meaningful_sample"):
+
+        lines += [
+            "",
+            f"⚠️ {completed} trade{'s' if completed != 1 else ''} is not a "
+            "statistically meaningful sample. These figures describe what "
+            "happened, not what to expect.",
+        ]
+
+    return "\n".join(lines)
+
+
+def maybe_send_weekly_outcome_summary(
+    stats,
+    start_day,
+    end_day,
+    scan_id=None,
+    force=False
+):
+    """Post the week's results once, to the same channel that carried the calls."""
+
+    if not telegram_weekly_summary_enabled():
+
+        return {"sent": False, "reason": "TELEGRAM_WEEKLY_SUMMARY_DISABLED"}
+
+    alert_key = _weekly_summary_alert_key(start_day)
+
+    if not force and alert_was_sent(alert_key):
+
+        return {"sent": False, "reason": "DUPLICATE_ALERT", "alert_key": alert_key}
+
+    metadata = {
+        "event_type": WEEKLY_SUMMARY_EVENT_TYPE,
+        "message_type": "WEEKLY_SUMMARY",
+        "candidate_key": alert_key,
+        "decision": "REPORT",
+        "week_start": str(start_day),
+        "week_end": str(end_day),
+        "completed_trades": int((stats or {}).get("completed_trades") or 0),
+        "closed": True,
+    }
+    send_result = send_telegram_alert(
+        build_weekly_outcome_summary_message(stats, start_day, end_day),
+        after_success=lambda _result: mark_alert_sent(alert_key, metadata),
+        scan_id=scan_id,
+        dispatch_metadata={"alert_key": alert_key, "metadata": metadata},
+    )
+
     return _queued_send_result(send_result, alert_key)

@@ -8,7 +8,10 @@ from app.storage.daily_paths import daily_path, live_path
 from app.promotion.promotion_rules import evaluate_promotion
 from app.analytics.market_regime import evaluate_market_regime
 from app.analytics.trade_lifecycle import evaluate_trade_lifecycle
-from app.analytics.performance_statistics import build_performance_statistics
+from app.analytics.performance_statistics import (
+    build_performance_statistics,
+    build_spread_calibration,
+)
 
 
 def build_feedback_loop(candidate_evidence, refresh_events, evidence_days=0, completed_trades=0):
@@ -287,9 +290,12 @@ def write_daily_learning_summary(trading_day):
         evidence, refresh, completed_trades=int(len(read("trend_capture_analysis.csv")))
     )
     summary["aggregate_statistics"] = build_aggregate_statistics(evidence)
-    summary["performance"] = build_performance_statistics(
-        _closed_trades_for(trading_day, paper_events)
-    )
+    closed_today = _closed_trades_for(trading_day, paper_events)
+    summary["performance"] = build_performance_statistics(closed_today)
+    # Open question from 2026-08-01: does option_quality_score predict the round
+    # trip actually paid? Accumulated daily so it is answered by data rather than
+    # re-argued. See watchlist 2.6.
+    summary["spread_calibration"] = build_spread_calibration(closed_today)
     from app.db.learning_engine_repository import LearningEngineRepository
     repository = LearningEngineRepository()
     db_persisted = repository.persist(summary, comparisons.to_dict("records"))

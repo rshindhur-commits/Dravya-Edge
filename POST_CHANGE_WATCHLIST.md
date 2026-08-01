@@ -109,10 +109,77 @@ for a week.
 (symbol + setup + date), so a candidate alerts **once a day** however many scans
 it appears in.
 
-**Expect ~11/day.** On 07-31 that was 11 alerts against 65 raw review events,
-across NFLX, NVDA, QQQ, SPCX, AAPL, ORCL, PLTR, TSLA, AMZN and CRWD.
+**Expect ~4.7/day.** Superseding the "~11/day" this section previously carried:
+11 was 07-31 alone (against 65 raw review events, across NFLX, NVDA, QQQ, SPCX,
+AAPL, ORCL, PLTR, TSLA, AMZN and CRWD). Measured over 9 sessions in production it
+is 42 deduped alerts, 4.7/day. See 1.6 for the query.
 
 **Trigger.** More than ~20 in a session means the dedup key is not holding.
+
+### 1.6 Review alerts now carry a quality floor, and much more content
+
+**New on 2026-08-01.** Two changes to the message subscribers see most.
+
+**A volume valve, shipped OFF.** `TELEGRAM_MIN_REVIEW_SETUP_SCORE` (default **0**)
+blocks candidates with reason `REVIEW_SETUP_BELOW_FLOOR`. Checked *before* dedup,
+so a candidate rejected at 09:50 can still alert at 11:20 if it strengthens.
+
+**It defaults off because calibration said the setup score is the wrong axis.**
+Measured against production `candidate_snapshot`, 64 live `REVIEW_TV_CHART`
+candidates over 9 sessions:
+
+| | |
+| --- | --- |
+| Setup score | min 38, p25 79.8, **median 86**, p75 92, max 97 |
+| Option quality | min 75, **median 100**, none below the 65 alert bar |
+| Deduped alerts | **42 over 9 days = 4.7/day** |
+| Floor 60 | removes **1 of 42** |
+| Floor 70 | removes the same 1 |
+| Floor 80 | removes 8, and starts cutting candidates the scanner rates highly |
+
+Two corrections to what this file previously said. Review volume is **4.7/day,
+not ~11/day** — 11 was a single-day peak on 07-31, quoted as if it were the norm.
+And these candidates are **not low quality on either axis**; they reached
+`REVIEW_TV_CHART` by scoring well, so filtering them on score is close to a no-op.
+
+**Kept rather than deleted** because §1.5's own failure mode (">20 in a session
+means the dedup key is not holding") needs a dial that turns mid-session without
+a deploy. It is a circuit breaker, not a quality filter.
+
+**Watch.** Daily review alert count. **Trigger.** Above ~20/day, set this to 80
+as a stopgap and fix the dedup key; below ~2/day, check nothing else is
+suppressing them.
+
+**Content.** The message carried ticker, setup and next condition and nothing
+else — no price, no direction, no evidence, no levels. It now carries price,
+direction, the evidence that earned the listing (setup strength, alignment,
+relative volume, relative strength), the confirmation still needed, and the
+contract with cost and spread if one was selected. Every field was already
+available at the call site and simply was not passed through. Sections are
+omitted rather than dashed when data is missing.
+
+### 1.7 Weekly results are posted to the channel
+
+**New on 2026-08-01.** `dispatch_weekly_summary_if_due` runs on every scan and is
+gated twice — a due window (Friday's close through the weekend) and a
+once-per-ISO-week dedup key — so it is a no-op on all but one scan a week.
+
+Reports in **R and in premium**, because R alone measures the wrong instrument.
+The first real week bears this out: 2026-07-27 to 07-31 was 42.9% win rate and
+−0.09R average, but **0% win rate after costs**, −4.45% average per trade against
+a 7.95% average spread. A summary publishing only R would publish the flattering
+half.
+
+Samples under 30 trades carry an explicit "not statistically meaningful" line.
+
+**Watch.** That exactly one summary goes out per week, and that `priced_trades`
+rises toward `completed_trades` as trades opened after `eb56f75` close — only 3
+of 7 were priced in the first week, and unpriced trades are invisible to the
+premium figures.
+
+**Trigger.** Two summaries in a week means the ISO-week key is not holding. Zero
+means either nothing scanned Friday evening — recover with
+`python -m tools.send_weekly_summary` — or `TELEGRAM_WEEKLY_SUMMARY_ENABLED` is off.
 
 ---
 
@@ -185,7 +252,53 @@ before the fix, which is the tell.
 spread, not the entry spread. Entry economics cannot be reconstructed after the
 fact.
 
-### 2.6 Earnings blackout
+### 2.6 `option_quality` vs the spread actually paid — open, and not yet measurable
+
+**Claimed 2026-08-01, retracted the same day.** The claim was that
+`option_quality_score` is blind to round-trip cost, on this evidence:
+
+| Symbol | `option_quality_score` | `option_spread_cost_pct` | `option_pnl_pct_net` | live spread |
+| --- | --- | --- | --- | --- |
+| NVDA | 100 | 2.17% | −5.38% | 5.38% |
+| NVDA | 95 | −2.06% | −2.20% | 2.20% |
+| CRWD | 40 | 14.28% | −9.21% | 9.21% |
+| NVDA | 95 | 11.62% | −1.94% | 1.94% |
+
+**Every row is the pre-`eb56f75` artifact 2.5 describes.** `net` equals
+*minus the live spread* exactly, in all four — the signature of reading the entry
+ask and the close ask from the same live-refreshed key. **Zero** of the four
+carry a frozen `option_entry_ask`. The 11.62% "spread cost" is just
+`option_pnl_pct` (9.68%) minus that artifact (−1.94%); it never measured a spread.
+
+So there is **no evidence either way** about whether the quality score tracks
+round-trip cost, and no post-fix priced trade exists yet to provide any. Retuning
+the score or the spread ceilings now would be tuning against corrupted data —
+the exact failure this file was opened to prevent.
+
+**The instrumentation is already in place.** `option_entry_bid`,
+`option_entry_ask` and `option_entry_spread_pct` are all frozen at open as of
+`eb56f75`. Nothing more is needed; the gap is elapsed time.
+
+**Two changes landed instead of a retune:**
+
+1. `build_performance_statistics` now counts a trade as *priced* only when it
+   carries a frozen `option_entry_ask`. Pre-fix trades report as unpriced rather
+   than contributing a confident-looking average of nothing. This is why the
+   first weekly summary published "0% win rate after costs on a 7.95% spread" —
+   all three of its priced trades were the artifact.
+2. `build_spread_calibration` runs daily into `daily_engine_summary.json` under
+   `spread_calibration`, recording `option_quality_score` against
+   `option_entry_spread_pct` and realised `option_spread_cost_pct` per trade.
+
+**Watch.** `spread_calibration.measurable_trades` climbing above zero, then
+`high_score_wide_spread_count`.
+
+**Trigger.** Two trades scoring above 80 with realised cost above 6% and the
+score needs the entry spread folded in. A large positive `quality_vs_cost_gap`
+means something different — the spread widened while the position was held, which
+is a risk nothing currently models and no entry-time score could have caught.
+
+### 2.7 Earnings blackout
 
 Migration 023 applied, 4,777 dates cached, refreshed 01:19 ET on 07-31.
 
@@ -194,7 +307,7 @@ Migration 023 applied, 4,777 dates cached, refreshed 01:19 ET on 07-31.
 
 **Trigger.** Not blocked on those dates, or `max(fetched_at)` going stale.
 
-### 2.7 The scan's own record now survives
+### 2.8 The scan's own record now survives
 
 `persist_scan_artifacts` and `persist_regression_snapshot` are no longer
 cancelable (`f13002b`).
@@ -211,7 +324,7 @@ trading_day = current_date` should equal the run count, and no run should remain
 
 **Trigger.** Any gap, particularly between 09:30 and 09:45.
 
-### 2.8 `rule_performance` starts receiving rows
+### 2.9 `rule_performance` starts receiving rows
 
 It had **never** received a row: `write_daily_learning_summary` passed
 `entry_exit_v2_shadow.csv` where the waterfall was expected, a frame with no
