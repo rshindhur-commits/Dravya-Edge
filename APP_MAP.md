@@ -94,8 +94,20 @@ worker for best-effort DB writes.
 
 ## 3. Streamlit pages
 
-Sidebar (always rendered, in this order): auto-refresh controls → paper automation controls →
-daily validation report controls → downloads → **Navigation radio** → `Run scanner now` button.
+Sidebar (2026-07-31 order): **Navigation radio** → **System** status → auto-refresh controls →
+paper automation controls → daily validation report controls → downloads. Navigation and System
+are `st.sidebar.container()` placeholders claimed first and filled last, because the controls
+between them start the scan engine and return state the routing needs. Navigation previously sat
+fourth, under three blocks of controls. `_render_system_status` answers "is the machine healthy"
+— engine state, last/next scan, scan and failure counts, DB writes, Polygon key — and absorbs the
+orphaned `_render_runtime_key_status`, which nothing had called.
+
+Navigation is **Trading / Validation / Research / Developer**. Replay, Regression, Reports and
+Learning became tabs on `app/ui/pages/research.py` on 2026-07-31; each tab keeps its own
+cached-state-then-frame fallback, and the scanner frame is loaded lazily so opening Research for
+the Regression tab costs no read of `scanner_output.xlsx`. `_migrate_dashboard_page` redirects a
+session left on a folded page name — Streamlit raises when a radio's stored session value is not
+one of its options, so an open tab would otherwise break on its next rerun after the redeploy.
 
 Downloads were consolidated on 2026-07-31 into a single `Downloads` expander. Before that they
 were split across the Operations block and a `Tools: Downloads` expander, which served the
@@ -116,6 +128,17 @@ preserves what a redeploy would otherwise wipe. Buttons removed as redundant or 
 | **Validation** | Did execution behave well today? | `validation_state.json` (60s TTL) | trade-efficiency CSV path in `dashboard.py` |
 | **Replay** | What would saved scanner state have done? | `replay_state.json` (mtime) | `offline_replay*.csv` |
 | **Regression** | Would current code have improved an archived day? | Neon `scanner_snapshot` / `scanner_regression_baseline` / `regression_run` | local `data/regression/` cache |
+
+**HSR was unrunnable until 2026-07-31.** `app/db/connection.py` only read `os.getenv("DATABASE_URL")`
+and relied on another module having called `load_dotenv()` as an import side effect. Entry points
+that reach the database directly do not import those — `tools/regression_runner.py` imports only
+`app.regression` — so the URL was unset, and `ScannerSnapshotRepository.load_day`'s bare
+`except: return []` reported a configuration fault as "No scanner snapshots in Neon or local
+fallback" for a day holding 702 archived rows. `connection.py` now loads `.env` itself with
+`override=False` (real env and Streamlit Secrets still win, which is what Cloud needs), and the
+repository announces read failures instead of swallowing them. `regression_runner.py` also
+reconfigures stdout to UTF-8: the verdict strings carry emoji and the tool completed a whole
+regression before dying printing its own result on a cp1252 console.
 | **Reports** | Am I improving across days? | `report_state.json` (mtime) | daily validation HTML panel |
 | **Learning** | What is the shadow/V2 evidence saying? | Neon `daily_engine_summary` → `data/live/daily_engine_summary.json` | — |
 | **Developer** | Is the system healthy? | `runtime_state.json`, `runtime_health.json`, `runtime_*.csv` | lazy `Load ...` toggles per panel |
@@ -140,13 +163,35 @@ stale is a fault before 16:00 ET and expected after it. `app/ui/components.py` h
 `status_card_grid`, `operator_bar` and `position_card`; the R gauge is anchored on **-1R**, not
 zero, because position risk is only readable against the stop — half a bar means breakeven.
 
+The page was split on 2026-07-31: `app/ui/render_context.py` owns data access, `app/ui/pages/activity.py`
+owns the timeline, and `trading.py` renders. `RenderContext` reads each source **at most once per
+render** through `cached_property`, and a source no renderer asks for is never read at all. Before
+this, one render read `paper_trade_state.json` four times, re-parsed the telegram audit two to
+three times and read `paper_trade_events.csv` twice — on a page that auto-refreshes all session.
+
+`app/ui/timestamps.py` is the only correct way to parse this app's timestamps. `format_timestamp`
+([app/main.py](app/main.py)) **used** to render with `%Z`, so `Current ET` and everything derived
+from it — including `activity_trace.csv` — carried `2026-07-31 00:38:19 EDT`. Pandas parses that
+with a FutureWarning, would raise in a later version, and meanwhile silently dropped the zone,
+turning an Eastern instant into a naive one four hours off. Since 2026-07-31 the writer emits a
+numeric offset (`2026-07-31 00:38:19-04:00`), which pandas reads natively and which follows DST;
+naive inputs are stamped Eastern rather than left ambiguous. **Archived files still hold the
+abbreviation form**, so every read must accept both — `to_utc` / `to_utc_series` do, and treat
+naive values as Eastern because that is what the column name promises.
+
 `app/ui/trade_chart.py` draws 5m candles from `candles_5m.csv` with the engine's own entry, stop,
 target and exit marked, and emits TradingView deep links (`REVIEW_TV_CHART` is the most common
 action status the engine produces — 238 of 403 auto-paper decisions on 2026-07-31 — and had no
-in-app destination before this). Two traps that module handles: every scan re-fetches the session
-on its own anchor, so the file holds **several interleaved 5m grids** offset by a minute or two
-(NVDA carried three on 2026-07-31) and only one scan's bars may be charted together; and roughly a
-quarter of rows are exact duplicates.
+in-app destination before this).
+
+Both candle-file defects were fixed at the writer on 2026-07-31, but **files written before that
+still carry them**, so the reader keeps its defences. Polygon anchors aggregate windows to `from_`,
+and `from_` was "now minus N days" unrounded, so every scan requested a different grid: the file
+held several interleaved 5m grids a minute or two apart (NVDA carried three) on top of ~25% exact
+duplicates. `technical_indicators.floor_to_bar` now snaps the window to a bar boundary — which also
+restores the `get_aggs_cached` hit rate, since the cache keys on `from_` — and
+`_append_daily_candles` skips `(symbol, timestamp)` pairs already in the file, seeding its key set
+from disk so a mid-session restart does not start duplicating again.
 
 The Opportunity Board and the activity trace both render the **five independent layers**:
 `Scanner Recommendation` (`ENTRY_RECOMMENDED`) → `Execution Eligibility` / `Execution Outcome` /

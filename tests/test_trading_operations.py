@@ -1,12 +1,12 @@
 import pandas as pd
 
-from app.ui.pages.trading import (
-    _activity_category,
-    _activity_marker,
-    _paper_activity_context,
-    _risk_alerts,
-    _trading_day,
+from app.ui.pages.activity import (
+    activity_category as _activity_category,
+    activity_marker as _activity_marker,
+    paper_activity_context as _paper_activity_context,
 )
+from app.ui.pages.trading import _risk_alerts
+from app.ui.render_context import trading_day_of as _trading_day
 
 
 def test_trading_day_prefers_explicit_value_then_scan_id():

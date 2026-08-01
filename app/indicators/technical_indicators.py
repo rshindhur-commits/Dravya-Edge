@@ -77,6 +77,47 @@ MIN_5M_BARS_FOR_15M_INDICATORS = max(
 )
 
 
+def floor_to_bar(moment, timespan, multiplier):
+    """Snap a moment down to the start of its bar.
+
+    Polygon anchors aggregate windows to the `from_` timestamp, so an unrounded
+    "now minus N days" gave every scan a slightly different grid: scan A
+    returned bars on :00/:05/:10 and scan B on :02/:07/:12. Both are valid 5m
+    bars and neither is a duplicate of the other by timestamp, so
+    `candles_5m.csv` accumulated several interleaved grids -- NVDA carried three
+    on 2026-07-31, 578 "5m" bars sitting 1-2 minutes apart -- and any chart drawn
+    from them overlaid candles for overlapping periods.
+
+    It also cost every cache hit: `get_aggs_cached` keys on `from_`, so a
+    jittering anchor refetched the same window from Polygon on every scan.
+    """
+
+    if timespan == "minute":
+
+        step = max(1, int(multiplier or 1))
+
+        return moment.replace(
+            minute=(moment.minute // step) * step,
+            second=0,
+            microsecond=0
+        )
+
+    if timespan == "hour":
+
+        return moment.replace(
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+
+    return moment.replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0
+    )
+
+
 def get_polygon_data(
     symbol,
     multiplier,
@@ -151,10 +192,12 @@ def get_polygon_data(
     # )
 
     from_date = int(
-        (
-            now_market - timedelta(days=days_back)
+        floor_to_bar(
+            now_market - timedelta(days=days_back),
+            timespan,
+            multiplier
         ).timestamp() * 1000
-    )    
+    )
 
     # =====================================
     # ROUND TO COMPLETED MARKET CANDLE
@@ -313,6 +356,11 @@ def get_polygon_data(
             now_market,
             afterhours_close
         )
+
+        # Every other branch lands on a completed bar; this one carried the
+        # current second straight into `to_`, which re-busted the aggregate
+        # cache on each scan and left the final bar partial.
+        rounded_market = floor_to_bar(rounded_market, timespan, multiplier)
 
     else:
 

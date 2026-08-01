@@ -1,0 +1,51 @@
+{
+  "trading_day": "2026-07-31",
+  "context": {
+    "trading_day": "2026-07-31",
+    "snapshot_folder": "D:\\Dravya_Trade_Works\\data\\daily\\2026-07-31\\scanner_snapshots",
+    "baseline_folder": "D:\\Dravya_Trade_Works\\data\\regression\\2026-07-31\\baseline",
+    "results_folder": "D:\\Dravya_Trade_Works\\data\\regression\\2026-07-31",
+    "current_strategy_version": "hsr-health-check",
+    "baseline_version": "frozen",
+    "readonly": true
+  },
+  "baseline": {
+    "trades": 3,
+    "wins": 1,
+    "losses": 2,
+    "win_rate": 33.3,
+    "total_r": -0.47,
+    "average_r": -0.16,
+    "profit_factor": 0.56,
+    "priced_trades": 0,
+    "pricing_coverage_pct": 0.0,
+    "net_win_rate": null,
+    "total_option_pnl_pct": null,
+    "average_option_pnl_pct": null
+  },
+  "current": {
+    "trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": 0.0,
+    "total_r": 0.0,
+    "average_r": 0.0,
+    "profit_factor": null,
+    "priced_trades": 0,
+    "net_win_rate": null,
+    "total_option_pnl_pct": null,
+    "average_option_pnl_pct": null,
+    "pricing_coverage_pct": 0.0
+  },
+  "comparison": {
+    "new": [],
+    "removed": [
+      "CRWD|O:CRWD260807C00195000|2026-07-31 11:36:33",
+      "NVDA|O:NVDA260807C00197500|2026-07-31 10:58:46",
+      "NVDA|O:NVDA260807C00197500|2026-07-31 12:57:59"
+    ],
+    "changed": []
+  },
+  "net_gain_r": 0.47,
+  "verdict": "\u2705 Strategy Improved"
+}

@@ -1,7 +1,6 @@
 import pandas as pd
 
 from app.ui import trade_chart
-from app.ui.pages import trading
 
 
 def _write_candles(tmp_path, rows):
@@ -115,74 +114,3 @@ def test_build_markers_reads_both_spellings_and_rejects_unusable_prices():
     assert empty["entry_price"] is None
     assert empty["stop_price"] is None
     assert empty["exit_time"] is None
-
-
-def _write_events(tmp_path, rows):
-    day_dir = tmp_path / "data" / "daily" / "2026-07-31"
-    day_dir.mkdir(parents=True)
-    pd.DataFrame(rows).to_csv(day_dir / "paper_trade_events.csv", index=False)
-    return tmp_path
-
-
-def test_entries_used_counts_the_day_even_when_the_open_row_is_missing(tmp_path, monkeypatch):
-    """The 2026-07-30 file holds an AUTO_EXIT whose OPEN row never landed;
-    counting OPEN events reported zero entries for a day that took a trade."""
-    monkeypatch.setattr(trading, "ROOT_DIR", _write_events(tmp_path, [{
-        "event_type": "AUTO_EXIT",
-        "trade_key": "NVDA|O:NVDA260807C00197500|2026-07-31 10:58:46",
-        "symbol": "NVDA",
-    }]))
-
-    assert trading._entries_used("2026-07-31") == 1
-
-
-def test_entries_used_ignores_a_position_carried_in_from_a_previous_day(tmp_path, monkeypatch):
-    monkeypatch.setattr(trading, "ROOT_DIR", _write_events(tmp_path, [
-        {"event_type": "AUTO_EXIT",
-         "trade_key": "NVDA|O:NVDA260807C00197500|2026-07-30 15:10:00", "symbol": "NVDA"},
-        {"event_type": "OPEN",
-         "trade_key": "CRWD|O:CRWD260807C00195000|2026-07-31 11:36:33", "symbol": "CRWD"},
-    ]))
-
-    assert trading._entries_used("2026-07-31") == 1
-
-
-def test_closed_trades_stitch_entry_time_back_onto_the_close_row(tmp_path, monkeypatch):
-    monkeypatch.setattr(trading, "ROOT_DIR", _write_events(tmp_path, [
-        {"event_type": "OPEN", "trade_key": "NVDA|OPT|2026-07-31 10:58:46",
-         "symbol": "NVDA", "direction": "CALL", "event_time_et": "2026-07-31T10:58:46-04:00",
-         "entry_price": 198.24, "exit_price": None, "r_multiple": None, "exit_reason": None},
-        {"event_type": "AUTO_EXIT", "trade_key": "NVDA|OPT|2026-07-31 10:58:46",
-         "symbol": "NVDA", "direction": "CALL", "event_time_et": "2026-07-31T11:11:25-04:00",
-         "entry_price": 198.24, "exit_price": 197.5, "r_multiple": -0.74,
-         "exit_reason": "VWAP invalidation"},
-    ]))
-
-    trades = trading._closed_trades("2026-07-31")
-
-    assert len(trades) == 1
-    assert trades[0]["entry_time"] == "2026-07-31T10:58:46-04:00"
-    assert trades[0]["exit_time"] == "2026-07-31T11:11:25-04:00"
-    assert trades[0]["r_multiple"] == -0.74
-    assert trades[0]["closed_how"] == "AUTO_EXIT"
-
-
-def test_open_positions_are_not_reported_as_closed_trades(tmp_path, monkeypatch):
-    monkeypatch.setattr(trading, "ROOT_DIR", _write_events(tmp_path, [{
-        "event_type": "OPEN", "trade_key": "NVDA|OPT|2026-07-31 12:57:59",
-        "symbol": "NVDA", "event_time_et": "2026-07-31T12:57:59-04:00",
-    }]))
-
-    assert trading._closed_trades("2026-07-31") == []
-
-
-def test_post_market_switch_follows_the_close_and_the_weekend():
-    from datetime import datetime
-
-    friday_open = datetime(2026, 7, 31, 11, 0, tzinfo=trading.ET_TZ)
-    friday_closed = datetime(2026, 7, 31, 16, 30, tzinfo=trading.ET_TZ)
-    saturday = datetime(2026, 8, 1, 11, 0, tzinfo=trading.ET_TZ)
-
-    assert not trading._is_post_market(friday_open)
-    assert trading._is_post_market(friday_closed)
-    assert trading._is_post_market(saturday)

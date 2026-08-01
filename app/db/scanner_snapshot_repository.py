@@ -110,6 +110,11 @@ class ScannerSnapshotRepository:
         return metrics
 
     def load_day(self, trading_day):
+        # A swallowed failure here is indistinguishable from an empty archive,
+        # which is how an unconfigured DATABASE_URL surfaced to the operator as
+        # "No scanner snapshots" for a day holding 702 rows. Read failures are
+        # still non-fatal -- HSR falls back to the local snapshot folder -- but
+        # they must say so.
         try:
             with get_engine().connect() as connection:
                 rows = connection.execute(text("""
@@ -120,7 +125,8 @@ class ScannerSnapshotRepository:
                     ORDER BY scan_timestamp, scan_id
                 """), {"trading_day": trading_day}).mappings().all()
             return [dict(row) for row in rows]
-        except Exception:
+        except Exception as exc:
+            print(f"[SCANNER SNAPSHOT WARNING] load_day({trading_day}) failed: {exc}")
             return []
 
     def archive_status(self, trading_day):
@@ -132,8 +138,9 @@ class ScannerSnapshotRepository:
                     WHERE trading_day = CAST(:trading_day AS DATE)
                 """), {"trading_day": trading_day}).mappings().one()
             return {"available": bool(row["rows"]), "rows": int(row["rows"]), "scans": int(row["scans"])}
-        except Exception:
-            return {"available": False, "rows": 0, "scans": 0}
+        except Exception as exc:
+            print(f"[SCANNER SNAPSHOT WARNING] archive_status({trading_day}) failed: {exc}")
+            return {"available": False, "rows": 0, "scans": 0, "error": str(exc)}
 
 
 class RegressionBaselineRepository:

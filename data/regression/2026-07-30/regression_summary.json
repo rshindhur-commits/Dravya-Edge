@@ -1,0 +1,54 @@
+{
+  "trading_day": "2026-07-30",
+  "context": {
+    "trading_day": "2026-07-30",
+    "snapshot_folder": "D:\\Dravya_Trade_Works\\data\\daily\\2026-07-30\\scanner_snapshots",
+    "baseline_folder": "D:\\Dravya_Trade_Works\\data\\regression\\2026-07-30\\baseline",
+    "results_folder": "D:\\Dravya_Trade_Works\\data\\regression\\2026-07-30",
+    "current_strategy_version": "hsr-health-check",
+    "baseline_version": "frozen",
+    "readonly": true
+  },
+  "baseline": {
+    "trades": 5,
+    "wins": 3,
+    "losses": 1,
+    "win_rate": 75.0,
+    "total_r": 8.91,
+    "average_r": 2.23,
+    "profit_factor": 9.91,
+    "priced_trades": 0,
+    "pricing_coverage_pct": 0.0,
+    "net_win_rate": null,
+    "total_option_pnl_pct": null,
+    "average_option_pnl_pct": null
+  },
+  "current": {
+    "trades": 5,
+    "wins": 3,
+    "losses": 1,
+    "win_rate": 75.0,
+    "total_r": 8.91,
+    "average_r": 2.23,
+    "profit_factor": 9.91,
+    "priced_trades": 0,
+    "pricing_coverage_pct": 0.0,
+    "net_win_rate": null,
+    "total_option_pnl_pct": null,
+    "average_option_pnl_pct": null
+  },
+  "comparison": {
+    "new": [],
+    "removed": [],
+    "changed": [
+      {
+        "trade_key": "PLTR|CALL|EMA_PULLBACK",
+        "old_r": NaN,
+        "new_r": NaN,
+        "delta_r": NaN
+      }
+    ]
+  },
+  "net_gain_r": 0.0,
+  "verdict": "\u2796 No Material Change"
+}
