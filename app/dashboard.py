@@ -3190,15 +3190,15 @@ def _render_operator_file_downloads(report_date, container):
     `market_opportunity_audit.csv`, all of which are in Postgres.
     """
 
-    files = container.expander("Individual files", expanded=False)
+    files = container.expander("Live state", expanded=False)
 
+    # Only what is worth grabbing *during* a session, before an export exists.
+    # Everything the day produces after the fact is in the review export, and
+    # the day's CSVs were each duplicated there and in Postgres besides:
+    # `paper_trade_events.csv` (also `paper_trades`), `scanner_output_close.csv`
+    # (also `scanner_snapshot`) and `signal_lifecycle_events.csv` were three
+    # buttons offering a second copy of something one click already gives.
     exports = [
-        ("paper_trade_events.csv",
-         daily_path(report_date, "paper_trade_events.csv"), "text/csv"),
-        ("scanner_output_close.csv",
-         daily_path(report_date, "scanner_output_close.csv"), "text/csv"),
-        ("signal_lifecycle_events.csv",
-         daily_path(report_date, "signal_lifecycle_events.csv"), "text/csv"),
         ("paper_trade_state.json", PAPER_TRADE_STATE_FILE, "application/json"),
         ("suggested_trade_state.json", SUGGESTED_TRADE_STATE_FILE, "application/json"),
         ("telegram_dispatch_audit.jsonl",
@@ -3294,7 +3294,14 @@ def _render_system_status(container):
 
     if last_completed:
 
-        container.caption(f"Last scan {str(last_completed)[11:19]} ET")
+        # Duration matters on this container: a scan takes 200-285s against a
+        # 300s cadence, so it is the number that says whether scans are about to
+        # start overlapping.
+        duration = engine.get("last_duration_seconds")
+        container.caption(
+            f"Last scan {str(last_completed)[11:19]} ET"
+            + (f" in {int(duration)}s" if duration else "")
+        )
 
     next_due = engine.get("next_due_at")
 
@@ -3334,6 +3341,15 @@ def _render_download_exports():
     )
 
     _render_daily_review_export(report_date, downloads)
+
+    _render_file_download_button(
+        "Post-market review (.html)",
+        daily_path(report_date, "post_market_review.html"),
+        file_name=f"post_market_review_{report_date}.html",
+        mime="text/html",
+        key=f"download_post_market_review_{report_date}",
+        container=downloads
+    )
 
     _render_file_download_button(
         "Validation report (.html)",
@@ -3413,6 +3429,13 @@ def _generate_offline_replay(report_date):
 
 
 def _render_daily_validation_report_controls():
+    """Post-market generation.
+
+    `Post Market: Generate Everything` is the button for the daily routine; the
+    other two are strict subsets of it and now sit behind an expander, because
+    three buttons where one always does the job is three chances to run the
+    wrong one after a session.
+    """
 
     st.sidebar.subheader("Operations")
 
@@ -3420,59 +3443,15 @@ def _render_daily_validation_report_controls():
         ZoneInfo("America/New_York")
     ).date().isoformat()
     report_date = st.sidebar.text_input(
-        "Validation date",
+        "Trading day",
         value=default_report_date,
         key="daily_validation_report_date"
     )
-    finalize_report = st.sidebar.checkbox(
-        "Finalize manifest",
-        value=True,
-        key="daily_validation_finalize_manifest",
-        help="Use after market close. Uncheck for an intraday partial report."
-    )
-
-    if st.sidebar.button(
-        "Generate Validation Report",
-        key="generate_daily_validation_report"
-    ):
-
-        try:
-
-            output_path = _generate_daily_validation_report(
-                report_date,
-                finalize_report=finalize_report
-            )
-            st.session_state["daily_validation_report_path"] = str(output_path)
-            st.sidebar.success(
-                "Daily validation report generated."
-            )
-
-        except Exception as exc:
-
-            st.sidebar.error(
-                "Report generation failed."
-            )
-            st.sidebar.text(str(exc))
-
-    if st.sidebar.button(
-        "Generate Replay",
-        key="generate_sidebar_offline_replay"
-    ):
-
-        try:
-
-            _output_path, summary_path = _generate_offline_replay(report_date)
-            st.session_state["offline_replay_summary_path"] = str(summary_path)
-            st.sidebar.success("Offline replay generated.")
-
-        except Exception as exc:
-
-            st.sidebar.error("Replay generation failed.")
-            st.sidebar.text(str(exc))
 
     if st.sidebar.button(
         "Post Market: Generate Everything",
-        key="post_market_generate_everything"
+        key="post_market_generate_everything",
+        help="Validation report, replay, post-market review, and freeze the baseline."
     ):
 
         try:
@@ -3485,10 +3464,18 @@ def _render_daily_validation_report_controls():
             from app.regression import freeze_baseline
 
             baseline_path = freeze_baseline(report_date)
+
+            from app.analytics.post_market_review import write_review
+
+            _review_path, review_summary = write_review(report_date)
+
             st.session_state["daily_validation_report_path"] = str(output_path)
             st.session_state["offline_replay_summary_path"] = str(summary_path)
             baseline_message = "Baseline frozen." if baseline_path else "Baseline not available yet."
-            st.sidebar.success(f"Validation report and replay generated. {baseline_message}")
+            st.sidebar.success(
+                f"Validation report, replay and post-market review generated "
+                f"({review_summary['trades']} trades). {baseline_message}"
+            )
             st.rerun()
 
         except Exception as exc:
@@ -3496,8 +3483,67 @@ def _render_daily_validation_report_controls():
             st.sidebar.error("Post-market generation failed.")
             st.sidebar.text(str(exc))
 
-    # Downloads all live in the sidebar Downloads expander. Serving the report
-    # and the replay summary from here as well meant four buttons for two files.
+    individual = st.sidebar.expander("Run one at a time", expanded=False)
+
+    finalize_report = individual.checkbox(
+        "Finalize manifest",
+        value=True,
+        key="daily_validation_finalize_manifest",
+        help="Use after market close. Uncheck for an intraday partial report."
+    )
+
+    if individual.button(
+        "Validation report",
+        key="generate_daily_validation_report"
+    ):
+
+        try:
+
+            output_path = _generate_daily_validation_report(
+                report_date,
+                finalize_report=finalize_report
+            )
+            st.session_state["daily_validation_report_path"] = str(output_path)
+            individual.success("Validation report generated.")
+
+        except Exception as exc:
+
+            individual.error("Report generation failed.")
+            individual.text(str(exc))
+
+    if individual.button(
+        "Post-market review",
+        key="generate_post_market_review"
+    ):
+
+        try:
+
+            from app.analytics.post_market_review import write_review
+
+            _path, summary = write_review(report_date)
+            individual.success(f"Review generated ({summary['trades']} trades).")
+
+        except Exception as exc:
+
+            individual.error("Review generation failed.")
+            individual.text(str(exc))
+
+    if individual.button(
+        "Replay",
+        key="generate_sidebar_offline_replay"
+    ):
+
+        try:
+
+            _output_path, summary_path = _generate_offline_replay(report_date)
+            st.session_state["offline_replay_summary_path"] = str(summary_path)
+            individual.success("Offline replay generated.")
+
+        except Exception as exc:
+
+            individual.error("Replay generation failed.")
+            individual.text(str(exc))
+
     st.sidebar.caption("Generated files are in Downloads.")
 
 
@@ -3762,16 +3808,19 @@ def _cadence_label_for_engine():
     return next(iter(SCANNER_CADENCE_INTERVALS))
 
 
-def _render_scan_engine_status(cadence_override_minutes):
-    """Start the in-process scan engine and report it in the sidebar.
+def _ensure_scan_engine_started(cadence_override_minutes):
+    """Start the in-process scan engine. Status is reported by the System block.
 
-    Scanning is no longer triggered by a browser rerun or by an operator button:
     `app.runtime.scan_supervisor` owns cadence on a daemon thread, so scans
-    continue with no tab open and nothing to click. This panel is read-only
-    status, and it is the panel to check when the page looks stale.
+    continue with no tab open and nothing to click -- but the thread only exists
+    inside the Streamlit process, so every render has to make sure it is alive.
+
+    This used to also render a `Scan Engine` panel of four captions. The System
+    block at the top of the sidebar now answers the same question in the same
+    place as the rest of the health, so the panel was two copies of one fact.
     """
 
-    from app.runtime.scan_supervisor import ensure_started
+    from app.runtime.scan_supervisor import ensure_started, status as scan_engine_status
 
     _prime_scanner_environment()
 
@@ -3786,8 +3835,6 @@ def _render_scan_engine_status(cadence_override_minutes):
     # rerun let the most recently rendered browser session dictate the cadence
     # for the whole process -- including a session that had merely been left
     # open and auto-refreshed.
-    from app.runtime.scan_supervisor import status as scan_engine_status
-
     engine = scan_engine_status()
     cadence_changed = (
         st.session_state.get("_applied_cadence_override", "unset")
@@ -3801,47 +3848,6 @@ def _render_scan_engine_status(cadence_override_minutes):
 
         engine = ensure_started(interval_override=requested_override)
         st.session_state["_applied_cadence_override"] = requested_override
-
-    st.sidebar.subheader("Scan Engine")
-
-    if not engine.get("thread_alive"):
-
-        st.sidebar.error(
-            "Scan engine thread is not running. Restart Streamlit; no scans are happening."
-        )
-
-    engine_status = str(engine.get("status") or "IDLE")
-    scans = engine.get("scans") or 0
-    failures = engine.get("failures") or 0
-    interval_seconds = engine.get("interval_seconds")
-
-    st.sidebar.caption(
-        f"{engine_status} | session {engine.get('session') or '-'} | "
-        + (f"every {int(interval_seconds) // 60} min" if interval_seconds else "cadence pending")
-    )
-    st.sidebar.caption(
-        f"Scans since engine start: {scans} | failures: {failures}"
-    )
-
-    last_completed = engine.get("last_completed_at")
-
-    if last_completed:
-
-        duration = engine.get("last_duration_seconds")
-        st.sidebar.caption(
-            f"Last scan finished {str(last_completed)[11:19]} ET"
-            + (f" in {duration}s" if duration else "")
-        )
-
-    next_due = engine.get("next_due_at")
-
-    if next_due:
-
-        st.sidebar.caption(f"Next scan due {str(next_due)[11:19]} ET")
-
-    if failures and engine.get("last_error"):
-
-        st.sidebar.warning(f"Last scan error: {engine['last_error']}")
 
     return engine
 
@@ -3898,21 +3904,11 @@ def _render_auto_refresh_controls():
     st.sidebar.caption(
         f"Market hours: {session_label}"
     )
+    # Scanner output age moved to the System block, which already reports the
+    # last scan and is where the rest of the health lives.
     st.sidebar.caption(
-        "Auto Refresh redraws the page only. Scans are run by the scan engine below."
+        "Auto Refresh redraws the page only. Scans are run by the scan engine."
     )
-
-    if age_minutes is None:
-
-        st.sidebar.caption(
-            "Scanner output age: missing"
-        )
-
-    else:
-
-        st.sidebar.caption(
-            f"Scanner output age: {age_minutes} min"
-        )
 
     if auto_refresh_enabled and st_autorefresh is None:
 
@@ -3929,7 +3925,7 @@ def _render_auto_refresh_controls():
             key="scanner_refresh"
         )
 
-    engine = _render_scan_engine_status(cadence_override_minutes)
+    engine = _ensure_scan_engine_started(cadence_override_minutes)
     engine_interval_seconds = engine.get("interval_seconds")
 
     return {

@@ -585,7 +585,35 @@ def append_trend_capture_row(trading_day, row):
             }
         )
 
+    _promote_trend_capture_row(trading_day, row)
+
     return path
+
+
+def _promote_trend_capture_row(trading_day, row):
+    """Mirror the row into Postgres so it survives the container.
+
+    Best-effort and deliberately after the file write: this file is the live
+    artifact and a database problem must never cost the operator the CSV. But
+    the CSV alone was not enough -- it sits on the Streamlit Cloud filesystem,
+    and the 2026-07-31 redeploy wiped the only copy of that day's exit analysis.
+    """
+
+    trade_key = row.get("Trade Key")
+
+    if not trade_key:
+
+        return
+
+    try:
+
+        from app.db.trade_exit_analysis_repository import TradeExitAnalysisRepository
+
+        TradeExitAnalysisRepository().upsert(trading_day, trade_key, row)
+
+    except Exception as exc:
+
+        print(f"[TREND CAPTURE WARNING] could not promote {trade_key}: {exc}")
 
 
 def summarize_trend_capture(df):

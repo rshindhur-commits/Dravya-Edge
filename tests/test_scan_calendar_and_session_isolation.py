@@ -102,7 +102,10 @@ def test_engine_is_restarted_even_when_the_cadence_is_unchanged():
 
     from app import dashboard
 
-    source = inspect.getsource(dashboard._render_scan_engine_status)
+    # Renamed on 2026-08-01 when the duplicated Scan Engine sidebar panel was
+    # dropped; the function now only ensures the engine is running, and the
+    # System block reports it.
+    source = inspect.getsource(dashboard._ensure_scan_engine_started)
 
     assert 'not engine.get("thread_alive")' in source
 
