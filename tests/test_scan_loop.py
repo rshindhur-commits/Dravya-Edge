@@ -5,6 +5,7 @@ scans was Streamlit auto-refresh. On 2026-07-29 that produced 32 archived scans 
 an 86-minute blind hole (11:09-12:35 ET), about 38% of a 5-minute cadence.
 """
 
+import os
 import unittest
 from datetime import datetime
 from unittest.mock import patch
@@ -55,6 +56,15 @@ class LoopTests(unittest.TestCase):
     def setUp(self):
         scan_loop._stopping = False
         self.addCleanup(setattr, scan_loop, "_stopping", False)
+
+        # Ownership pinned to `worker`, for the same reason skip_closed is pinned
+        # below: the loop consults the real environment, and `.env` carries
+        # SCAN_ENGINE_OWNER=dashboard. Left ambient, every test here parks in
+        # STANDBY and spins forever against a patched-out _sleep. These tests are
+        # about loop mechanics, so both switches are stated rather than inherited.
+        owner = patch.dict("os.environ", {"SCAN_ENGINE_OWNER": "worker"}, clear=False)
+        owner.start()
+        self.addCleanup(owner.stop)
 
     def test_loop_runs_the_requested_number_of_scans(self):
 
@@ -113,6 +123,56 @@ class LoopTests(unittest.TestCase):
 
         run_scanner.assert_not_called()
         self.assertEqual(result["scans"], 0)
+
+
+
+class OwnershipStandbyTests(unittest.TestCase):
+    """The cutover switch has to work in both directions.
+
+    Only the dashboard read SCAN_ENGINE_OWNER. Flipping it back to `dashboard` --
+    the obvious move if the Render worker is down and you want Streamlit scanning
+    for the open -- started the supervisor while the worker carried on, giving two
+    scanners and the double-open `scan_lock` cannot prevent across hosts.
+    """
+
+    def setUp(self):
+        scan_loop._stopping = False
+        self.addCleanup(setattr, scan_loop, "_stopping", False)
+
+    def _run_once(self, env):
+        with patch.dict("os.environ", env, clear=False), \
+             patch("app.main.run_scanner") as run_scanner, \
+             patch("app.runtime.scan_loop._publish_heartbeat") as heartbeat, \
+             patch("app.runtime.scan_loop._sleep",
+                   side_effect=lambda _s: setattr(scan_loop, "_stopping", True)), \
+             patch("app.runtime.scan_loop.signal.signal"):
+
+            scan_loop.run_scan_loop(interval_override=30, skip_closed=False)
+
+        return run_scanner, heartbeat
+
+    def test_the_worker_parks_when_the_dashboard_owns_scanning(self):
+
+        run_scanner, heartbeat = self._run_once({"SCAN_ENGINE_OWNER": "dashboard"})
+
+        run_scanner.assert_not_called()
+        self.assertEqual(heartbeat.call_args_list[0].args[0], "STANDBY")
+
+    def test_the_worker_scans_when_it_owns_scanning(self):
+
+        run_scanner, _ = self._run_once({"SCAN_ENGINE_OWNER": "worker"})
+
+        run_scanner.assert_called_once()
+
+    def test_an_unset_variable_means_no_opinion_and_scans(self):
+        """Keeps `python -m app.runtime.scan_loop` working locally, where the
+        default owner is `dashboard` and would otherwise park it forever."""
+
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("SCAN_ENGINE_OWNER", None)
+            run_scanner, _ = self._run_once({})
+
+        run_scanner.assert_called_once()
 
 
 if __name__ == "__main__":

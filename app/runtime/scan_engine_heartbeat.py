@@ -100,7 +100,8 @@ def record_heartbeat(status, owner=None, **fields):
 
 # Reporting, but not scanning. An engine parked on the calendar is not competing
 # for the scan lock, so it cannot double-open anything.
-IDLE_STATUSES = frozenset({"STOPPED"})
+# STANDBY: alive and reporting, but SCAN_ENGINE_OWNER names someone else.
+IDLE_STATUSES = frozenset({"STOPPED", "STANDBY"})
 IDLE_STATUS_PREFIX = "SLEEPING"
 
 
@@ -143,6 +144,28 @@ def heartbeat_to_engine_status(row):
     }
 
 
+def _stale_after(row, floor_seconds):
+    """How long silence from *this* engine is allowed before it means anything.
+
+    A fixed threshold cannot work: the heartbeat lands once per cycle, and the
+    cycle is 300s in the regular session but 900s after hours and 1800s when the
+    market is shut. Against a flat 900s a perfectly healthy weekend worker looks
+    dead, which is precisely the "is it actually running?" ambiguity the
+    heartbeat was added to remove.
+
+    Two cycles plus a minute, so one missed beat is tolerated and two are not.
+    """
+
+    interval = row.get("interval_seconds")
+
+    try:
+        interval = float(interval)
+    except (TypeError, ValueError):
+        interval = 0.0
+
+    return max(float(floor_seconds), interval * 2 + 60)
+
+
 def summarize_engines(rows, stale_after_seconds=900):
     """Turn heartbeat rows into what the System panel needs to say.
 
@@ -158,8 +181,13 @@ def summarize_engines(rows, stale_after_seconds=900):
     """
 
     rows = list(rows or [])
-    live = [row for row in rows if (row.get("age_seconds") or 0) <= stale_after_seconds]
-    stale = [row for row in rows if (row.get("age_seconds") or 0) > stale_after_seconds]
+    live, stale = [], []
+
+    for row in rows:
+
+        age = float(row.get("age_seconds") or 0)
+        (live if age <= _stale_after(row, stale_after_seconds) else stale).append(row)
+
     scanning = [row for row in live if _is_scanning(row)]
 
     return {
