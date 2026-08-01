@@ -36,6 +36,41 @@ def render(df, auto_paper_controls, refresh_state=None):
 
     import streamlit as st
 
+    def render_database_catalog():
+        """What each table is for, with what is actually in it right now.
+
+        Several names read alike -- `trade`, `paper_trades` and
+        `trade_exit_analysis` are three different things -- and grain is the
+        detail that most often surprises, so both are stated per table.
+        """
+        import pandas as pd
+
+        from app.db.catalog import catalog, row_counts, undocumented
+
+        counts = row_counts()
+        if not counts:
+            st.caption("Row counts unavailable (database not reachable).")
+
+        for group, tables in catalog():
+            st.markdown(f"**{group}**")
+            st.dataframe(
+                pd.DataFrame([{
+                    "Table": entry["table"],
+                    "Rows": f"{counts[entry['table']]:,}" if entry["table"] in counts else "-",
+                    "One row is": entry["grain"],
+                    "Purpose": entry["purpose"],
+                } for entry in tables]),
+                width="stretch",
+                hide_index=True,
+            )
+
+        stray = undocumented(counts)
+        if stray:
+            st.warning(
+                "In the database but not described in app/db/catalog.py: "
+                + ", ".join(stray)
+            )
+
     def render_regression_snapshot_metrics():
         import os
 
@@ -54,6 +89,12 @@ def render(df, auto_paper_controls, refresh_state=None):
         columns[2].metric("Average Persist", f"{metrics.get('average_persist_ms', 0):.0f} ms")
 
     with st.expander("Developer Diagnostics", expanded=True):
+
+        _render_lazy_developer_section(
+            "Database Tables",
+            "database_catalog",
+            render_database_catalog,
+        )
 
         _render_lazy_developer_section(
             "Regression Snapshot",
