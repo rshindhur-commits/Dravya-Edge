@@ -184,6 +184,16 @@ target and exit marked, and emits TradingView deep links (`REVIEW_TV_CHART` is t
 action status the engine produces — 238 of 403 auto-paper decisions on 2026-07-31 — and had no
 in-app destination before this).
 
+**Candles survive a container wipe.** `candles_5m.csv` sits on the ephemeral filesystem, which is
+how 2026-07-31's bars were lost, but the same bars are already durable in Neon: every
+`scanner_snapshot` row carries a `market_payload` with the last 200 5m, 80 15m and 40 1h bars.
+`load_candles` falls back to the newest archived payload when the local file has nothing for the
+symbol, so a redeployed container can still draw the day at no new storage cost. That fallback is
+only as good as the archive, which is why the Trading page now carries an **Archive** health card —
+it reads `NOT RECORDING` in red when the engine has run scans but none reached `scanner_snapshot`,
+the exact silent state that lost 2026-07-31. The archive requires `REGRESSION_SNAPSHOT_ENABLED=true`
+in Streamlit Secrets; `secrets.toml.example` ships it **false**.
+
 Both candle-file defects were fixed at the writer on 2026-07-31, but **files written before that
 still carry them**, so the reader keeps its defences. Polygon anchors aggregate windows to `from_`,
 and `from_` was "now minus N days" unrounded, so every scan requested a different grid: the file
