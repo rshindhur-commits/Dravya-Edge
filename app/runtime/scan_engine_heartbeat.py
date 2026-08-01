@@ -100,7 +100,8 @@ def record_heartbeat(status, owner=None, **fields):
 
 # Reporting, but not scanning. An engine parked on the calendar is not competing
 # for the scan lock, so it cannot double-open anything.
-IDLE_STATUSES = frozenset({"STOPPED"})
+# STANDBY: alive and reporting, but SCAN_ENGINE_OWNER names someone else.
+IDLE_STATUSES = frozenset({"STOPPED", "STANDBY"})
 IDLE_STATUS_PREFIX = "SLEEPING"
 
 

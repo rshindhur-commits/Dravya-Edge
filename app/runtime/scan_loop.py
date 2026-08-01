@@ -21,6 +21,7 @@ decision of its own: gating, entries, exits, and alerts all stay where they are.
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import time
@@ -127,6 +128,33 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
     )
 
     while not _stopping:
+
+        # Ownership is checked here too, so the switch works in both directions.
+        # Until now only the dashboard read it: flipping SCAN_ENGINE_OWNER back to
+        # `dashboard` -- the obvious move if this worker is down and you want
+        # Streamlit scanning for the open -- would have started the supervisor
+        # while this process carried on, giving two scanners and the double-open
+        # the file-based scan_lock cannot prevent across hosts.
+        #
+        # Parks rather than exits, so flipping back resumes with no redeploy, and
+        # keeps heartbeating so "deliberately standing by" is distinguishable from
+        # "dead". An unset variable means no opinion and scans, which is what
+        # keeps `python -m app.runtime.scan_loop` working locally.
+        declared_owner = str(os.getenv("SCAN_ENGINE_OWNER", "")).strip().lower()
+
+        if declared_owner and declared_owner != "worker":
+
+            wait = interval_for_session(current_session(), interval_override)
+            _publish_heartbeat(
+                "STANDBY", scans=scans, failures=failures, interval_seconds=wait,
+                next_due_at=(datetime.now(ET) + timedelta(seconds=wait)).isoformat(),
+            )
+            print(
+                f"[SCAN LOOP] STANDBY; SCAN_ENGINE_OWNER={declared_owner!r} "
+                f"so this worker is not scanning. Sleeping {wait}s."
+            )
+            _sleep(wait)
+            continue
 
         session = current_session()
 
