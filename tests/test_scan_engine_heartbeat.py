@@ -236,6 +236,45 @@ class UpsertSemanticsTests(unittest.TestCase):
         self.assertIsNone(self._row()["last_error"])
 
 
+
+class PartialDeployResilienceTests(unittest.TestCase):
+    """A missing heartbeat must degrade the panel, never the page.
+
+    On 2026-08-01 Streamlit Cloud served a new `dashboard.py` against a stale
+    `render_context.py`. The bare import raised ImportError out of
+    `_render_system_status`, which runs before routing, and took the entire
+    dashboard down over a status caption.
+    """
+
+    def test_system_status_survives_a_missing_heartbeat_helper(self):
+
+        import app.dashboard as dashboard
+
+        with patch(
+            "app.ui.render_context.scan_engine_heartbeats",
+            side_effect=ImportError("stale module"),
+            create=True,
+        ):
+            self.assertEqual(dashboard._remote_engine_summary.__wrapped__(), {})
+
+    def test_ownership_gate_survives_a_missing_heartbeat_module(self):
+        """Falls back to the raw variable so the cutover switch still works."""
+
+        import app.dashboard as dashboard
+
+        with patch.dict(
+            "os.environ", {"SCAN_ENGINE_OWNER": "worker"}, clear=False
+        ), patch.dict("sys.modules", {"app.runtime.scan_engine_heartbeat": None}), patch(
+            "app.runtime.scan_supervisor.ensure_started"
+        ) as ensure_started, patch(
+            "app.runtime.scan_supervisor.status", return_value={}
+        ):
+
+            dashboard._ensure_scan_engine_started(None)
+
+        ensure_started.assert_not_called()
+
+
 if __name__ == "__main__":
 
     unittest.main()
