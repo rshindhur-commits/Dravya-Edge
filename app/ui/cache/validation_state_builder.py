@@ -736,6 +736,13 @@ def build_validation_state_payload(
             "false_alerts": int(candidate_outcomes.get("false_alert", pd.Series(dtype=bool)).sum()) if not candidate_outcomes.empty else 0,
         },
         "delay_attribution": _json_records(delay_attribution),
+        # Lifted from the learning engine's daily summary rather than recomputed:
+        # it is written earlier in _persist_scan_outputs, sources closed trades
+        # from Postgres (the daily CSVs are ephemeral on Streamlit Cloud), and
+        # recomputing here would mean a second round trip for the same answer.
+        "spread_calibration": (
+            _read_json(daily_path(report_date, "daily_engine_summary.json")) or {}
+        ).get("spread_calibration") or {},
         "strategy_confidence": strategy_confidence,
         "recommendations": _recommendations(
             trend_summary,

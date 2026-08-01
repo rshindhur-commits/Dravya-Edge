@@ -14,24 +14,24 @@
   "avg_wait_one_bar_move": null,
   "avg_wait_two_bars_move": null,
   "blocking_stages": {
-    "Entry": 636,
-    "Momentum": 104,
-    "Risk": 104,
-    "Option": 104,
-    "Affordability": 104,
-    "Realtime": 104,
-    "Telegram": 104,
-    "Decision": 104
+    "Entry": 1535,
+    "Momentum": 338,
+    "Risk": 338,
+    "Option": 338,
+    "Affordability": 338,
+    "Realtime": 338,
+    "Telegram": 338,
+    "Decision": 338
   },
   "blocking_rules": {
-    "Directional Signal": 36,
-    "Setup": 32,
-    "REL_VOLUME": 12,
-    "REJECTED_EMA9": 8,
-    "BREAKOUT_LEVEL": 4,
-    "PULLBACK_TO_EMA9": 4,
-    "VWAP": 4,
-    "CLOSE_BELOW_EMA9": 4
+    "Directional Signal": 185,
+    "Setup": 72,
+    "REL_VOLUME": 27,
+    "REJECTED_EMA9": 18,
+    "BREAKOUT_LEVEL": 9,
+    "PULLBACK_TO_EMA9": 9,
+    "CLOSE_BELOW_EMA9": 9,
+    "VWAP": 9
   },
   "market_distribution": {},
   "lifecycle_distribution": {},
@@ -40,34 +40,28 @@
     "tqs_calibration": [
       {
         "bucket": "<70",
-        "candidates": 52,
+        "candidates": 37,
         "winner_rate": 0.0
       }
     ],
     "rule_roi": [
       {
-        "rule": "NO_DIRECTIONAL_EDGE",
-        "losses_prevented": 18,
+        "rule": "STALE_MARKET_DATA",
+        "losses_prevented": 52,
         "winners_blocked": 0,
-        "roi": 18
+        "roi": 52
       },
       {
         "rule": "LOW_RR",
-        "losses_prevented": 16,
+        "losses_prevented": 8,
         "winners_blocked": 0,
-        "roi": 16
-      },
-      {
-        "rule": "NO_ENTRY_TRIGGER",
-        "losses_prevented": 12,
-        "winners_blocked": 0,
-        "roi": 12
+        "roi": 8
       },
       {
         "rule": "RISK_REJECTED",
-        "losses_prevented": 6,
+        "losses_prevented": 3,
         "winners_blocked": 0,
-        "roi": 6
+        "roi": 3
       }
     ],
     "feature_promotion": [
@@ -124,6 +118,11 @@
     "total_option_pnl_pct": null,
     "average_option_pnl_pct": null,
     "average_spread_cost_pct": null
+  },
+  "spread_calibration": {
+    "measurable_trades": 0,
+    "rows": [],
+    "quality_vs_cost_gap": null
   },
   "db_persisted": false
 }

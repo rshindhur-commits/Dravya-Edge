@@ -41,6 +41,78 @@
       "rows": 26,
       "format": "parquet",
       "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_004915",
+      "scan_timestamp": "2026-08-01 00:49:30.434797-04:00",
+      "path": "20260801_004930_2026-08-01_004915.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_005133",
+      "scan_timestamp": "2026-08-01 00:51:50.399160-04:00",
+      "path": "20260801_005150_2026-08-01_005133.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_005410",
+      "scan_timestamp": "2026-08-01 00:54:25.266591-04:00",
+      "path": "20260801_005425_2026-08-01_005410.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_005650",
+      "scan_timestamp": "2026-08-01 00:57:06.882447-04:00",
+      "path": "20260801_005706_2026-08-01_005650.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_091829",
+      "scan_timestamp": "2026-08-01 09:18:32.580450-04:00",
+      "path": "20260801_091832_2026-08-01_091829.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_092049",
+      "scan_timestamp": "2026-08-01 09:20:52.809732-04:00",
+      "path": "20260801_092052_2026-08-01_092049.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_093135",
+      "scan_timestamp": "2026-08-01 09:31:39.164750-04:00",
+      "path": "20260801_093139_2026-08-01_093135.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_094049",
+      "scan_timestamp": "2026-08-01 09:40:56.886170-04:00",
+      "path": "20260801_094056_2026-08-01_094049.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_094627",
+      "scan_timestamp": "2026-08-01 09:46:37.582627-04:00",
+      "path": "20260801_094637_2026-08-01_094627.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
     }
   ],
   "scanner_version": "unknown",
@@ -78,6 +150,6 @@
     "TSM"
   ],
   "timezone": "America/New_York",
-  "scan_count": 5,
-  "scan_interval_seconds": 150
+  "scan_count": 14,
+  "scan_interval_seconds": 161
 }

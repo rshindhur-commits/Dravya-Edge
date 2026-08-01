@@ -1605,6 +1605,72 @@ def _render_candidate_intelligence(intelligence):
             )
 
 
+def _render_spread_calibration(calibration):
+    """Does the option quality score predict what the round trip actually costs?
+
+    Open question from 2026-08-01, watchlist 2.6. The claim that it does not was
+    built on pre-`eb56f75` data where every figure was the measurement artifact,
+    and was retracted. This panel exists so the clean version answers itself as
+    trades close, rather than being re-argued from whatever is to hand.
+
+    Zero measurable trades is the expected state until trades open *and* close
+    after that fix, so it is stated rather than hidden -- an empty panel would
+    read as "nothing wrong" when it means "nothing measured yet".
+    """
+
+    calibration = calibration or {}
+    measurable = int(calibration.get("measurable_trades") or 0)
+
+    st.markdown("### Option Quality vs Spread Paid")
+
+    if not measurable:
+
+        st.info(
+            "No measurable trades yet. Premium economics can only be "
+            "reconstructed for trades opened after the entry ask was frozen "
+            "(`eb56f75`, 2026-07-31); earlier trades report as unpriced rather "
+            "than contributing a meaningless average. Waiting on the first "
+            "full open-to-close cycle since then."
+        )
+
+        return
+
+    flagged = int(calibration.get("high_score_wide_spread_count") or 0)
+    gap = calibration.get("quality_vs_cost_gap")
+
+    _render_compact_card_grid([
+        ("Measurable Trades", measurable),
+        ("High Score, Wide Spread", flagged),
+        ("Entry vs Realised Gap", f"{gap:+.2f}%" if gap is not None else "-"),
+    ])
+
+    if flagged >= 2:
+
+        st.warning(
+            f"{flagged} trades scored 80+ on option quality yet cost more than "
+            "6% to round-trip. That is the threshold at which the quality score "
+            "needs the entry spread folded into it (watchlist 2.6)."
+        )
+
+    if gap is not None and gap > 2:
+
+        st.warning(
+            f"Realised cost is running {gap:+.2f}% above the spread quoted at "
+            "entry, which means spreads are widening while positions are held. "
+            "No entry-time score can catch that, and nothing currently models it."
+        )
+
+    rows = calibration.get("rows") or []
+
+    if rows:
+
+        st.dataframe(
+            _display_safe_dataframe(pd.DataFrame(rows)),
+            width="stretch",
+            hide_index=True,
+        )
+
+
 def _render_cached_validation_state(state):
 
     st.subheader("Validation")
@@ -1633,6 +1699,8 @@ def _render_cached_validation_state(state):
         ("Telegram Misses", telegram_quality.get("misses", 0)),
         ("False Alerts", telegram_quality.get("false_alerts", 0)),
     ])
+
+    _render_spread_calibration(state.get("spread_calibration"))
 
     delay_attribution = state.get("delay_attribution") or []
 
