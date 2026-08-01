@@ -103,3 +103,5 @@ observed_at_utc,trading_day,scan_id,category,stage,page,seconds,metadata
 2026-07-29T00:58:47.539000+00:00,2026-07-28,,dashboard,page_render,Trading,0.0375,{}
 2026-07-29T01:28:40.810976+00:00,2026-07-28,,dashboard,page_render,Trading,0.0358,{}
 2026-07-30T12:53:22.299223+00:00,2026-07-30,,dashboard,page_render,Trading,0.0868,{}
+2026-08-01T04:09:39.405070+00:00,2026-08-01,2026-08-01_000919,scanner,run_scanner,,19.62,"{""symbols"": 26, ""workers"": 5}"
+2026-08-01T04:12:19.960515+00:00,2026-08-01,2026-08-01_001200,scanner,run_scanner,,19.21,"{""symbols"": 26, ""workers"": 5}"

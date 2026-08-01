@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from queue import Queue
+from threading import Lock, Thread
+from uuid import uuid4
+import atexit
 import json
 import os
 import time
 
-from app.runtime.runtime_jobs import RuntimeJob
-from app.runtime.runtime_priority import Priority
 from app.runtime.runtime_scheduler import get_runtime_scheduler
 from app.storage.daily_paths import live_path
 
@@ -63,6 +65,130 @@ def _read_jsonl(filename):
         return []
 
     return rows
+
+
+class _TelegramSender:
+    """Dedicated single-thread worker for outbound Telegram sends.
+
+    Deliberately *not* the shared runtime scheduler. `_dispatch_telegram_entry_alerts`
+    runs inside `finalize_scan_outputs`, which is itself a job on the scheduler's one
+    worker thread. A send submitted back to that scheduler therefore could not start
+    until finalize returned -- i.e. after the whole of `_persist_scan_outputs`, which
+    on 2026-07-31 measured ~5.5s of candidate-evidence, learning-engine and Excel
+    writes. CRITICAL priority bought nothing against a worker blocked by the very job
+    that queued the work. Owning a thread here removes that inversion: an alert goes
+    out while persistence is still running.
+
+    Still single-threaded, on purpose. Telegram rate-limits per chat at roughly one
+    message per second, so sends must stay serialized; the latency win comes from the
+    pooled connection in `telegram_alerts`, not from parallelism.
+    """
+
+    def __init__(self):
+
+        self._queue = Queue()
+        self._thread = None
+        self._lock = Lock()
+
+    def _ensure_worker(self):
+
+        if self._thread is not None and self._thread.is_alive():
+
+            return
+
+        with self._lock:
+
+            if self._thread is not None and self._thread.is_alive():
+
+                return
+
+            self._thread = Thread(
+                target=self._worker,
+                daemon=True,
+                name="telegram-dispatcher",
+            )
+            self._thread.start()
+
+    def submit(self, job_id, func):
+
+        self._ensure_worker()
+        self._queue.put((job_id, func))
+
+        return job_id
+
+    def _worker(self):
+
+        while True:
+
+            job_id, func = self._queue.get()
+
+            try:
+
+                func()
+
+            except Exception as exc:
+
+                # execute_send has already written its own FAILED audit row and
+                # exhausted retries by this point; nothing above can catch it.
+                print(f"[TELEGRAM DISPATCH ERROR] {job_id}: {exc}")
+
+            finally:
+
+                self._queue.task_done()
+
+    def drain(self, timeout=None):
+        """Block until queued sends finish. For shutdown and tests."""
+
+        if timeout is None:
+
+            self._queue.join()
+            return True
+
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+
+            if self._queue.unfinished_tasks == 0:
+
+                return True
+
+            time.sleep(0.01)
+
+        return self._queue.unfinished_tasks == 0
+
+
+_telegram_sender = None
+_telegram_sender_lock = Lock()
+
+
+def get_telegram_sender():
+
+    global _telegram_sender
+
+    with _telegram_sender_lock:
+
+        if _telegram_sender is None:
+
+            _telegram_sender = _TelegramSender()
+
+        return _telegram_sender
+
+
+def drain_telegram_dispatches(timeout=None):
+    """Wait for in-flight queued sends. No-op if nothing was ever dispatched."""
+
+    if _telegram_sender is None:
+
+        return True
+
+    return _telegram_sender.drain(timeout)
+
+
+# The sender thread is a daemon, so without this an interpreter exit between
+# hand-off and delivery would drop the alert until the next startup recovery.
+# The shared scheduler this replaced drained the same way (its own atexit hook).
+# Bounded, so a wedged send cannot hang shutdown.
+atexit.register(lambda: drain_telegram_dispatches(timeout=15))
 
 
 def _queue_record(job_id, name, scan_id, message, dispatch_metadata=None):
@@ -293,20 +419,17 @@ def dispatch_telegram_message(
 
     if telegram_dispatch_mode() == "QUEUED":
 
-        scheduler = get_runtime_scheduler()
-        job = RuntimeJob(
-            name=name,
-            priority=Priority.CRITICAL,
-            func=execute_send,
-            cancelable=False,
-            scan_id=scan_id,
-        )
-        job_id_holder["job_id"] = job.job_id
-        job_id = scheduler.submit_critical(job)
+        job_id = str(uuid4())
+        job_id_holder["job_id"] = job_id
+
+        # The durable queue row is written before the send is handed off, so a
+        # crash between here and delivery is recoverable by
+        # `recover_pending_telegram_dispatches`.
         _append_jsonl(
             TELEGRAM_QUEUE_FILE,
             _queue_record(job_id, name, scan_id, message, dispatch_metadata)
         )
+        get_telegram_sender().submit(job_id, execute_send)
 
         return {
             "queued": True,
