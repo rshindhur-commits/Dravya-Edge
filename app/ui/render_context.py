@@ -174,6 +174,26 @@ def engine_status():
         return {}
 
 
+def scan_engine_heartbeats(within_seconds=1800):
+    """Scan engines reporting to Postgres, summarised.
+
+    The local `engine_status()` above only knows about a supervisor thread in
+    *this* process. Once scanning moves to the Render worker there is no such
+    thread here, and the System panel would report "not running" about an engine
+    that is running perfectly well on another host. This is how it finds out.
+    """
+
+    try:
+        from app.db.scan_engine_heartbeat_repository import ScanEngineHeartbeatRepository
+        from app.runtime.scan_engine_heartbeat import summarize_engines
+
+        return summarize_engines(
+            ScanEngineHeartbeatRepository().fetch_recent(within_seconds)
+        )
+    except Exception:
+        return {}
+
+
 def db_writes_active():
     try:
         from app.db.persistence import db_writes_enabled

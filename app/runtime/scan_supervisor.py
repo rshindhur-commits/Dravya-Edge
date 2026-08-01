@@ -79,7 +79,34 @@ def _update(**fields):
     except Exception as exc:
         print(f"[SCAN ENGINE WARNING] could not write status: {exc}")
 
+    # Mirror to Postgres so a dashboard in another container can see this engine
+    # at all. Best effort, and deliberately after the file write: the file is
+    # still the local source of truth.
+    _publish_heartbeat(snapshot)
+
     return snapshot
+
+
+def _publish_heartbeat(snapshot):
+
+    try:
+        from app.runtime.scan_engine_heartbeat import record_heartbeat
+
+        record_heartbeat(
+            snapshot.get("status") or "IDLE",
+            session=snapshot.get("session"),
+            last_scan_at=snapshot.get("last_completed_at"),
+            last_duration_sec=snapshot.get("last_duration_seconds"),
+            next_due_at=snapshot.get("next_due_at"),
+            interval_seconds=snapshot.get("interval_seconds"),
+            scans=snapshot.get("scans"),
+            failures=snapshot.get("failures"),
+            last_error=snapshot.get("last_error"),
+            payload=snapshot,
+        )
+
+    except Exception as exc:
+        print(f"[SCAN ENGINE WARNING] could not publish heartbeat: {exc}")
 
 
 def status():
