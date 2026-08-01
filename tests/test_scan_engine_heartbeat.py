@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from app.runtime.scan_engine_heartbeat import (
     build_heartbeat,
+    heartbeat_to_engine_status,
     record_heartbeat,
     scan_engine_owner,
     summarize_engines,
@@ -500,6 +501,37 @@ class StalenessWindowTests(unittest.TestCase):
         ])
 
         self.assertEqual(summary["live_count"], 0)
+
+
+
+class DeadStatusTests(unittest.TestCase):
+    """A STOPPED heartbeat is a process announcing its own exit.
+
+    `running` was hardcoded True for any fresh row, so the Operator Console
+    painted "ENGINE STOPPED · worker" in green while the Render container was
+    genuinely down for half an hour. Asleep is alive; stopped is not.
+    """
+
+    def test_stopped_is_not_running(self):
+
+        self.assertFalse(
+            heartbeat_to_engine_status({"owner": "worker", "status": "STOPPED"})["running"]
+        )
+
+    def test_every_other_reported_status_is_running(self):
+
+        for status in ("SCANNING", "IDLE", "FAILED", "SLEEPING_WEEKEND",
+                       "SLEEPING_HOLIDAY", "SLEEPING_AFTER_CLOSE", "STANDBY"):
+
+            self.assertTrue(
+                heartbeat_to_engine_status({"owner": "worker", "status": status})["running"],
+                f"{status} should count as a live process",
+            )
+
+    def test_an_absent_status_does_not_claim_death(self):
+        """Unknown is not the same as stopped; only an explicit exit is."""
+
+        self.assertTrue(heartbeat_to_engine_status({"owner": "worker"})["running"])
 
 
 if __name__ == "__main__":

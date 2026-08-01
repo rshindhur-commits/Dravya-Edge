@@ -104,6 +104,11 @@ def record_heartbeat(status, owner=None, **fields):
 IDLE_STATUSES = frozenset({"STOPPED", "STANDBY"})
 IDLE_STATUS_PREFIX = "SLEEPING"
 
+# Not merely idle -- gone. The process wrote this on its way out, so a fresh row
+# saying STOPPED is evidence of death, not of life. Everything else (SCANNING,
+# IDLE, SLEEPING_*, STANDBY) is a live process choosing not to scan.
+DEAD_STATUSES = frozenset({"STOPPED"})
+
 
 def _is_scanning(row):
 
@@ -122,10 +127,17 @@ def heartbeat_to_engine_status(row):
 
     `thread_alive` stays False -- there genuinely is no thread in this process.
     `running` is the question the UI actually wants answered: is *an* engine
-    scanning for this deployment.
+    alive for this deployment.
+
+    `running` is derived from the status rather than hardcoded True. A STOPPED
+    heartbeat is a process announcing its own exit, and treating any fresh row as
+    proof of life painted "ENGINE STOPPED · worker" in green while the Render
+    container was genuinely down for half an hour. Asleep is alive; stopped is
+    not.
     """
 
     row = row or {}
+    status = str(row.get("status") or "").upper()
 
     return {
         "status": row.get("status"),
@@ -139,7 +151,7 @@ def heartbeat_to_engine_status(row):
         "last_duration_seconds": row.get("last_duration_sec"),
         "next_due_at": row.get("next_due_at"),
         "thread_alive": False,
-        "running": True,
+        "running": status not in DEAD_STATUSES,
         "remote": True,
     }
 
