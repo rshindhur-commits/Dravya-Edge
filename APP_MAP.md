@@ -94,8 +94,14 @@ worker for best-effort DB writes.
 
 ## 3. Streamlit pages
 
-Sidebar (2026-07-31 order): **Navigation radio** → **System** status → auto-refresh controls →
-paper automation controls → daily validation report controls → downloads. Navigation and System
+Sidebar: **Navigation radio** → **System** status → **Auto Refresh** → **Paper Automation** →
+**Operations** → **Downloads**. The separate `Scan Engine` panel was removed on 2026-08-01 — it
+rendered four captions the System block already carried, so it was two copies of one fact.
+`_ensure_scan_engine_started` keeps the job that panel actually did (every render must confirm the
+daemon thread is alive, because it only exists inside the Streamlit process); it no longer draws
+anything. `Operations` leads with `Post Market: Generate Everything`, with the individual
+generators behind a `Run one at a time` expander, and `Downloads` keeps only live state under
+`Live state` — everything post-hoc is one click away in the review export. Navigation and System
 are `st.sidebar.container()` placeholders claimed first and filled last, because the controls
 between them start the scan engine and return state the routing needs. Navigation previously sat
 fourth, under three blocks of controls. `_render_system_status` answers "is the machine healthy"
@@ -183,6 +189,25 @@ naive values as Eastern because that is what the column name promises.
 target and exit marked, and emits TradingView deep links (`REVIEW_TV_CHART` is the most common
 action status the engine produces — 238 of 403 auto-paper decisions on 2026-07-31 — and had no
 in-app destination before this).
+
+**Exit analysis survives a container wipe.** Migration `025_trade_exit_analysis.sql` adds
+`trade_exit_analysis`, one row per completed trade, written best-effort from
+`append_trend_capture_row` **after** the CSV so a database problem never costs the file. It holds
+the indicator state at exit (`ema9`, `ema20`, `vwap`, `macd`, `rsi`, `atr`, `relative_volume`,
+`bars_held`) and the analysis on top of it (`trend_capture_pct`, `left_on_table`, `mfe`, `mae`,
+`exit_quality`, `exit_verdict`), plus the whole CSV row in `payload` — that file has grown columns
+twice, and a re-run should not need a migration. None of this was in Postgres before:
+`candidate_evidence.trend_capture` is candidate-grain and `exit_quality_metrics` is a daily
+aggregate that was all nulls on 2026-07-31.
+
+`app/analytics/post_market_review.py` reads that table into a plain-English page — one paragraph
+per trade covering what it made, what was available, why it closed, and whether the exit looks
+right. It is **not** the daily validation report, which is a 23-section engineering diagnostic
+(gate quality per window, quote freshness, replay calibration, backtest validation) aimed at
+finding defects. `Post Market: Generate Everything` writes both; `tools/post_market_report.py
+--date` writes the review alone. It falls back to the day's CSV when the database is unreachable,
+and refuses to quote a capture percentage when the stored value is nonsense — a losing 2026-07-30
+row records −2211%.
 
 **Candles survive a container wipe.** `candles_5m.csv` sits on the ephemeral filesystem, which is
 how 2026-07-31's bars were lost, but the same bars are already durable in Neon: every

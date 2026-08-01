@@ -60,6 +60,7 @@ FILE_ONLY_ARTIFACTS = (
     "scanner_output_close.csv",
     "auto_paper_decisions.csv",
     "candles_5m.csv",
+    "post_market_review.html",
 )
 
 # Operator state. `paper_trade_state.json` is the live book and is wiped by every
