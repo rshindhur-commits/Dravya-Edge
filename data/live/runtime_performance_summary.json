@@ -1,8 +1,38 @@
 {
-  "generated_at_utc": "2026-08-01T04:12:19.969960+00:00",
-  "performance_rows": 106,
-  "metrics_rows": 229,
+  "generated_at_utc": "2026-08-01T04:22:28.364278+00:00",
+  "performance_rows": 109,
+  "metrics_rows": 334,
   "recent_timings": [
+    {
+      "observed_at_utc": "2026-08-01T04:22:28.349131+00:00",
+      "trading_day": "2026-08-01",
+      "scan_id": "2026-08-01_002154",
+      "category": "scanner",
+      "stage": "run_scanner",
+      "page": null,
+      "seconds": 34.17,
+      "metadata": "{\"symbols\": 26, \"workers\": 5}"
+    },
+    {
+      "observed_at_utc": "2026-08-01T04:20:08.292426+00:00",
+      "trading_day": "2026-08-01",
+      "scan_id": "2026-08-01_001941",
+      "category": "scanner",
+      "stage": "run_scanner",
+      "page": null,
+      "seconds": 26.33,
+      "metadata": "{\"symbols\": 26, \"workers\": 5}"
+    },
+    {
+      "observed_at_utc": "2026-08-01T04:18:12.310222+00:00",
+      "trading_day": "2026-08-01",
+      "scan_id": "2026-08-01_001740",
+      "category": "scanner",
+      "stage": "run_scanner",
+      "page": null,
+      "seconds": 32.15,
+      "metadata": "{\"symbols\": 26, \"workers\": 5}"
+    },
     {
       "observed_at_utc": "2026-08-01T04:12:19.960515+00:00",
       "trading_day": "2026-08-01",
@@ -222,312 +252,282 @@
       "page": null,
       "seconds": 4.0364,
       "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-27T21:16:24.256607+00:00",
-      "trading_day": null,
-      "scan_id": null,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": null,
-      "seconds": 0.925,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-27T21:16:23.308063+00:00",
-      "trading_day": null,
-      "scan_id": null,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": null,
-      "seconds": 0.9015,
-      "metadata": "{}"
-    },
-    {
-      "observed_at_utc": "2026-07-27T21:16:22.379102+00:00",
-      "trading_day": null,
-      "scan_id": null,
-      "category": "telegram",
-      "stage": "send_telegram_alert",
-      "page": null,
-      "seconds": 0.8967,
-      "metadata": "{}"
     }
   ],
   "recent_jobs": [
     {
-      "observed_at_utc": "2026-08-01T04:12:01.537394+00:00",
-      "scan_id": "2026-08-01_001200",
-      "job_id": "dc4eae5d-c782-4d9b-a6f7-0dad57a52aed",
+      "observed_at_utc": "2026-08-01T04:21:54.957200+00:00",
+      "scan_id": "2026-08-01_002154",
+      "job_id": "2ff09861-eeda-4011-bcac-459dfe95011e",
       "job_name": "record_scanner_run_start",
       "priority": "HIGH",
-      "queue_wait": 0.001,
-      "queue_runtime": 0.7726,
-      "total_runtime": 0.7736,
+      "queue_wait": 0.0013,
+      "queue_runtime": 0.7719,
+      "total_runtime": 0.7732,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:10:44.787602+00:00",
-      "scan_id": "2026-08-01_000919",
-      "job_id": "3c8b17f8-888d-474d-abe2-6c6460f46907",
+      "observed_at_utc": "2026-08-01T04:21:34.603121+00:00",
+      "scan_id": "2026-08-01_001941",
+      "job_id": "7e32afe2-2f92-4c29-817d-38c53f34699b",
       "job_name": "summarize_telemetry",
       "priority": "LOW",
-      "queue_wait": 59.0817,
+      "queue_wait": 80.1467,
       "queue_runtime": 0.0008,
-      "total_runtime": 59.0825,
+      "total_runtime": 80.1475,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:10:44.785636+00:00",
-      "scan_id": "2026-08-01_000919",
-      "job_id": "235a8564-e734-43ac-b37d-5f37fca98cf0",
+      "observed_at_utc": "2026-08-01T04:21:34.600888+00:00",
+      "scan_id": "2026-08-01_001941",
+      "job_id": "5a39bdab-348c-457f-a0bc-1e088aa5c84b",
       "job_name": "write_report_state",
       "priority": "LOW",
-      "queue_wait": 58.9628,
-      "queue_runtime": 0.1184,
-      "total_runtime": 59.0812,
+      "queue_wait": 80.0542,
+      "queue_runtime": 0.091,
+      "total_runtime": 80.1452,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:10:44.665446+00:00",
-      "scan_id": "2026-08-01_000919",
-      "job_id": "499e38dd-fc14-4f78-a985-b7362f4242a1",
+      "observed_at_utc": "2026-08-01T04:21:34.507432+00:00",
+      "scan_id": "2026-08-01_001941",
+      "job_id": "30b38e3a-bbbe-45df-beaf-ff4fb5c4fa9d",
       "job_name": "write_replay_state",
       "priority": "LOW",
-      "queue_wait": 58.9283,
-      "queue_runtime": 0.033,
-      "total_runtime": 58.9613,
+      "queue_wait": 80.0278,
+      "queue_runtime": 0.0251,
+      "total_runtime": 80.0529,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:10:44.630472+00:00",
-      "scan_id": "2026-08-01_000919",
-      "job_id": "2414c3ff-7f67-4f72-ada0-85661ef57110",
+      "observed_at_utc": "2026-08-01T04:21:34.480823+00:00",
+      "scan_id": "2026-08-01_001941",
+      "job_id": "b70102d2-6309-4174-8bc9-04e1c3439527",
       "job_name": "write_validation_state",
       "priority": "NORMAL",
-      "queue_wait": 58.546,
-      "queue_runtime": 0.3816,
-      "total_runtime": 58.9276,
+      "queue_wait": 79.7925,
+      "queue_runtime": 0.2342,
+      "total_runtime": 80.0267,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:10:44.246829+00:00",
-      "scan_id": "2026-08-01_000919",
-      "job_id": "78440ae6-4046-49b7-8b35-b17c392a0a94",
+      "observed_at_utc": "2026-08-01T04:21:34.245056+00:00",
+      "scan_id": "2026-08-01_001941",
+      "job_id": "fae21af2-6ed8-4e5c-be48-6e31d653d2d7",
       "job_name": "persist_regression_snapshot",
       "priority": "NORMAL",
-      "queue_wait": 57.0924,
-      "queue_runtime": 1.4533,
-      "total_runtime": 58.5457,
+      "queue_wait": 78.4148,
+      "queue_runtime": 1.3782,
+      "total_runtime": 79.793,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:10:42.791392+00:00",
-      "scan_id": "2026-08-01_000919",
-      "job_id": "a208ae0c-50dc-4a60-a6ca-79171e9406f8",
+      "observed_at_utc": "2026-08-01T04:21:32.865162+00:00",
+      "scan_id": "2026-08-01_001941",
+      "job_id": "4faa6d62-a1b0-4e62-aa1a-611dceb7054a",
       "job_name": "persist_scan_artifacts_db",
       "priority": "NORMAL",
-      "queue_wait": 11.35,
-      "queue_runtime": 45.7409,
-      "total_runtime": 57.0909,
+      "queue_wait": 32.3723,
+      "queue_runtime": 46.0411,
+      "total_runtime": 78.4134,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:57.048040+00:00",
-      "scan_id": "2026-08-01_000919",
-      "job_id": "b7fbe589-4c11-4128-be01-4946865aecf2",
+      "observed_at_utc": "2026-08-01T04:20:46.822152+00:00",
+      "scan_id": "2026-08-01_001941",
+      "job_id": "8c039e67-0528-4931-bd89-161a07ed6f55",
       "job_name": "persist_activity_trace_db",
       "priority": "NORMAL",
-      "queue_wait": 5.2541,
-      "queue_runtime": 7.2722,
-      "total_runtime": 12.5263,
+      "queue_wait": 4.8763,
+      "queue_runtime": 28.3001,
+      "total_runtime": 33.1764,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:49.772905+00:00",
+      "observed_at_utc": "2026-08-01T04:20:18.519609+00:00",
       "scan_id": null,
-      "job_id": "2673c6f0-c790-45ec-ae58-2597e6910705",
+      "job_id": "955fe1fd-9d0f-4a32-8d14-92502e4843db",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 8.1662,
-      "queue_runtime": 0.1521,
-      "total_runtime": 8.3183,
+      "queue_wait": 7.7701,
+      "queue_runtime": 0.1562,
+      "total_runtime": 7.9263,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:49.617851+00:00",
+      "observed_at_utc": "2026-08-01T04:20:18.360829+00:00",
       "scan_id": null,
-      "job_id": "9f8b7762-0e63-410e-b31a-ad3a7e2d2b98",
+      "job_id": "dc3a86f8-fb35-4bf7-8fa5-bbc255b1b69d",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 8.0133,
-      "queue_runtime": 0.1513,
-      "total_runtime": 8.1646,
+      "queue_wait": 7.6127,
+      "queue_runtime": 0.1558,
+      "total_runtime": 7.7685,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:49.463923+00:00",
+      "observed_at_utc": "2026-08-01T04:20:18.203024+00:00",
       "scan_id": null,
-      "job_id": "3a7a9526-e51c-4792-b889-68fb15f29515",
+      "job_id": "013894e9-7d04-4e93-9fd9-6096a753b9be",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 7.8586,
-      "queue_runtime": 0.1525,
-      "total_runtime": 8.0112,
+      "queue_wait": 7.4444,
+      "queue_runtime": 0.1665,
+      "total_runtime": 7.6109,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:49.308663+00:00",
+      "observed_at_utc": "2026-08-01T04:20:18.034376+00:00",
       "scan_id": null,
-      "job_id": "16c5dd62-45c9-49c3-84a4-dfd70e8ab341",
+      "job_id": "46c5c2cd-6a15-4d96-b426-d137243a2760",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 7.7031,
-      "queue_runtime": 0.1525,
-      "total_runtime": 7.8556,
+      "queue_wait": 7.2888,
+      "queue_runtime": 0.1542,
+      "total_runtime": 7.4431,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:49.153027+00:00",
+      "observed_at_utc": "2026-08-01T04:20:17.878251+00:00",
       "scan_id": null,
-      "job_id": "ec9c55b7-1424-44ac-8f92-f8a0dc273cf8",
+      "job_id": "874bfe17-c672-4fba-afba-3139f75f1028",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 7.5447,
-      "queue_runtime": 0.1565,
-      "total_runtime": 7.7012,
+      "queue_wait": 7.1352,
+      "queue_runtime": 0.1522,
+      "total_runtime": 7.2873,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:48.993999+00:00",
+      "observed_at_utc": "2026-08-01T04:20:17.724261+00:00",
       "scan_id": null,
-      "job_id": "5126a83b-5a95-48b9-8acd-ae902c0d88fd",
+      "job_id": "0c39fba3-20e0-4b33-b48c-53d3fdf29c71",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 7.3883,
-      "queue_runtime": 0.1545,
-      "total_runtime": 7.5428,
+      "queue_wait": 6.9795,
+      "queue_runtime": 0.1542,
+      "total_runtime": 7.1337,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:48.836985+00:00",
+      "observed_at_utc": "2026-08-01T04:20:17.568010+00:00",
       "scan_id": null,
-      "job_id": "05cd654e-6165-431b-9bac-bf6606aa3361",
+      "job_id": "34c920c4-38bb-4f3c-beec-c9a4b1ba3189",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 7.2377,
-      "queue_runtime": 0.1495,
-      "total_runtime": 7.3872,
+      "queue_wait": 6.8197,
+      "queue_runtime": 0.1583,
+      "total_runtime": 6.9779,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:48.685086+00:00",
+      "observed_at_utc": "2026-08-01T04:20:17.407833+00:00",
       "scan_id": null,
-      "job_id": "5611659d-de34-4142-8333-4c8fda3bc285",
+      "job_id": "c83dcab9-17b2-468e-900d-e58b46da5274",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 7.0864,
-      "queue_runtime": 0.1494,
-      "total_runtime": 7.2359,
+      "queue_wait": 6.6644,
+      "queue_runtime": 0.1538,
+      "total_runtime": 6.8182,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:48.533625+00:00",
+      "observed_at_utc": "2026-08-01T04:20:17.251966+00:00",
       "scan_id": null,
-      "job_id": "dbded1f2-5401-425e-9411-2b763f3cfaef",
+      "job_id": "086f5709-25a7-44e9-bf2c-0918a626ec96",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 6.9348,
-      "queue_runtime": 0.1498,
-      "total_runtime": 7.0846,
+      "queue_wait": 6.5062,
+      "queue_runtime": 0.1566,
+      "total_runtime": 6.6629,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:48.380605+00:00",
+      "observed_at_utc": "2026-08-01T04:20:17.093461+00:00",
       "scan_id": null,
-      "job_id": "df384dc9-2c79-4aad-83f0-64e99f0a4acb",
+      "job_id": "33f3fed8-47ca-4b7f-b27b-ab6ab2b0c3c5",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 6.7721,
-      "queue_runtime": 0.161,
-      "total_runtime": 6.9331,
+      "queue_wait": 6.3489,
+      "queue_runtime": 0.156,
+      "total_runtime": 6.5049,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:48.217056+00:00",
+      "observed_at_utc": "2026-08-01T04:20:16.935453+00:00",
       "scan_id": null,
-      "job_id": "9852822b-79d3-45e3-895b-accf343d5fa4",
+      "job_id": "18cc0657-4f49-4c9b-9d6b-fd28df1a2b4e",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 6.6151,
-      "queue_runtime": 0.1547,
-      "total_runtime": 6.7698,
+      "queue_wait": 6.1933,
+      "queue_runtime": 0.1543,
+      "total_runtime": 6.3476,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:48.059666+00:00",
+      "observed_at_utc": "2026-08-01T04:20:16.779178+00:00",
       "scan_id": null,
-      "job_id": "3cd0e8e2-caa1-4ebe-b4e1-5e9b91f2204e",
+      "job_id": "d19528eb-8751-4aa3-a3a5-028d6d83b34e",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 6.4605,
-      "queue_runtime": 0.1519,
-      "total_runtime": 6.6125,
+      "queue_wait": 6.0405,
+      "queue_runtime": 0.152,
+      "total_runtime": 6.1925,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:47.904515+00:00",
+      "observed_at_utc": "2026-08-01T04:20:16.625231+00:00",
       "scan_id": null,
-      "job_id": "082b7a7e-c848-4158-85e5-645a26584de4",
+      "job_id": "8a3a5d4a-378b-4cd5-be04-2242fd2a6b96",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 6.307,
-      "queue_runtime": 0.1518,
-      "total_runtime": 6.4588,
+      "queue_wait": 5.8857,
+      "queue_runtime": 0.1535,
+      "total_runtime": 6.0393,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:47.750163+00:00",
+      "observed_at_utc": "2026-08-01T04:20:16.469485+00:00",
       "scan_id": null,
-      "job_id": "0195d138-3622-4904-9944-584414251b5e",
+      "job_id": "9973e9e6-93f5-4f24-975c-4793aa2cf5d6",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 6.1537,
-      "queue_runtime": 0.1521,
-      "total_runtime": 6.3057,
+      "queue_wait": 5.7292,
+      "queue_runtime": 0.1544,
+      "total_runtime": 5.8836,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:47.595596+00:00",
+      "observed_at_utc": "2026-08-01T04:20:16.312611+00:00",
       "scan_id": null,
-      "job_id": "4785b72f-98b4-4eaf-8bb7-85076be3d26b",
+      "job_id": "363e4b9b-7c7f-48a3-a83b-f43b2607c890",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 6.0006,
-      "queue_runtime": 0.1499,
-      "total_runtime": 6.1505,
+      "queue_wait": 5.5732,
+      "queue_runtime": 0.1549,
+      "total_runtime": 5.7281,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:47.441888+00:00",
+      "observed_at_utc": "2026-08-01T04:20:16.156017+00:00",
       "scan_id": null,
-      "job_id": "e3aff921-8397-49d9-a8c1-ba243523c1c3",
+      "job_id": "a54dec76-54ad-4711-a9a1-80dfdb0bd272",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 5.8489,
-      "queue_runtime": 0.1502,
-      "total_runtime": 5.9991,
+      "queue_wait": 5.4184,
+      "queue_runtime": 0.1538,
+      "total_runtime": 5.5722,
       "status": "COMPLETED"
     },
     {
-      "observed_at_utc": "2026-08-01T04:09:47.289012+00:00",
+      "observed_at_utc": "2026-08-01T04:20:16.000569+00:00",
       "scan_id": null,
-      "job_id": "4d8004ec-f2c3-40d9-b86f-8d1087d69769",
+      "job_id": "a3797ac7-f4f3-4656-8381-13fc6d732786",
       "job_name": "persist_timeline_event",
       "priority": "NORMAL",
-      "queue_wait": 5.6917,
-      "queue_runtime": 0.1545,
-      "total_runtime": 5.8462,
+      "queue_wait": 5.261,
+      "queue_runtime": 0.1561,
+      "total_runtime": 5.417,
       "status": "COMPLETED"
     }
   ],
@@ -536,7 +536,7 @@
       "category": "scanner",
       "stage": "run_scanner",
       "page": null,
-      "average_seconds": 19.415
+      "average_seconds": 26.296
     },
     {
       "category": "telegram",
@@ -554,23 +554,23 @@
   "average_runtime_by_job": [
     {
       "job_name": "persist_scan_artifacts_db",
-      "average_runtime": 45.7409
+      "average_runtime": 45.656
     },
     {
       "job_name": "persist_activity_trace_db",
-      "average_runtime": 7.2722
+      "average_runtime": 17.7056
     },
     {
       "job_name": "finalize_scan_outputs",
-      "average_runtime": 6.2647
+      "average_runtime": 6.1192
     },
     {
       "job_name": "persist_regression_snapshot",
-      "average_runtime": 1.4533
+      "average_runtime": 1.4022
     },
     {
       "job_name": "record_scanner_run_start",
-      "average_runtime": 0.8296
+      "average_runtime": 0.8042
     },
     {
       "job_name": "persist_completed_trade_db",
@@ -582,7 +582,7 @@
     },
     {
       "job_name": "write_validation_state",
-      "average_runtime": 0.3816
+      "average_runtime": 0.3075
     },
     {
       "job_name": "insert",
@@ -590,19 +590,19 @@
     },
     {
       "job_name": "persist_timeline_event",
-      "average_runtime": 0.1536
+      "average_runtime": 0.1534
     },
     {
       "job_name": "write_report_state",
-      "average_runtime": 0.1184
+      "average_runtime": 0.111
     },
     {
       "job_name": "write_replay_state",
-      "average_runtime": 0.033
+      "average_runtime": 0.0292
     },
     {
       "job_name": "summarize_telemetry",
-      "average_runtime": 0.0008
+      "average_runtime": 0.001
     }
   ]
 }
