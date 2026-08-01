@@ -166,12 +166,50 @@ def archived_scan_count(trading_day):
 
 
 def engine_status():
+    """The scan engine serving this deployment, wherever it is running.
+
+    Falls back to the Postgres heartbeat when there is no supervisor thread in
+    this process. Once scanning moves to the Render worker there never will be
+    one, and every consumer that only asked `thread_alive` reported a healthy
+    system as down -- the Operator Console went further and told the operator to
+    restart Streamlit, which would not have helped and would have wiped the
+    container's state.
+
+    `running` is the key callers should read. `thread_alive` still means what it
+    always did: a supervisor thread inside *this* process.
+    """
+
     try:
         from app.runtime.scan_supervisor import status
 
-        return status()
+        local = status() or {}
+
     except Exception:
-        return {}
+        local = {}
+
+    if local.get("thread_alive"):
+
+        local.setdefault("running", True)
+        local.setdefault("owner", "dashboard")
+
+        return local
+
+    try:
+        from app.runtime.scan_engine_heartbeat import heartbeat_to_engine_status
+
+        summary = scan_engine_heartbeats() or {}
+        live = summary.get("live") or []
+
+        if live:
+
+            return heartbeat_to_engine_status(live[0])
+
+    except Exception as exc:
+        print(f"[ENGINE STATUS WARNING] heartbeat unavailable: {exc}")
+
+    local.setdefault("running", False)
+
+    return local
 
 
 def scan_engine_heartbeats(within_seconds=1800):

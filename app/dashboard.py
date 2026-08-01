@@ -3345,26 +3345,22 @@ def _remote_engine_summary():
 
 
 def _engine_from_heartbeat(row):
-    """Shape a heartbeat row like `engine_status()` so the panel reads one dict."""
+    """Heartbeat row shaped like `engine_status()`, with times rendered in ET.
 
-    row = row or {}
+    Shaping is shared with `render_context.engine_status` so the sidebar and the
+    Operator Console cannot disagree about whether an engine is running. Only the
+    timestamp conversion is local: this panel slices a fixed offset out of the
+    string, and Postgres hands back TIMESTAMPTZ in the session timezone (UTC), so
+    without this a UTC time would be printed under an "ET" label.
+    """
 
-    return {
-        "status": row.get("status"),
-        "owner": row.get("owner"),
-        "session": row.get("session"),
-        "interval_seconds": row.get("interval_seconds"),
-        "scans": row.get("scans"),
-        "failures": row.get("failures"),
-        "last_error": row.get("last_error"),
-        # Rendered as ET by the panel, which slices a fixed offset out of the
-        # string. Postgres hands back TIMESTAMPTZ in the session timezone (UTC),
-        # so converting here is what stops a UTC time being labelled "ET".
-        "last_completed_at": _as_et_isoformat(row.get("last_scan_at")),
-        "last_duration_seconds": row.get("last_duration_sec"),
-        "next_due_at": _as_et_isoformat(row.get("next_due_at")),
-        "thread_alive": False,
-    }
+    from app.runtime.scan_engine_heartbeat import heartbeat_to_engine_status
+
+    engine = heartbeat_to_engine_status(row)
+    engine["last_completed_at"] = _as_et_isoformat((row or {}).get("last_scan_at"))
+    engine["next_due_at"] = _as_et_isoformat((row or {}).get("next_due_at"))
+
+    return engine
 
 
 def _as_et_isoformat(moment):
