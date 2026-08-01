@@ -452,6 +452,56 @@ class EngineStatusFallbackTests(unittest.TestCase):
         self.assertFalse(engine["running"])
 
 
+
+class StalenessWindowTests(unittest.TestCase):
+    """Silence means different things at different cadences.
+
+    The heartbeat lands once per cycle: 300s in the regular session, 900s after
+    hours, 1800s when the market is shut. Against a flat 900s threshold a healthy
+    weekend worker reads as dead -- exactly the ambiguity the heartbeat exists to
+    remove.
+    """
+
+    def test_a_slow_cadence_engine_is_not_stale_between_beats(self):
+
+        summary = summarize_engines([
+            {"owner": "worker", "status": "SLEEPING_WEEKEND",
+             "interval_seconds": 1800, "age_seconds": 1750},
+        ])
+
+        self.assertEqual(summary["live_count"], 1)
+        self.assertEqual(summary["stale"], [])
+
+    def test_two_missed_beats_is_stale(self):
+        """One missed beat is tolerated; two means something is wrong."""
+
+        summary = summarize_engines([
+            {"owner": "worker", "status": "SLEEPING_WEEKEND",
+             "interval_seconds": 900, "age_seconds": 2000},
+        ])
+
+        self.assertEqual(summary["live_count"], 0)
+        self.assertEqual(len(summary["stale"]), 1)
+
+    def test_a_fast_cadence_engine_keeps_the_floor(self):
+        """A 300s cadence must not shrink the window below the default."""
+
+        summary = summarize_engines([
+            {"owner": "worker", "status": "IDLE",
+             "interval_seconds": 300, "age_seconds": 800},
+        ])
+
+        self.assertEqual(summary["live_count"], 1)
+
+    def test_a_missing_interval_falls_back_to_the_floor(self):
+
+        summary = summarize_engines([
+            {"owner": "worker", "status": "IDLE", "age_seconds": 1000},
+        ])
+
+        self.assertEqual(summary["live_count"], 0)
+
+
 if __name__ == "__main__":
 
     unittest.main()
