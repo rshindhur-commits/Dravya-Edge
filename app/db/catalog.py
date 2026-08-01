@@ -116,6 +116,11 @@ TABLES = (
     ("trade_comparison", "Regression", "one per matched pair",
      "V1 against V2 on the same trade, with the better engine named."),
 
+    ("telegram_alert_state", "Notifications", "one per alert dedup key",
+     "Which alerts have already been sent, so a container restart cannot make "
+     "subscribers receive the day's alerts a second time. The JSON state file "
+     "stays the hot path; this is hydrated into it once per process."),
+
     # ---- Runtime ---------------------------------------------------------
     ("scan_engine_heartbeat", "Runtime", "one per scan engine owner",
      "Which scan engine is alive, when it last scanned and when it is next due. "

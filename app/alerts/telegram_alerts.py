@@ -629,6 +629,79 @@ def _queued_send_result(result, alert_key):
     }
 
 
+_alert_state_hydrated = False
+_alert_state_hydration_lock = Lock()
+
+
+def _hydrate_alert_state_from_db(state):
+    """Re-adopt dedup keys the local file has lost. Once per process.
+
+    `telegram_alert_state.json` is the live source of truth and stays the hot
+    path -- `alert_was_sent` runs once per candidate per scan and must not become
+    a database round trip. But the file sits on an ephemeral filesystem, so a
+    fresh container starts with every dedup key gone and re-sends the day's
+    review alerts, and now potentially a second copy of the weekly results.
+
+    A fresh container is the *only* moment the file is wrong, so hydrating once
+    at first read covers the failure exactly and costs one query per process.
+
+    The local file wins for keys it already has: the database copy is written
+    best-effort and can lag. Only missing keys are adopted, so hydration can
+    never overwrite fresher local state. Same rule, and the same reason, as
+    `restore_open_trades_from_db()`.
+    """
+
+    global _alert_state_hydrated
+
+    if _alert_state_hydrated:
+
+        return state
+
+    with _alert_state_hydration_lock:
+
+        if _alert_state_hydrated:
+
+            return state
+
+        _alert_state_hydrated = True
+
+        try:
+
+            from app.db.telegram_alert_state_repository import TelegramAlertStateRepository
+
+            repository = TelegramAlertStateRepository()
+            stored = repository.fetch_recent()
+
+            # Once per process, on the one code path guaranteed to run before any
+            # alert is considered. Keys this old cannot dedup anything -- the
+            # longest-lived is an ENTRY alert for a multiday position -- and an
+            # uncalled prune() would read as housekeeping that was never wired up.
+            repository.prune()
+
+        except Exception as exc:
+
+            print(f"[ALERT STATE HYDRATE WARNING] {exc}")
+
+            return state
+
+        sent = state.setdefault("sent", {})
+        adopted = [key for key in stored if key not in sent]
+
+        for key in adopted:
+
+            sent[key] = stored[key]
+
+        if adopted:
+
+            _save_alert_state(state)
+            print(
+                f"[ALERT STATE HYDRATE] re-adopted {len(adopted)} dedup key(s) "
+                "the state file had lost"
+            )
+
+        return state
+
+
 def _load_alert_state():
 
     state = load_json_file(
@@ -638,13 +711,13 @@ def _load_alert_state():
 
     if not isinstance(state, dict):
 
-        return {"sent": {}}
+        state = {"sent": {}}
 
     if not isinstance(state.get("sent"), dict):
 
         state["sent"] = {}
 
-    return state
+    return _hydrate_alert_state_from_db(state)
 
 
 def _save_alert_state(state):
@@ -674,16 +747,38 @@ def alert_was_sent(alert_key):
 def mark_alert_sent(alert_key, metadata=None):
 
     state = _load_alert_state()
-    state.setdefault("sent", {})[alert_key] = {
+    record = {
         "sent_at": datetime.now(timezone.utc).isoformat(),
         **(metadata or {})
     }
+    state.setdefault("sent", {})[alert_key] = record
     _save_alert_state(state)
+    _persist_alert_state_row(alert_key, record)
+
+
+def _persist_alert_state_row(alert_key, record):
+    """Mirror one dedup key to Postgres. Never allowed to fail a send.
+
+    The file write above has already happened, so a database outage costs
+    durability across a restart, not correctness within this container.
+    """
+
+    try:
+
+        from app.db.telegram_alert_state_repository import TelegramAlertStateRepository
+
+        TelegramAlertStateRepository().upsert(alert_key, record)
+
+    except Exception as exc:
+
+        print(f"[ALERT STATE PERSIST WARNING] {alert_key}: {exc}")
 
 
 def mark_alert_closed(symbol, option_ticker=None):
 
+    closed_at = datetime.now(timezone.utc).isoformat()
     state = _load_alert_state()
+
     for metadata in state.get("sent", {}).values():
 
         if metadata.get("event_type") != ENTRY_EVENT_TYPE:
@@ -699,9 +794,27 @@ def mark_alert_closed(symbol, option_ticker=None):
             continue
 
         metadata["closed"] = True
-        metadata["closed_at"] = datetime.now(timezone.utc).isoformat()
+        metadata["closed_at"] = closed_at
 
     _save_alert_state(state)
+
+    # Mirrored as a single UPDATE rather than a row-by-row upsert: the match is
+    # the same one the loop above makes, and doing it in SQL keeps the two
+    # definitions of "an open ENTRY alert for this symbol" in one shape.
+    try:
+
+        from app.db.telegram_alert_state_repository import TelegramAlertStateRepository
+
+        TelegramAlertStateRepository().mark_closed(
+            symbol,
+            option_ticker=option_ticker,
+            event_type=ENTRY_EVENT_TYPE,
+            closed_at=closed_at,
+        )
+
+    except Exception as exc:
+
+        print(f"[ALERT STATE PERSIST WARNING] close {symbol}: {exc}")
 
 
 def _paper_entry_alert_key(trade, scanner_context=None):
