@@ -3190,31 +3190,16 @@ def _render_operator_file_downloads(report_date, container):
     `market_opportunity_audit.csv`, all of which are in Postgres.
     """
 
-    files = container.expander("Live state", expanded=False)
-
-    # Only what is worth grabbing *during* a session, before an export exists.
-    # Everything the day produces after the fact is in the review export, and
-    # the day's CSVs were each duplicated there and in Postgres besides:
-    # `paper_trade_events.csv` (also `paper_trades`), `scanner_output_close.csv`
-    # (also `scanner_snapshot`) and `signal_lifecycle_events.csv` were three
-    # buttons offering a second copy of something one click already gives.
-    exports = [
-        ("paper_trade_state.json", PAPER_TRADE_STATE_FILE, "application/json"),
-        ("suggested_trade_state.json", SUGGESTED_TRADE_STATE_FILE, "application/json"),
-        ("telegram_dispatch_audit.jsonl",
-         TELEGRAM_DISPATCH_AUDIT_FILE, "application/x-ndjson"),
-    ]
-
-    for label, path, mime in exports:
-
-        _render_file_download_button(
-            f"Download {label}",
-            path,
-            file_name=label,
-            mime=mime,
-            key=f"download_file_{report_date}_{label}",
-            container=files
-        )
+    # The `Live state` expander is gone. `paper_trade_state.json` is in
+    # `paper_trades` and `telegram_dispatch_audit.jsonl` is in
+    # `telegram_dispatch`, so both were a second copy of a durable record.
+    # `suggested_trade_state.json` has no table -- it is the one piece of live
+    # state with no database home -- but the review export carries it under
+    # `state/`, so nothing is lost by dropping the button.
+    container.caption(
+        "Per-file downloads live in the review export. Trade and dispatch state "
+        "are in Postgres."
+    )
 
 
 DASHBOARD_PAGES = ["Trading", "Validation", "Research", "Developer"]

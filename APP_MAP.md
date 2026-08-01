@@ -100,8 +100,17 @@ rendered four captions the System block already carried, so it was two copies of
 `_ensure_scan_engine_started` keeps the job that panel actually did (every render must confirm the
 daemon thread is alive, because it only exists inside the Streamlit process); it no longer draws
 anything. `Operations` leads with `Post Market: Generate Everything`, with the individual
-generators behind a `Run one at a time` expander, and `Downloads` keeps only live state under
-`Live state` — everything post-hoc is one click away in the review export. Navigation and System
+generators behind a `Run one at a time` expander. `Downloads` is the review export plus the three
+finished reports; the per-file buttons are gone. `paper_trade_state.json` is in `paper_trades` and
+`telegram_dispatch_audit.jsonl` is in `telegram_dispatch`, so those were second copies of a durable
+record. **`suggested_trade_state.json` is the one piece of live state with no table** — the review
+export carries it under `state/`, and that is currently its only durable home.
+
+**Developer → Database Tables** describes all 32 tables with grain and purpose, from
+`app/db/catalog.py`, alongside live row counts. Grain is stated because it is what surprises:
+`candidate_evidence` is one row per candidate per *day* while `candidate_snapshot` is one per
+candidate per *scan*. A test fails when a migration creates a table the catalog does not describe,
+and the page warns about any table present in the database but missing from it. Navigation and System
 are `st.sidebar.container()` placeholders claimed first and filled last, because the controls
 between them start the scan engine and return state the routing needs. Navigation previously sat
 fourth, under three blocks of controls. `_render_system_status` answers "is the machine healthy"
