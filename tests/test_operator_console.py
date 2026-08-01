@@ -9,78 +9,77 @@ from app.ui import components
 from app.ui.pages import trading
 
 
-def _stub_health(monkeypatch, **overrides):
-    defaults = {
-        "_engine_status": lambda: {"thread_alive": True, "status": "RUNNING",
-                                   "scans": 12, "failures": 0},
-        "_active_positions": lambda: [],
-        "_telegram_rows": lambda day: [],
-        "_entries_used": lambda day: 0,
-        "_db_writes_active": lambda: True,
-        "_minutes_since": lambda value: 3.0,
-        "_is_post_market": lambda now=None: False,
-    }
-    defaults.update(overrides)
-    for name, value in defaults.items():
-        monkeypatch.setattr(trading, name, value)
+class FakeContext:
+    """Stands in for RenderContext: the health cards only read attributes."""
+
+    def __init__(self, **overrides):
+        self.state = {}
+        self.engine = {"thread_alive": True, "status": "RUNNING", "scans": 12, "failures": 0}
+        self.positions = []
+        self.telegram = []
+        self.entries_used = 0
+        self.max_daily_entries = 3
+        self.db_writes_active = True
+        self.scan_age_minutes = 3.0
+        self.post_market = False
+        self.__dict__.update(overrides)
 
 
 def _tones(cells):
     return {label: tone for label, _value, tone in cells}
 
 
-def test_health_cells_are_all_green_on_a_healthy_live_session(monkeypatch):
-    _stub_health(monkeypatch)
+def test_health_cells_are_all_green_on_a_healthy_live_session():
+    tones = _tones(trading._health_cells(FakeContext()))
 
-    assert _tones(trading._health_cells({}))["Engine"] == "ok"
-    assert _tones(trading._health_cells({}))["Last scan"] == "ok"
-    assert _tones(trading._health_cells({}))["DB writes"] == "ok"
+    assert tones["Engine"] == "ok"
+    assert tones["Last scan"] == "ok"
+    assert tones["DB writes"] == "ok"
+    assert tones["Telegram"] == "ok"
 
 
-def test_a_dead_engine_and_dead_db_writer_both_read_as_faults(monkeypatch):
-    _stub_health(
-        monkeypatch,
-        _engine_status=lambda: {"thread_alive": False, "status": "RUNNING"},
-        _db_writes_active=lambda: False,
-    )
-
-    tones = _tones(trading._health_cells({}))
+def test_a_dead_engine_and_dead_db_writer_both_read_as_faults():
+    tones = _tones(trading._health_cells(FakeContext(
+        engine={"thread_alive": False, "status": "RUNNING"},
+        db_writes_active=False,
+    )))
 
     assert tones["Engine"] == "bad"
     assert tones["DB writes"] == "bad"
 
 
-def test_a_stale_scan_is_a_fault_in_session_and_expected_after_the_close(monkeypatch):
+def test_a_stale_scan_is_a_fault_in_session_and_expected_after_the_close():
     """A quiet engine at 16:30 is correct behaviour; at 11:00 it is an outage."""
-    _stub_health(monkeypatch, _minutes_since=lambda value: 90.0)
-    assert _tones(trading._health_cells({}))["Last scan"] == "bad"
+    in_session = FakeContext(scan_age_minutes=90.0, post_market=False)
+    after_close = FakeContext(scan_age_minutes=90.0, post_market=True)
 
-    _stub_health(monkeypatch, _minutes_since=lambda value: 90.0,
-                 _is_post_market=lambda now=None: True)
-    assert _tones(trading._health_cells({}))["Last scan"] == "neutral"
+    assert _tones(trading._health_cells(in_session))["Last scan"] == "bad"
+    assert _tones(trading._health_cells(after_close))["Last scan"] == "neutral"
 
 
-def test_scan_age_escalates_from_ok_through_warn_to_bad(monkeypatch):
+def test_scan_age_escalates_from_ok_through_warn_to_bad():
     for minutes, expected in ((5.0, "ok"), (30.0, "warn"), (120.0, "bad")):
-        _stub_health(monkeypatch, _minutes_since=lambda value, m=minutes: m)
-        assert _tones(trading._health_cells({}))["Last scan"] == expected
+        context = FakeContext(scan_age_minutes=minutes)
+        assert _tones(trading._health_cells(context))["Last scan"] == expected
 
 
-def test_a_failed_telegram_send_and_a_reached_entry_cap_are_surfaced(monkeypatch):
-    # `auto_paper_settings.json` is gitignored, so the cap has to be stated here
-    # rather than read from whatever the machine happens to have.
-    from app.runtime import paper_automation_support
+def test_a_never_scanned_session_is_a_fault_but_a_quiet_evening_is_not():
+    assert _tones(trading._health_cells(
+        FakeContext(scan_age_minutes=None)
+    ))["Last scan"] == "bad"
+    assert _tones(trading._health_cells(
+        FakeContext(scan_age_minutes=None, post_market=True)
+    ))["Last scan"] == "neutral"
 
-    monkeypatch.setattr(
-        paper_automation_support, "load_auto_paper_controls", lambda: {"max_daily": 3}
+
+def test_a_failed_telegram_send_and_a_reached_entry_cap_are_surfaced():
+    context = FakeContext(
+        telegram=[{"event": "SENT"}, {"event": "FAILED"}],
+        entries_used=3,
+        max_daily_entries=3,
     )
-    _stub_health(
-        monkeypatch,
-        _telegram_rows=lambda day: [{"event": "SENT"}, {"event": "FAILED"}],
-        _entries_used=lambda day: 3,
-    )
 
-    cells = {label: (value, tone) for label, value, tone in trading._health_cells({})}
+    cells = {label: (value, tone) for label, value, tone in trading._health_cells(context)}
 
     assert cells["Telegram"] == ("1 sent / 1 failed", "bad")
     assert cells["Book"][1] == "warn"

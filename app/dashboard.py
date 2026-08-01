@@ -3217,6 +3217,107 @@ def _render_operator_file_downloads(report_date, container):
         )
 
 
+DASHBOARD_PAGES = ["Trading", "Validation", "Research", "Developer"]
+
+# The four pages Research absorbed on 2026-07-31.
+_FOLDED_INTO_RESEARCH = {"Replay", "Regression", "Reports", "Learning"}
+
+
+def _migrate_dashboard_page(stored):
+    """Keep a session open across the navigation change on a valid page.
+
+    Streamlit raises when a radio's stored session value is not one of its
+    options, so a browser tab left open across the redeploy that folded Replay,
+    Regression, Reports and Learning into Research would break on its next
+    rerun. Send those sessions to the page that absorbed them.
+    """
+
+    if stored in DASHBOARD_PAGES:
+
+        return stored
+
+    if stored in _FOLDED_INTO_RESEARCH:
+
+        return "Research"
+
+    return "Trading"
+
+
+def _research_frame():
+    """The scanner frame, loaded only if a Research tab actually needs it.
+
+    Replay and Reports fall back to it when their cached state file is missing;
+    Regression and Learning never touch it. Loading it up front would charge
+    every Research visit for reading `scanner_output.xlsx`.
+    """
+
+    frame = _load_scanner_output()
+
+    if frame.empty:
+
+        st.warning("No scanner output available. Run a scan first.")
+        return None
+
+    return frame
+
+
+def _render_system_status(container):
+    """Is the machine healthy, answered above the controls that change it.
+
+    The engine panel, the key status and the database state were previously
+    scattered across three sidebar sections or, in the case of runtime keys, a
+    function that nothing called. An operator checking "is it working" had to
+    read the whole sidebar to find out.
+    """
+
+    from app.ui.render_context import engine_status
+
+    engine = engine_status()
+    alive = bool(engine.get("thread_alive"))
+    failures = int(engine.get("failures") or 0)
+
+    container.subheader("System")
+
+    if not alive:
+
+        container.error("Scan engine not running")
+
+    else:
+
+        interval = engine.get("interval_seconds")
+        container.caption(
+            f"Engine {engine.get('status') or 'IDLE'}"
+            + (f" · every {int(interval) // 60} min" if interval else "")
+        )
+
+    last_completed = engine.get("last_completed_at")
+
+    if last_completed:
+
+        container.caption(f"Last scan {str(last_completed)[11:19]} ET")
+
+    next_due = engine.get("next_due_at")
+
+    if next_due and alive:
+
+        container.caption(f"Next due {str(next_due)[11:19]} ET")
+
+    container.caption(
+        f"Scans {int(engine.get('scans') or 0)}"
+        + (f" · {failures} failed" if failures else "")
+    )
+
+    from app.ui.render_context import db_writes_active
+
+    database = "DB writes on" if db_writes_active() else "DB writes OFF"
+    polygon = "Polygon key set" if os.getenv("POLYGON_API_KEY", "").strip() else "Polygon key MISSING"
+    container.caption(f"{database} · {polygon}")
+
+    if failures and engine.get("last_error"):
+
+        container.warning(f"Last scan error: {engine['last_error']}")
+
+
 def _render_download_exports():
     """The one home for downloads.
 
@@ -8229,23 +8330,28 @@ def main():
     render_app_header()
     st.caption("Trading workstation. Developer diagnostics stay collapsed unless needed.")
 
+    # Navigation is claimed first so it renders at the top of the sidebar, but it
+    # is filled in last: the controls below it start the scan engine and return
+    # state the page routing needs. Previously navigation sat fourth, under three
+    # blocks of controls, which is the wrong order for the thing an operator
+    # reaches for most.
+    navigation = st.sidebar.container()
+    system = st.sidebar.container()
+
     refresh_state = _render_auto_refresh_controls()
     auto_paper_controls = _render_auto_paper_controls()
     _render_daily_validation_report_controls()
     _render_download_exports()
-    page = st.sidebar.radio(
+
+    st.session_state["dashboard_page"] = _migrate_dashboard_page(
+        st.session_state.get("dashboard_page")
+    )
+    page = navigation.radio(
         "Navigation",
-        options=[
-            "Trading",
-            "Validation",
-            "Replay",
-            "Regression",
-            "Reports",
-            "Learning",
-            "Developer",
-        ],
+        options=DASHBOARD_PAGES,
         key="dashboard_page",
     )
+    _render_system_status(system)
 
     # No scan trigger here. Scanning is owned by app.runtime.scan_supervisor,
     # started from the sidebar's Scan Engine panel, so cadence does not depend on
@@ -8274,37 +8380,11 @@ def main():
         st.caption("Validation page rendered from validation_state.json. Auto-refresh controls are in the sidebar.")
         return
 
-    if page == "Replay" and _load_cached_state("replay_state.json", profile="replay"):
+    if page == "Research":
 
-        from app.ui.pages.replay import render
+        from app.ui.pages.research import render
 
-        render(
-            df=pd.DataFrame(),
-            refresh_state=refresh_state
-        )
-        st.caption("Replay page rendered from replay_state.json. Auto-refresh controls are in the sidebar.")
-        return
-
-    if page == "Regression":
-
-        from app.ui.pages.regression import render
-
-        render()
-        return
-
-    if page == "Reports" and _load_cached_state("report_state.json", profile="reports"):
-
-        from app.ui.pages.reports import render
-
-        render(pd.DataFrame())
-        st.caption("Reports page rendered from report_state.json. Auto-refresh controls are in the sidebar.")
-        return
-
-    if page == "Learning":
-
-        from app.ui.pages.learning import render
-
-        render()
+        render(refresh_state=refresh_state, load_frame=_research_frame)
         return
 
     df = _load_scanner_output()
@@ -8355,27 +8435,6 @@ def main():
         elif page == "Validation":
 
             from app.ui.pages.validation import render
-
-            render(df)
-
-        elif page == "Replay":
-
-            from app.ui.pages.replay import render
-
-            render(
-                df=df,
-                refresh_state=refresh_state
-            )
-
-        elif page == "Reports":
-
-            from app.ui.pages.reports import render
-
-            render(df)
-
-        elif page == "Learning":
-
-            from app.ui.pages.learning import render
 
             render(df)
 

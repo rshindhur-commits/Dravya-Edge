@@ -1060,6 +1060,43 @@ def _decision_candle_snapshot(df):
     }
 
 
+_DAILY_CANDLE_KEYS = {}
+
+
+def _daily_candle_keys(trading_day, path):
+    """(symbol, timestamp) pairs already in this day's candle file.
+
+    Seeded once from the file so a restart mid-session does not start appending
+    duplicates again, then maintained in memory -- re-reading a 2MB CSV on every
+    symbol of every scan would cost more than the duplication did.
+    """
+    day = str(trading_day)
+    keys = _DAILY_CANDLE_KEYS.get(day)
+
+    if keys is not None:
+        return keys
+
+    _DAILY_CANDLE_KEYS.clear()
+    keys = set()
+
+    if path.exists() and path.stat().st_size:
+
+        try:
+
+            existing = pd.read_csv(path, usecols=["symbol", "timestamp"])
+            keys = {
+                (str(row_symbol), str(row_stamp))
+                for row_symbol, row_stamp in zip(existing["symbol"], existing["timestamp"])
+            }
+
+        except Exception as exc:
+
+            print(f"[DAILY CANDLE WARNING] could not read existing keys: {exc}")
+
+    _DAILY_CANDLE_KEYS[day] = keys
+    return keys
+
+
 def _append_daily_candles(symbol, candles_df, trading_day, scan_id, interval="5m"):
 
     try:
@@ -1112,15 +1149,32 @@ def _append_daily_candles(symbol, candles_df, trading_day, scan_id, interval="5m
 
         path = daily_path(trading_day, "candles_5m.csv")
         path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Every scan re-fetches the whole session, so without this the file grew
+        # one full copy of the day per scan: 4,879 of 19,496 rows on 2026-07-31
+        # were exact repeats. Polygon's grid is now anchored (see
+        # `technical_indicators`), so repeats land on identical timestamps and
+        # this collapses them.
+        already_written = _daily_candle_keys(trading_day, path)
+        fresh = output[[
+            (symbol, stamp) not in already_written
+            for stamp in output["timestamp"]
+        ]]
+
+        if fresh.empty:
+
+            return 0
+
         write_header = not path.exists() or path.stat().st_size == 0
-        output.to_csv(
+        fresh.to_csv(
             path,
             mode="a",
             header=write_header,
             index=False
         )
+        already_written.update((symbol, stamp) for stamp in fresh["timestamp"])
 
-        return len(output)
+        return len(fresh)
 
     except Exception as exc:
 
@@ -2092,15 +2146,37 @@ def get_market_data_status(df, current_et=None):
     }
 
 
+ET_ZONE = ZoneInfo("America/New_York")
+
+
 def format_timestamp(value):
+    """Render an instant so it can be read back as the instant it was.
+
+    This used `%Z`, producing `2026-07-31 00:38:19 EDT`. Pandas parses that with
+    a FutureWarning saying the unrecognized zone is dropped and will raise in a
+    later version -- and dropping it is already wrong, because it turns an
+    Eastern instant into a naive one four hours off. `Current ET` and
+    `Data Timestamp ET` flow from here into the activity trace, candidate
+    evidence, quote attribution, recommendation outcomes and the candidate
+    snapshot writer, so every one of those inherited the ambiguity.
+
+    A numeric offset (`2026-07-31 00:38:19-04:00`) is unambiguous, sorts
+    correctly as text within a zone, and pandas reads it natively. Archived
+    files still hold the old form, so readers must accept both -- see
+    `app/ui/timestamps.py`.
+    """
 
     if value is None:
 
         return None
 
-    return value.strftime(
-        "%Y-%m-%d %H:%M:%S %Z"
-    )
+    if getattr(value, "tzinfo", None) is None:
+
+        # These columns are named ET and are built from ET clocks; saying so
+        # explicitly is what makes the value round-trip.
+        value = value.replace(tzinfo=ET_ZONE)
+
+    return value.isoformat(sep=" ", timespec="seconds")
 
 
 def build_status_result_row(
