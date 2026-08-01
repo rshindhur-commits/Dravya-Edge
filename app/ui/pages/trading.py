@@ -35,7 +35,9 @@ def _health_cells(context):
     sent = sum(1 for row in context.telegram if row.get("event") == "SENT")
     failed = sum(1 for row in context.telegram if row.get("event") == "FAILED")
     scan_age = context.scan_age_minutes
-    alive = bool(engine.get("thread_alive"))
+    # "Is an engine scanning", not "is there a thread in this process". The
+    # worker has no thread here and never will.
+    alive = bool(engine.get("running") or engine.get("thread_alive"))
     failures = int(engine.get("failures") or 0)
     max_daily = context.max_daily_entries
     entries = context.entries_used
@@ -95,20 +97,30 @@ def _render_header(context):
     from app.ui.components import operator_bar, status_card_grid
 
     engine = context.engine
+    # `running`, not `thread_alive`. Once scanning moved to the Render worker
+    # there is no supervisor thread in this process by design, and asking for one
+    # made a healthy system read as ENGINE DOWN permanently -- while the sidebar,
+    # which had already been taught about the worker, reported it running two
+    # feet away. See engine_status().
+    running = bool(engine.get("running") or engine.get("thread_alive"))
+    owner = str(engine.get("owner") or "").strip()
+
     operator_bar("Operator Console", [
         (context.trading_day, "neutral"),
         ("POST-MARKET" if context.post_market else "LIVE SESSION",
          "post" if context.post_market else "live"),
-        ("ENGINE DOWN", "bad") if not engine.get("thread_alive")
-        else ("ENGINE " + str(engine.get("status") or "IDLE"), "live"),
+        ("ENGINE DOWN", "bad") if not running
+        else ("ENGINE " + str(engine.get("status") or "IDLE")
+              + (f" · {owner}" if owner and engine.get("remote") else ""), "live"),
     ])
 
     status_card_grid(_health_cells(context))
 
-    if not engine.get("thread_alive"):
+    if not running:
         st.error(
-            "Scan engine thread is not running. No scans are happening until "
-            "Streamlit restarts."
+            "No scan engine is reporting. Nothing is scanning — check the Render "
+            "worker, or set SCAN_ENGINE_OWNER back to `dashboard` to scan from "
+            "here. Restarting Streamlit only helps if this app owns scanning."
         )
     elif engine.get("last_error") and int(engine.get("failures") or 0):
         st.warning(f"Last scan error: {engine['last_error']}")

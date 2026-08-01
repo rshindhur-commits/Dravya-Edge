@@ -111,6 +111,38 @@ def _is_scanning(row):
     return not (status in IDLE_STATUSES or status.startswith(IDLE_STATUS_PREFIX))
 
 
+def heartbeat_to_engine_status(row):
+    """Shape a heartbeat row like `scan_supervisor.status()`.
+
+    One definition, because the UI reads engine health in more than one place and
+    two shapes meant two answers: on 2026-08-01 the sidebar correctly reported the
+    Render worker while the Operator Console, reading only the local thread, sat
+    on ENGINE DOWN and told the operator to restart Streamlit.
+
+    `thread_alive` stays False -- there genuinely is no thread in this process.
+    `running` is the question the UI actually wants answered: is *an* engine
+    scanning for this deployment.
+    """
+
+    row = row or {}
+
+    return {
+        "status": row.get("status"),
+        "owner": row.get("owner"),
+        "session": row.get("session"),
+        "interval_seconds": row.get("interval_seconds"),
+        "scans": row.get("scans"),
+        "failures": row.get("failures"),
+        "last_error": row.get("last_error"),
+        "last_completed_at": row.get("last_scan_at"),
+        "last_duration_seconds": row.get("last_duration_sec"),
+        "next_due_at": row.get("next_due_at"),
+        "thread_alive": False,
+        "running": True,
+        "remote": True,
+    }
+
+
 def summarize_engines(rows, stale_after_seconds=900):
     """Turn heartbeat rows into what the System panel needs to say.
 

@@ -380,6 +380,78 @@ class EngineIdentityTests(unittest.TestCase):
         self.assertEqual(record.call_args.kwargs["owner"], "worker")
 
 
+
+class EngineStatusFallbackTests(unittest.TestCase):
+    """Every consumer of engine health must know about the worker, not just one.
+
+    On 2026-08-01 the sidebar correctly reported the Render worker while the
+    Operator Console two feet away sat on ENGINE DOWN with 0/0 scans and told the
+    operator to restart Streamlit -- advice that would not have helped and would
+    have wiped container state. Fixed at `engine_status()` rather than per panel.
+    """
+
+    def test_a_live_worker_is_reported_when_no_thread_runs_here(self):
+
+        from app.ui import render_context
+
+        with patch(
+            "app.runtime.scan_supervisor.status",
+            return_value={"thread_alive": False, "scans": 0},
+        ), patch.object(
+            render_context,
+            "scan_engine_heartbeats",
+            return_value={"live": [{"owner": "worker", "status": "IDLE", "scans": 7}]},
+        ):
+            engine = render_context.engine_status()
+
+        self.assertTrue(engine["running"])
+        self.assertFalse(engine["thread_alive"])
+        self.assertEqual(engine["owner"], "worker")
+        self.assertEqual(engine["scans"], 7)
+
+    def test_a_local_thread_still_wins(self):
+
+        from app.ui import render_context
+
+        with patch(
+            "app.runtime.scan_supervisor.status",
+            return_value={"thread_alive": True, "scans": 3},
+        ):
+            engine = render_context.engine_status()
+
+        self.assertTrue(engine["running"])
+        self.assertEqual(engine["owner"], "dashboard")
+
+    def test_nothing_reporting_anywhere_is_genuinely_down(self):
+
+        from app.ui import render_context
+
+        with patch(
+            "app.runtime.scan_supervisor.status", return_value={"thread_alive": False}
+        ), patch.object(
+            render_context, "scan_engine_heartbeats", return_value={"live": []}
+        ):
+            engine = render_context.engine_status()
+
+        self.assertFalse(engine["running"])
+
+    def test_an_unreachable_database_does_not_claim_an_engine(self):
+        """Failing open here would report a scanner that may not exist."""
+
+        from app.ui import render_context
+
+        with patch(
+            "app.runtime.scan_supervisor.status", return_value={"thread_alive": False}
+        ), patch.object(
+            render_context,
+            "scan_engine_heartbeats",
+            side_effect=RuntimeError("neon down"),
+        ):
+            engine = render_context.engine_status()
+
+        self.assertFalse(engine["running"])
+
+
 if __name__ == "__main__":
 
     unittest.main()
