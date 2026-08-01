@@ -1,3 +1,6 @@
 observed_at_utc,trading_day,scan_id,category,stage,page,seconds,metadata
 2026-08-01T04:09:39.405070+00:00,2026-08-01,2026-08-01_000919,scanner,run_scanner,,19.62,"{""symbols"": 26, ""workers"": 5}"
 2026-08-01T04:12:19.960515+00:00,2026-08-01,2026-08-01_001200,scanner,run_scanner,,19.21,"{""symbols"": 26, ""workers"": 5}"
+2026-08-01T04:18:12.310222+00:00,2026-08-01,2026-08-01_001740,scanner,run_scanner,,32.15,"{""symbols"": 26, ""workers"": 5}"
+2026-08-01T04:20:08.292426+00:00,2026-08-01,2026-08-01_001941,scanner,run_scanner,,26.33,"{""symbols"": 26, ""workers"": 5}"
+2026-08-01T04:22:28.349131+00:00,2026-08-01,2026-08-01_002154,scanner,run_scanner,,34.17,"{""symbols"": 26, ""workers"": 5}"
