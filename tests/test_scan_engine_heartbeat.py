@@ -82,19 +82,43 @@ class HeartbeatShapeTests(unittest.TestCase):
 
 class SummaryTests(unittest.TestCase):
 
-    def test_two_live_engines_are_a_conflict(self):
+    def test_two_scanning_engines_are_a_conflict(self):
         """The cutover failure worth shouting about: both engines scanning,
         double-opening positions that the file-based scan lock cannot serialise
         across two filesystems."""
 
         summary = summarize_engines([
-            {"owner": "worker", "age_seconds": 30},
-            {"owner": "dashboard", "age_seconds": 60},
+            {"owner": "worker", "status": "SCANNING", "age_seconds": 30},
+            {"owner": "dashboard", "status": "RUNNING", "age_seconds": 60},
         ])
 
         self.assertTrue(summary["conflict"])
         self.assertEqual(summary["live_count"], 2)
         self.assertEqual(summary["owners"], ["dashboard", "worker"])
+
+    def test_an_engine_parked_on_the_calendar_is_not_a_conflict(self):
+        """The first weekend both engines were up and the banner fired, but the
+        dashboard was SLEEPING_WEEKEND with zero scans -- parked, not competing
+        for the scan lock. A banner that cries wolf every weekend is one nobody
+        reads on the Monday it matters."""
+
+        summary = summarize_engines([
+            {"owner": "worker", "status": "IDLE", "age_seconds": 30},
+            {"owner": "dashboard", "status": "SLEEPING_WEEKEND", "age_seconds": 60},
+        ])
+
+        self.assertFalse(summary["conflict"])
+        self.assertEqual(summary["owners"], ["worker"])
+        self.assertEqual(summary["live_count"], 2)
+
+    def test_a_stopped_engine_is_not_a_conflict(self):
+
+        summary = summarize_engines([
+            {"owner": "worker", "status": "IDLE", "age_seconds": 30},
+            {"owner": "dashboard", "status": "STOPPED", "age_seconds": 60},
+        ])
+
+        self.assertFalse(summary["conflict"])
 
     def test_one_live_engine_is_not_a_conflict(self):
 
@@ -120,8 +144,8 @@ class SummaryTests(unittest.TestCase):
         raise a false double-scan alarm on every cutover."""
 
         summary = summarize_engines([
-            {"owner": "worker", "age_seconds": 20},
-            {"owner": "dashboard", "age_seconds": 4000},
+            {"owner": "worker", "status": "SCANNING", "age_seconds": 20},
+            {"owner": "dashboard", "status": "RUNNING", "age_seconds": 4000},
         ], stale_after_seconds=900)
 
         self.assertFalse(summary["conflict"])
@@ -273,6 +297,87 @@ class PartialDeployResilienceTests(unittest.TestCase):
             dashboard._ensure_scan_engine_started(None)
 
         ensure_started.assert_not_called()
+
+
+
+class OwnershipHandoverTests(unittest.TestCase):
+    """Flipping SCAN_ENGINE_OWNER must actually stop this process scanning.
+
+    On 2026-08-01 it did not. The gate skipped `ensure_started`, but the
+    supervisor thread it had already started kept looping -- nothing sets
+    `_stop_event` -- so the cutover looked complete while Streamlit was still a
+    second scanner. Both engines then published under the same owner key, and the
+    Streamlit row overwrote the Render one, hiding the conflict entirely.
+    """
+
+    def test_a_running_supervisor_is_stopped_when_ownership_moves(self):
+
+        import app.dashboard as dashboard
+
+        with patch.dict(
+            "os.environ", {"SCAN_ENGINE_OWNER": "worker"}, clear=False
+        ), patch(
+            "app.runtime.scan_supervisor.status", return_value={"thread_alive": True}
+        ), patch(
+            "app.runtime.scan_supervisor.stop"
+        ) as stop, patch(
+            "app.runtime.scan_supervisor.ensure_started"
+        ) as ensure_started:
+
+            dashboard._ensure_scan_engine_started(None)
+
+        stop.assert_called_once()
+        ensure_started.assert_not_called()
+
+    def test_nothing_is_stopped_when_no_engine_is_running(self):
+
+        import app.dashboard as dashboard
+
+        with patch.dict(
+            "os.environ", {"SCAN_ENGINE_OWNER": "worker"}, clear=False
+        ), patch(
+            "app.runtime.scan_supervisor.status", return_value={"thread_alive": False}
+        ), patch("app.runtime.scan_supervisor.stop") as stop:
+
+            dashboard._ensure_scan_engine_started(None)
+
+        stop.assert_not_called()
+
+
+class EngineIdentityTests(unittest.TestCase):
+    """Identity is what a module is; SCAN_ENGINE_OWNER is who should scan.
+
+    Conflating them let one host publish under the other's key and overwrite its
+    row, which is exactly how the real Render worker vanished from the panel.
+    """
+
+    def test_the_supervisor_always_publishes_as_dashboard(self):
+
+        from app.runtime import scan_supervisor
+
+        with patch.dict(
+            "os.environ", {"SCAN_ENGINE_OWNER": "worker"}, clear=False
+        ), patch(
+            "app.runtime.scan_engine_heartbeat.record_heartbeat"
+        ) as record:
+
+            scan_supervisor._publish_heartbeat({"status": "RUNNING"})
+
+        self.assertEqual(record.call_args.kwargs["owner"], "dashboard")
+
+    def test_the_worker_always_publishes_as_worker(self):
+
+        from app.runtime import scan_loop
+
+        with patch.dict(
+            "os.environ", {"SCAN_ENGINE_OWNER": "dashboard"}, clear=False
+        ), patch(
+            "app.runtime.scan_engine_heartbeat.record_heartbeat"
+        ) as record:
+
+            scan_loop._publish_heartbeat("SCANNING")
+
+        self.assertEqual(record.call_args.kwargs["owner"], "worker")
 
 
 if __name__ == "__main__":

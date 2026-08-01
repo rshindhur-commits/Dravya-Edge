@@ -3999,7 +3999,23 @@ def _ensure_scan_engine_started(cadence_override_minutes):
 
     if owner != "dashboard":
 
-        return scan_engine_status()
+        # Stop, not merely decline to start. The thread outlives the setting that
+        # started it: flipping SCAN_ENGINE_OWNER to `worker` skipped
+        # `ensure_started` but left an already-running supervisor looping and
+        # scanning forever, so the cutover appeared done while this process was
+        # still a second scanner. Nothing sets `_stop_event` on its own.
+        engine = scan_engine_status()
+
+        if engine.get("thread_alive"):
+
+            from app.runtime.scan_supervisor import stop
+
+            print("[SCAN ENGINE] ownership moved to the worker; stopping local engine.")
+            stop()
+
+            return scan_engine_status()
+
+        return engine
 
     _prime_scanner_environment()
 

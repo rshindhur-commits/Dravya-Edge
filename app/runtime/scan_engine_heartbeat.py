@@ -98,23 +98,45 @@ def record_heartbeat(status, owner=None, **fields):
     return heartbeat
 
 
+# Reporting, but not scanning. An engine parked on the calendar is not competing
+# for the scan lock, so it cannot double-open anything.
+IDLE_STATUSES = frozenset({"STOPPED"})
+IDLE_STATUS_PREFIX = "SLEEPING"
+
+
+def _is_scanning(row):
+
+    status = str((row or {}).get("status") or "").upper()
+
+    return not (status in IDLE_STATUSES or status.startswith(IDLE_STATUS_PREFIX))
+
+
 def summarize_engines(rows, stale_after_seconds=900):
     """Turn heartbeat rows into what the System panel needs to say.
 
-    Distinguishes three states that a raw row does not: reporting, gone quiet,
-    and more than one engine claiming to scan. The third is the cutover failure
-    worth shouting about.
+    Distinguishes states a raw row does not: reporting, gone quiet, and more than
+    one engine *actually scanning*. That last one is the cutover failure worth
+    shouting about.
+
+    Conflict counts scanning engines, not reporting ones. On the first weekend
+    both engines were up and the banner fired, but the dashboard was
+    SLEEPING_WEEKEND with zero scans -- parked on the calendar, not competing for
+    the scan lock. A banner that cries wolf every weekend is one nobody reads on
+    the Monday it matters.
     """
 
     rows = list(rows or [])
     live = [row for row in rows if (row.get("age_seconds") or 0) <= stale_after_seconds]
     stale = [row for row in rows if (row.get("age_seconds") or 0) > stale_after_seconds]
+    scanning = [row for row in live if _is_scanning(row)]
 
     return {
         "engines": rows,
         "live": live,
         "stale": stale,
+        "scanning": scanning,
         "live_count": len(live),
-        "conflict": len(live) > 1,
-        "owners": sorted({str(row.get("owner") or "unknown") for row in live}),
+        "scanning_count": len(scanning),
+        "conflict": len(scanning) > 1,
+        "owners": sorted({str(row.get("owner") or "unknown") for row in scanning}),
     }
