@@ -3321,11 +3321,27 @@ def _remote_engine_summary():
     The sidebar renders on every rerun, including auto-refresh, so an uncached
     query here would be a Neon round trip every few seconds for a value that
     changes once per scan.
+
+    Import guarded, not just the query. On 2026-08-01 Streamlit Cloud served a
+    partial checkout -- a new `dashboard.py` against a stale `render_context.py`
+    -- and the bare import raised ImportError out of `_render_system_status`,
+    which runs before routing. That took the **whole dashboard** down over a
+    status caption. Nothing about a heartbeat is worth more than the page it
+    decorates: if it cannot be read, the panel says no remote engine and
+    everything else still renders.
     """
 
-    from app.ui.render_context import scan_engine_heartbeats
+    try:
 
-    return scan_engine_heartbeats() or {}
+        from app.ui.render_context import scan_engine_heartbeats
+
+        return scan_engine_heartbeats() or {}
+
+    except Exception as exc:
+
+        print(f"[SYSTEM STATUS WARNING] heartbeat unavailable: {exc}")
+
+        return {}
 
 
 def _engine_from_heartbeat(row):
@@ -3964,10 +3980,24 @@ def _ensure_scan_engine_started(cadence_override_minutes):
     block raises that as an error if both are heartbeating.
     """
 
-    from app.runtime.scan_engine_heartbeat import scan_engine_owner
     from app.runtime.scan_supervisor import ensure_started, status as scan_engine_status
 
-    if scan_engine_owner() != "dashboard":
+    # Same guard as `_remote_engine_summary`, and for the same reason: a partial
+    # deploy must not be able to stop the sidebar rendering. Falling back to the
+    # raw variable keeps the switch working even if the helper is missing, and
+    # `dashboard` is the right default -- code old enough to lack the module is
+    # code from before the worker existed, when this process was the only engine.
+    try:
+
+        from app.runtime.scan_engine_heartbeat import scan_engine_owner
+
+        owner = scan_engine_owner()
+
+    except Exception:
+
+        owner = str(os.getenv("SCAN_ENGINE_OWNER", "dashboard")).strip().lower() or "dashboard"
+
+    if owner != "dashboard":
 
         return scan_engine_status()
 
