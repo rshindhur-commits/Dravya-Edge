@@ -3,7 +3,7 @@ import base64
 import os
 import re
 import sys
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from html import escape
 from zoneinfo import ZoneInfo
 import json
@@ -3314,6 +3314,62 @@ def _research_frame():
     return frame
 
 
+@st.cache_data(ttl=20)
+def _remote_engine_summary():
+    """Heartbeats from Postgres, cached briefly.
+
+    The sidebar renders on every rerun, including auto-refresh, so an uncached
+    query here would be a Neon round trip every few seconds for a value that
+    changes once per scan.
+    """
+
+    from app.ui.render_context import scan_engine_heartbeats
+
+    return scan_engine_heartbeats() or {}
+
+
+def _engine_from_heartbeat(row):
+    """Shape a heartbeat row like `engine_status()` so the panel reads one dict."""
+
+    row = row or {}
+
+    return {
+        "status": row.get("status"),
+        "owner": row.get("owner"),
+        "session": row.get("session"),
+        "interval_seconds": row.get("interval_seconds"),
+        "scans": row.get("scans"),
+        "failures": row.get("failures"),
+        "last_error": row.get("last_error"),
+        # Rendered as ET by the panel, which slices a fixed offset out of the
+        # string. Postgres hands back TIMESTAMPTZ in the session timezone (UTC),
+        # so converting here is what stops a UTC time being labelled "ET".
+        "last_completed_at": _as_et_isoformat(row.get("last_scan_at")),
+        "last_duration_seconds": row.get("last_duration_sec"),
+        "next_due_at": _as_et_isoformat(row.get("next_due_at")),
+        "thread_alive": False,
+    }
+
+
+def _as_et_isoformat(moment):
+
+    if moment is None:
+
+        return None
+
+    try:
+
+        if getattr(moment, "tzinfo", None) is None:
+
+            moment = moment.replace(tzinfo=timezone.utc)
+
+        return moment.astimezone(ZoneInfo("America/New_York")).isoformat()
+
+    except Exception:
+
+        return str(moment)
+
+
 def _render_system_status(container):
     """Is the machine healthy, answered above the controls that change it.
 
@@ -3327,19 +3383,43 @@ def _render_system_status(container):
 
     engine = engine_status()
     alive = bool(engine.get("thread_alive"))
-    failures = int(engine.get("failures") or 0)
 
     container.subheader("System")
 
-    if not alive:
+    # A supervisor thread in this process is the local answer. Once scanning is
+    # owned by the Render worker there is no such thread here, so fall back to
+    # the heartbeat: "no thread" and "no engine anywhere" are different claims,
+    # and reporting the first as the second is how a healthy system gets
+    # diagnosed as broken.
+    remote = _remote_engine_summary()
+
+    if not alive and remote.get("live"):
+
+        engine = _engine_from_heartbeat(remote["live"][0])
+
+    failures = int(engine.get("failures") or 0)
+    reporting = alive or bool(remote.get("live"))
+
+    if remote.get("conflict"):
+
+        container.error(
+            "Two scan engines are running: "
+            + ", ".join(remote.get("owners") or [])
+            + ". They will double-open positions — the scan lock is a local file "
+            "and cannot serialise across hosts. Set SCAN_ENGINE_OWNER on one."
+        )
+
+    if not reporting:
 
         container.error("Scan engine not running")
 
     else:
 
         interval = engine.get("interval_seconds")
+        owner = engine.get("owner")
         container.caption(
             f"Engine {engine.get('status') or 'IDLE'}"
+            + (f" · {owner}" if owner and not alive else "")
             + (f" · every {int(interval) // 60} min" if interval else "")
         )
 
@@ -3358,7 +3438,7 @@ def _render_system_status(container):
 
     next_due = engine.get("next_due_at")
 
-    if next_due and alive:
+    if next_due and reporting:
 
         container.caption(f"Next due {str(next_due)[11:19]} ET")
 
@@ -3871,9 +3951,25 @@ def _ensure_scan_engine_started(cadence_override_minutes):
     This used to also render a `Scan Engine` panel of four captions. The System
     block at the top of the sidebar now answers the same question in the same
     place as the rest of the health, so the panel was two copies of one fact.
+
+    **Does nothing when `SCAN_ENGINE_OWNER` is not `dashboard`.** That is the
+    switch the always-on worker cutover turns. It has to be an environment
+    variable rather than a code change because a deploy replaces the container,
+    which kills the in-flight scan and drops open positions -- so ownership has
+    to be movable during market hours, when pushing is barred.
+
+    Leaving it on while the Render worker runs is the one genuinely dangerous
+    configuration: two engines double-open positions, and `scan_lock` is a file
+    on local disk, so it cannot serialise anything across two hosts. The System
+    block raises that as an error if both are heartbeating.
     """
 
+    from app.runtime.scan_engine_heartbeat import scan_engine_owner
     from app.runtime.scan_supervisor import ensure_started, status as scan_engine_status
+
+    if scan_engine_owner() != "dashboard":
+
+        return scan_engine_status()
 
     _prime_scanner_environment()
 

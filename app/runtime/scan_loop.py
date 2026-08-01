@@ -24,7 +24,7 @@ import argparse
 import signal
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -65,6 +65,30 @@ def interval_for_session(session, override=None):
         return max(30, int(override))
 
     return SESSION_INTERVALS.get(str(session).upper(), DEFAULT_INTERVAL)
+
+
+def _publish_heartbeat(status, **fields):
+    """Tell Postgres this engine is alive. Never allowed to break the loop.
+
+    Owner defaults to `worker` here rather than to the shared default: this module
+    *is* the standalone engine, so `python -m app.runtime.scan_loop` identifies
+    itself correctly on Render with no extra configuration. An explicit
+    SCAN_ENGINE_OWNER still wins.
+    """
+
+    import os
+
+    try:
+        from app.runtime.scan_engine_heartbeat import record_heartbeat
+
+        record_heartbeat(
+            status,
+            owner=str(os.getenv("SCAN_ENGINE_OWNER", "worker")).strip().lower(),
+            **fields,
+        )
+
+    except Exception as exc:
+        print(f"[SCAN LOOP WARNING] heartbeat failed: {exc}")
 
 
 def _run_one_scan():
@@ -111,11 +135,19 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=False):
 
         if skip_closed and str(session).upper() == "CLOSED":
             wait = interval_for_session(session, interval_override)
+            # Still report. A quiet engine and a dead one look identical from the
+            # dashboard otherwise, and "CLOSED" is the answer to that question.
+            _publish_heartbeat(
+                "SLEEPING", session=session, scans=scans, failures=failures,
+                interval_seconds=wait,
+                next_due_at=(datetime.now(ET) + timedelta(seconds=wait)).isoformat(),
+            )
             print(f"[SCAN LOOP] market CLOSED; sleeping {wait}s without scanning.")
             _sleep(wait)
             continue
 
         started_at = datetime.now(ET)
+        _publish_heartbeat("SCANNING", session=session, scans=scans, failures=failures)
         result = _run_one_scan()
         scans += 1
 
@@ -126,6 +158,18 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=False):
         interval = interval_for_session(session, interval_override)
         elapsed = result["seconds"]
         wait = max(5, interval - elapsed)
+
+        _publish_heartbeat(
+            "IDLE" if result["ok"] else "FAILED",
+            session=session,
+            scans=scans,
+            failures=failures,
+            last_scan_at=started_at.isoformat(),
+            last_duration_sec=round(elapsed, 2),
+            interval_seconds=interval,
+            next_due_at=(datetime.now(ET) + timedelta(seconds=wait)).isoformat(),
+            last_error=result["error"],
+        )
 
         print(
             f"[SCAN LOOP] scan {scans} ({session}) "
@@ -141,6 +185,11 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=False):
             break
 
         _sleep(wait)
+
+    # A clean shutdown is worth recording. Without it the last heartbeat says
+    # IDLE and the dashboard has to infer death from staleness, which takes 15
+    # minutes to conclude something the process knew at the time.
+    _publish_heartbeat("STOPPED", scans=scans, failures=failures)
 
     print(f"[SCAN LOOP] stopped after {scans} scan(s), {failures} failure(s).")
     return {"scans": scans, "failures": failures}

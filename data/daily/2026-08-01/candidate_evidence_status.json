@@ -1,10 +1,10 @@
 {
   "trading_day": "2026-08-01",
-  "source_rows": 364,
+  "source_rows": 416,
   "evidence_rows": 63,
-  "rows_expected": 364,
+  "rows_expected": 416,
   "rows_written": 63,
-  "duplicates_removed": 301,
+  "duplicates_removed": 353,
   "local_path": "D:\\Dravya_Trade_Works\\data\\daily\\2026-08-01\\candidate_evidence.csv",
   "database_rows": 63,
   "db_rows_persisted": 63,

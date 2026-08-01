@@ -1,18 +1,18 @@
 {
   "metadata": {
-    "scan_id": "2026-08-01_094627",
-    "generation": "293cfdd5-683a-47ee-8e95-24ec15b70247",
+    "scan_id": "2026-08-01_102728",
+    "generation": "c47baf81-e2b5-421e-8f56-61db2872736e",
     "schema": 1,
-    "created_at": "2026-08-01T13:46:27.508640Z"
+    "created_at": "2026-08-01T14:27:28.982047Z"
   },
-  "generated_at": "2026-08-01T09:46:37.582627-04:00",
+  "generated_at": "2026-08-01T10:27:31.668068-04:00",
   "scan_id": null,
-  "data_version": "2026-08-01T09:46:37.582627-04:00",
+  "data_version": "2026-08-01T10:27:31.668068-04:00",
   "scan_generation": {
     "scan_id": null,
-    "generated_at": "2026-08-01T09:46:37.582627-04:00",
+    "generated_at": "2026-08-01T10:27:31.668068-04:00",
     "row_count": 26,
-    "data_version": "2026-08-01T09:46:37.582627-04:00",
+    "data_version": "2026-08-01T10:27:31.668068-04:00",
     "source_timestamps": []
   },
   "scanner": "LIVE",
@@ -30,8 +30,8 @@
     "alerts": []
   },
   "scanner_health": {
-    "timestamp": "2026-08-01T09:46:38.783386-04:00",
-    "scan_runtime_sec": 10.04,
+    "timestamp": "2026-08-01T10:27:33.035686-04:00",
+    "scan_runtime_sec": 2.65,
     "health_score": 100,
     "cache_hit_rate": null,
     "worker_count": 5,
@@ -40,7 +40,7 @@
     "symbols_completed": 26,
     "symbols_failed": 0,
     "scan_completed_successfully": true,
-    "average_symbol_runtime": 0.78,
+    "average_symbol_runtime": 0.2,
     "candidate_funnel": {
       "scanned": 26,
       "directional": 0,

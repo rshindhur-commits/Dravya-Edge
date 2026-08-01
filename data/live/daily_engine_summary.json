@@ -14,17 +14,17 @@
   "avg_wait_one_bar_move": null,
   "avg_wait_two_bars_move": null,
   "blocking_stages": {
-    "Entry": 1535,
-    "Momentum": 338,
-    "Risk": 338,
-    "Option": 338,
-    "Affordability": 338,
-    "Realtime": 338,
-    "Telegram": 338,
-    "Decision": 338
+    "Entry": 1587,
+    "Momentum": 390,
+    "Risk": 390,
+    "Option": 390,
+    "Affordability": 390,
+    "Realtime": 390,
+    "Telegram": 390,
+    "Decision": 390
   },
   "blocking_rules": {
-    "Directional Signal": 185,
+    "Directional Signal": 237,
     "Setup": 72,
     "REL_VOLUME": 27,
     "REJECTED_EMA9": 18,

@@ -113,6 +113,30 @@
       "rows": 26,
       "format": "parquet",
       "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_101056",
+      "scan_timestamp": "2026-08-01 10:11:00.629336-04:00",
+      "path": "20260801_101100_2026-08-01_101056.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_101156",
+      "scan_timestamp": "2026-08-01 10:11:59.226236-04:00",
+      "path": "20260801_101159_2026-08-01_101156.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-01_102728",
+      "scan_timestamp": "2026-08-01 10:27:31.668068-04:00",
+      "path": "20260801_102731_2026-08-01_102728.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
     }
   ],
   "scanner_version": "unknown",
@@ -150,6 +174,6 @@
     "TSM"
   ],
   "timezone": "America/New_York",
-  "scan_count": 14,
-  "scan_interval_seconds": 161
+  "scan_count": 17,
+  "scan_interval_seconds": 251
 }
