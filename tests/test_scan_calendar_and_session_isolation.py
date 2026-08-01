@@ -146,3 +146,28 @@ def test_candidate_rank_limit_matches_the_daily_entry_cap():
     from app.runtime.paper_automation_support import AUTO_PAPER_MAX_CANDIDATE_RANK
 
     assert AUTO_PAPER_MAX_CANDIDATE_RANK == 5
+
+
+def test_the_worker_honours_the_calendar_without_a_flag():
+    """The guard has to be on by default, not opted into.
+
+    Render's start command is a bare `python -m app.runtime.scan_loop`, and
+    skip_closed defaulted to False, so the worker scanned Saturday 2026-08-01
+    while the dashboard supervisor -- which defaults it True -- slept. A guard
+    you must remember to switch on is a guard that is off in production.
+    """
+    import inspect
+
+    from app.runtime.scan_loop import run_scan_loop
+
+    assert inspect.signature(run_scan_loop).parameters["skip_closed"].default is True
+
+
+def test_both_engines_share_one_calendar():
+    """The supervisor's guards were invisible to the worker until they moved to
+    a neutral module. Re-exported names keep existing callers working."""
+
+    from app.runtime import market_calendar, scan_loop, scan_supervisor
+
+    assert scan_supervisor._idle_reason is market_calendar.idle_reason
+    assert scan_loop.idle_reason is market_calendar.idle_reason

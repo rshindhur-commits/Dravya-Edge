@@ -58,11 +58,18 @@ class LoopTests(unittest.TestCase):
 
     def test_loop_runs_the_requested_number_of_scans(self):
 
+        # skip_closed pinned off. It defaults True and consults the real market
+        # calendar, so leaving it implicit makes this test pass Monday to Friday
+        # and hang all weekend: no scan runs, max_scans is never reached, and
+        # with _sleep patched out the loop spins. A test whose result depends on
+        # the day it runs is not a test.
         with patch("app.main.run_scanner") as run_scanner, \
              patch("app.runtime.scan_loop._sleep"), \
              patch("app.runtime.scan_loop.signal.signal"):
 
-            result = scan_loop.run_scan_loop(interval_override=30, max_scans=3)
+            result = scan_loop.run_scan_loop(
+                interval_override=30, max_scans=3, skip_closed=False
+            )
 
         self.assertEqual(run_scanner.call_count, 3)
         self.assertEqual(result, {"scans": 3, "failures": 0})
@@ -75,7 +82,9 @@ class LoopTests(unittest.TestCase):
              patch("app.runtime.scan_loop._sleep"), \
              patch("app.runtime.scan_loop.signal.signal"):
 
-            result = scan_loop.run_scan_loop(interval_override=30, max_scans=3)
+            result = scan_loop.run_scan_loop(
+                interval_override=30, max_scans=3, skip_closed=False
+            )
 
         self.assertEqual(run_scanner.call_count, 3)
         self.assertEqual(result["scans"], 3)

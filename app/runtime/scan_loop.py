@@ -110,7 +110,7 @@ def _run_one_scan():
         }
 
 
-def run_scan_loop(interval_override=None, max_scans=None, skip_closed=False):
+def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
     """Scan on a session-aware cadence until interrupted."""
 
     signal.signal(signal.SIGINT, _request_stop)
@@ -218,8 +218,16 @@ def main():
                         help="stop after this many scans (useful for a smoke test)")
     parser.add_argument("--once", action="store_true",
                         help="run a single scan and exit")
+    # `--skip-closed` is now the default and kept only so an existing start
+    # command keeps working. Honouring the calendar had to be opted *into*, and
+    # the Render worker's start command is a bare `python -m app.runtime.scan_loop`
+    # -- so on 2026-08-01 it scanned a Saturday while the dashboard supervisor,
+    # which defaults skip_closed=True, correctly slept. A guard you have to
+    # remember to switch on is a guard that is off in production.
     parser.add_argument("--skip-closed", action="store_true",
-                        help="do not scan while the market session is CLOSED")
+                        help="deprecated; honouring the market calendar is the default")
+    parser.add_argument("--scan-when-closed", action="store_true",
+                        help="scan even when the market is shut (debugging only)")
     args = parser.parse_args()
 
     if args.once:
@@ -232,7 +240,7 @@ def main():
     run_scan_loop(
         interval_override=args.interval,
         max_scans=args.max_scans,
-        skip_closed=args.skip_closed,
+        skip_closed=not args.scan_when_closed,
     )
 
 
