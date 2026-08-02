@@ -183,12 +183,6 @@ REFRESH_INTERVALS = {
     "15 min": 15
 }
 
-SCANNER_CADENCE_INTERVALS = {
-    "Session-aware (2/5/10 min)": None,
-    "5 min": 5,
-    "15 min": 15
-}
-
 AI_TOP_CANDIDATES = {
     "BULLISH_TOP_1",
     "BULLISH_TOP_2",
@@ -3809,10 +3803,6 @@ def _auto_refresh_defaults():
 
         st.session_state["refresh_interval_label"] = "1 min"
 
-    if "scanner_cadence_label" not in st.session_state:
-
-        st.session_state["scanner_cadence_label"] = "Session-aware (2/5/10 min)"
-
     if "auto_paper_enabled" not in st.session_state:
 
         st.session_state["auto_paper_enabled"] = bool(
@@ -3975,37 +3965,7 @@ def _render_auto_paper_controls():
 
 
 
-def _cadence_label_for_engine():
-    """The sidebar label matching the cadence the engine is actually running.
-
-    Falls back to the session-aware option when the engine has no override or
-    cannot be read, which is also the correct answer for a cold process.
-    """
-
-    try:
-        from app.runtime.scan_supervisor import status as scan_engine_status
-
-        seconds = scan_engine_status().get("interval_override_seconds")
-
-    except Exception:
-        seconds = None
-
-    if not seconds:
-
-        return next(iter(SCANNER_CADENCE_INTERVALS))
-
-    minutes = int(seconds) // 60
-
-    for label, value in SCANNER_CADENCE_INTERVALS.items():
-
-        if value == minutes:
-
-            return label
-
-    return next(iter(SCANNER_CADENCE_INTERVALS))
-
-
-def _ensure_scan_engine_started(cadence_override_minutes):
+def _ensure_scan_engine_started():
     """Start the in-process scan engine. Status is reported by the System block.
 
     `app.runtime.scan_supervisor` owns cadence on a daemon thread, so scans
@@ -4067,30 +4027,19 @@ def _ensure_scan_engine_started(cadence_override_minutes):
 
     _prime_scanner_environment()
 
-    requested_override = (
-        cadence_override_minutes * 60
-        if cadence_override_minutes
-        else None
-    )
-
-    # Only push a cadence this session has not already pushed. `ensure_started`
-    # calls `set_interval_override` unconditionally, so re-applying on every
-    # rerun let the most recently rendered browser session dictate the cadence
-    # for the whole process -- including a session that had merely been left
-    # open and auto-refreshed.
+    # No cadence override. The `Full Scanner Cadence` control that supplied one
+    # is gone: it fed this function, which returns above when the worker owns
+    # scanning, so it had not changed the scanner since the cutover -- while
+    # still looking like the place to slow the scanner down during a session.
+    #
+    # The supervisor's own session-aware schedule is the right default for the
+    # case that remains: SCAN_ENGINE_OWNER flipped back to `dashboard` because
+    # the worker is down and you want Streamlit scanning for the open.
     engine = scan_engine_status()
-    cadence_changed = (
-        st.session_state.get("_applied_cadence_override", "unset")
-        != requested_override
-    )
 
-    # Still call ensure_started when the thread is down, whatever the cadence
-    # did -- restarting a dead engine matters more than not touching the
-    # override, and it is idempotent while the thread is alive.
-    if cadence_changed or not engine.get("thread_alive"):
+    if not engine.get("thread_alive"):
 
-        engine = ensure_started(interval_override=requested_override)
-        st.session_state["_applied_cadence_override"] = requested_override
+        engine = ensure_started()
 
     return engine
 
@@ -4124,18 +4073,6 @@ def _render_auto_refresh_controls():
     #
     # The sidebar is a view of backend state. It only writes when the operator
     # actually picks something different.
-    if "scanner_cadence_label" not in st.session_state:
-
-        st.session_state["scanner_cadence_label"] = _cadence_label_for_engine()
-
-    scanner_cadence_label = st.sidebar.selectbox(
-        "Full Scanner Cadence",
-        options=list(SCANNER_CADENCE_INTERVALS.keys()),
-        key="scanner_cadence_label"
-    )
-    cadence_override_minutes = SCANNER_CADENCE_INTERVALS[
-        scanner_cadence_label
-    ]
     age_minutes = _scanner_output_age_minutes()
 
     session_label = (
@@ -4168,15 +4105,16 @@ def _render_auto_refresh_controls():
             key="scanner_refresh"
         )
 
-    engine = _ensure_scan_engine_started(cadence_override_minutes)
+    engine = _ensure_scan_engine_started()
     engine_interval_seconds = engine.get("interval_seconds")
 
     return {
         "enabled": auto_refresh_enabled,
         "interval_minutes": interval_minutes,
+        # Reported by whichever engine is actually running, rather than by a
+        # control that claimed to set it.
         "scanner_cadence_minutes": (
-            cadence_override_minutes
-            or (int(engine_interval_seconds) // 60 if engine_interval_seconds else 5)
+            int(engine_interval_seconds) // 60 if engine_interval_seconds else 5
         ),
         "age_minutes": age_minutes,
         "refresh_count": refresh_count,

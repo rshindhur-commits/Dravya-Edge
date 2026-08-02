@@ -176,7 +176,7 @@ class DashboardOwnershipGateTests(unittest.TestCase):
             "app.runtime.scan_supervisor.status", return_value={"status": "IDLE"}
         ):
 
-            dashboard._ensure_scan_engine_started(None)
+            dashboard._ensure_scan_engine_started()
 
         ensure_started.assert_not_called()
 
@@ -295,7 +295,7 @@ class PartialDeployResilienceTests(unittest.TestCase):
             "app.runtime.scan_supervisor.status", return_value={}
         ):
 
-            dashboard._ensure_scan_engine_started(None)
+            dashboard._ensure_scan_engine_started()
 
         ensure_started.assert_not_called()
 
@@ -325,7 +325,7 @@ class OwnershipHandoverTests(unittest.TestCase):
             "app.runtime.scan_supervisor.ensure_started"
         ) as ensure_started:
 
-            dashboard._ensure_scan_engine_started(None)
+            dashboard._ensure_scan_engine_started()
 
         stop.assert_called_once()
         ensure_started.assert_not_called()
@@ -340,7 +340,7 @@ class OwnershipHandoverTests(unittest.TestCase):
             "app.runtime.scan_supervisor.status", return_value={"thread_alive": False}
         ), patch("app.runtime.scan_supervisor.stop") as stop:
 
-            dashboard._ensure_scan_engine_started(None)
+            dashboard._ensure_scan_engine_started()
 
         stop.assert_not_called()
 
