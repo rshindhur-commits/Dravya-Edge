@@ -170,6 +170,55 @@ class ScanLoopIntegrationTests(unittest.TestCase):
 
             self.assertEqual(scan_loop._notify_operator("k", "m"), {"sent": False})
 
+class ShutdownAnnouncementTests(unittest.TestCase):
+    """A deploy sends SIGTERM every time, so alerting on every shutdown would
+    make this channel noise -- and the redeploys are mostly evenings and
+    weekends, when nothing is missed. During a live session the same event means
+    scanning has stopped and nobody would know until they looked."""
+
+    def setUp(self):
+        operator_alerts.reset_operator_alert_state()
+        self.addCleanup(operator_alerts.reset_operator_alert_state)
+
+    def test_a_shutdown_during_a_live_session_is_announced(self):
+        from app.runtime import scan_loop
+
+        with patch("app.runtime.scan_loop.current_session", return_value="REGULAR"), \
+             patch("app.runtime.scan_loop.idle_reason", return_value=None), \
+             patch("app.alerts.operator_alerts.notify_operator") as notify:
+
+            scan_loop._announce_shutdown("terminated by signal 15", 12)
+
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.args[0], "worker_stopped")
+        self.assertIn("REGULAR", notify.call_args.args[1])
+
+    def test_a_weekend_shutdown_is_not_announced(self):
+        from app.runtime import scan_loop
+
+        with patch("app.runtime.scan_loop.current_session", return_value="REGULAR"), \
+             patch("app.runtime.scan_loop.idle_reason", return_value="SLEEPING_WEEKEND"), \
+             patch("app.alerts.operator_alerts.notify_operator") as notify:
+
+            scan_loop._announce_shutdown("terminated by signal 15", 0)
+
+        notify.assert_not_called()
+
+    def test_the_stop_reason_names_the_signal(self):
+        """A STOPPED row on its own says the process died and nothing about what
+        killed it, which is the first question asked every time."""
+
+        from app.runtime import scan_loop
+
+        scan_loop._stopping = False
+        scan_loop._stop_signal = None
+        self.addCleanup(setattr, scan_loop, "_stopping", False)
+        self.addCleanup(setattr, scan_loop, "_stop_signal", None)
+
+        scan_loop._request_stop(15, None)
+
+        self.assertEqual(scan_loop._stop_signal, 15)
+        self.assertTrue(scan_loop._stopping)
 
 if __name__ == "__main__":
     unittest.main()
