@@ -15,6 +15,7 @@ The current v2 intraday options watchlist is defined in `app/config/watchlist.py
 - MSFT
 - AMZN
 - META
+- GOOGL
 - TSLA
 - AMD
 - AVGO
@@ -27,19 +28,22 @@ The current v2 intraday options watchlist is defined in `app/config/watchlist.py
 - SMH
 - ARM
 - TSM
-- INTC
 - AMAT
-- LRCX
 - MRVL
 - ORCL
 - PANW
-- SOXL
+- JPM
+- XOM
+
+SOXL, LRCX and INTC were removed on 2026-08-01 and replaced with GOOGL, JPM and XOM. The list had 13 of 26 names in SEMIS, so half the universe was one bet expressed thirteen ways. SOXL is 3x SMH and both were held; LRCX shares the semicap-equipment cycle with AMAT; INTC is low-beta and detached from the AI-semis complex. The replacements add two genuinely uncorrelated drivers — JPM is rate-driven, XOM is oil-driven — and GOOGL closes the MEGA_TECH gap. JPM and XOM run cooler than the names they replaced, so if they rarely clear the ATR% and momentum thresholds they are the first candidates to revisit.
 
 Non-trade market reference symbols are also defined in `app/config/watchlist.py`:
 
 - SMH
 - SOXX
 - XLK
+- XLF, the FINANCIALS sector reference for JPM
+- XLE, the ENERGY sector reference for XOM
 - VIX, fetched as VIXY because the current Polygon plan does not include index aggregate entitlement for `I:VIX`
 
 ## Current Entrypoint

@@ -1422,7 +1422,9 @@ def _sector_group(symbol):
         "MRVL": "SEMIS",
         "ORCL": "SOFTWARE",
         "PANW": "SOFTWARE",
-        "SOXL": "SEMIS"
+        "SOXL": "SEMIS",
+        "JPM": "FINANCIALS",
+        "XOM": "ENERGY"
     }
 
     return sector_map.get(
@@ -1443,6 +1445,14 @@ def _sector_reference_symbol(sector_group):
     ]:
 
         return "XLK"
+
+    if sector_group == "FINANCIALS":
+
+        return "XLF"
+
+    if sector_group == "ENERGY":
+
+        return "XLE"
 
     return "QQQ"
 

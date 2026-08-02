@@ -1,3 +1,4 @@
+from app.config.watchlist import WATCHLIST
 from app.indicators.technical_indicators import (
     compute_indicators,
     get_polygon_data
@@ -5,34 +6,7 @@ from app.indicators.technical_indicators import (
 from app.utils.timeframe_resampler import resample_timeframe
 
 
-SYMBOLS = [
-    "QQQ",
-    "SPY",
-    "NVDA",
-    "AAPL",
-    "MSFT",
-    "AMZN",
-    "META",
-    "TSLA",
-    "AMD",
-    "AVGO",
-    "MU",
-    "PLTR",
-    "NFLX",
-    "CRWD",
-    "SMCI",
-    "SPCX",
-    "SMH",
-    "ARM",
-    "TSM",
-    "INTC",
-    "AMAT",
-    "LRCX",
-    "MRVL",
-    "ORCL",
-    "PANW",
-    "SOXL"
-]
+SYMBOLS = list(WATCHLIST)
 
 
 def diagnose_symbol(symbol):
