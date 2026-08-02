@@ -28,6 +28,40 @@ def db_writes_enabled() -> bool:
     ] and bool(os.getenv("DATABASE_URL", "").strip())
 
 
+def database_reachable():
+    """Can a query actually run, as opposed to: is a URL configured.
+
+    `db_writes_enabled()` answers the second question, and the dashboard printed
+    its answer as "DB writes ACTIVE". A container holding a URL it cannot reach
+    therefore rendered green while every read returned empty and every write was
+    silently dropped -- which is the state that let a worker publish "No
+    positions were closed this week" over a week with seven.
+    """
+
+    try:
+
+        with get_engine().connect() as connection:
+            connection.execute(text("SELECT 1"))
+
+        return True
+
+    except Exception as exc:
+
+        logger.warning("Database unreachable: %s", exc)
+
+        return False
+
+
+def database_status():
+    """`ON`, `OFF` (deliberately switched off), or `UNREACHABLE` (broken)."""
+
+    if not db_writes_enabled():
+
+        return "OFF"
+
+    return "ON" if database_reachable() else "UNREACHABLE"
+
+
 def print_db_status(prefix="[DB STATUS]"):
     print(
         prefix,

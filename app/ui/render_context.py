@@ -274,6 +274,41 @@ def db_writes_active():
         return False
 
 
+_DB_STATE_CACHE = {"checked_at": 0.0, "state": None}
+_DB_STATE_TTL_SECONDS = 30
+
+
+def database_state():
+    """`ON`, `OFF`, or `UNREACHABLE`, cached so a rerun is not a round trip.
+
+    `db_writes_active()` reports intent -- a flag and a non-empty URL -- and the
+    sidebar rendered that as "DB writes on". A container holding a URL it cannot
+    reach looked identical to a healthy one, so nothing on screen contradicted a
+    process that was reading empty results and dropping every write.
+    """
+
+    import time
+
+    now = time.monotonic()
+
+    if (_DB_STATE_CACHE["state"] is not None
+            and now - _DB_STATE_CACHE["checked_at"] < _DB_STATE_TTL_SECONDS):
+
+        return _DB_STATE_CACHE["state"]
+
+    try:
+        from app.db.persistence import database_status
+
+        state = database_status()
+
+    except Exception:
+        state = "UNREACHABLE"
+
+    _DB_STATE_CACHE.update({"checked_at": now, "state": state})
+
+    return state
+
+
 def auto_paper_max_daily():
     try:
         from app.runtime.paper_automation_support import load_auto_paper_controls

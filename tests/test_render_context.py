@@ -2,6 +2,9 @@
 four times. These tests hold that property, and cover the data rules that moved
 out of the page module with it."""
 
+import unittest
+from unittest.mock import patch
+
 import pandas as pd
 
 from app.ui import render_context
@@ -166,3 +169,40 @@ def test_engine_label_infers_the_dashboard_only_from_a_local_thread():
 def test_engine_label_passes_through_an_owner_it_does_not_know():
 
     assert render_context.engine_label({"owner": "backfill"}) == "Backfill engine"
+
+
+class DatabaseStateIsReachabilityNotIntentTests(unittest.TestCase):
+    """"DB writes on" was true of a container that could not reach Postgres, so
+    the one indicator that should have caught a blind process vouched for it."""
+
+    def setUp(self):
+        render_context._DB_STATE_CACHE.update({"checked_at": 0.0, "state": None})
+        self.addCleanup(render_context._DB_STATE_CACHE.update,
+                        {"checked_at": 0.0, "state": None})
+
+    def test_a_configured_but_unreachable_database_is_not_on(self):
+        with patch("app.db.persistence.db_writes_enabled", return_value=True),              patch("app.db.persistence.database_reachable", return_value=False):
+
+            self.assertEqual(render_context.database_state(), "UNREACHABLE")
+
+    def test_a_reachable_database_is_on(self):
+        with patch("app.db.persistence.db_writes_enabled", return_value=True),              patch("app.db.persistence.database_reachable", return_value=True):
+
+            self.assertEqual(render_context.database_state(), "ON")
+
+    def test_deliberately_switched_off_is_distinct_from_broken(self):
+        """OFF is a choice and UNREACHABLE is a fault; collapsing them would put
+        an operator on the wrong hunt."""
+
+        with patch("app.db.persistence.db_writes_enabled", return_value=False):
+
+            self.assertEqual(render_context.database_state(), "OFF")
+
+    def test_the_result_is_cached_so_a_rerun_is_not_a_round_trip(self):
+        with patch("app.db.persistence.db_writes_enabled", return_value=True),              patch("app.db.persistence.database_reachable",
+                   return_value=True) as reachable:
+
+            render_context.database_state()
+            render_context.database_state()
+
+        reachable.assert_called_once()
