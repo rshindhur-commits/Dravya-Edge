@@ -89,4 +89,20 @@ Still local-only, and still a gap:
 | State | Risk on restart |
 | --- | --- |
 | `suggested_trade_state.json` | Suggestion lifecycle resets. No table exists. Not subscriber-visible. |
-| `auto_paper_settings.json` | Falls back to code defaults. Gitignored, and now on a *different host* from the sidebar controls that write it — those controls become decorative once the worker owns scanning. Decide whether to move them to Postgres or remove them. |
+
+`auto_paper_settings.json` **was** the other row here, and is now closed. The
+sidebar wrote it on the Streamlit container while the worker read its own copy on
+Render — which, having no disk, never had one. All seven controls were inert and
+displaying values nothing applied. The file, the sidebar block and the reader are
+removed: `load_auto_paper_controls()` reads env vars only, so the dashboard shows
+the same numbers the worker enforces because both call the same function.
+
+Changing auto-paper behaviour is now a config change on **both** hosts:
+
+```
+AUTO_PAPER_ENABLED   MAX_DAILY_ENTRIES   AUTO_PAPER_MIN_SETUP   AUTO_PAPER_MIN_RR
+AUTO_PAPER_DIRECTION   AUTO_PAPER_EOD_CLOSE_ENABLED   RESTORE_MULTIDAY_POSITIONS
+```
+
+Set them in Render (the scanner reads them) and in Streamlit Secrets (the
+dashboard displays them). Setting only one is how the two come to disagree again.

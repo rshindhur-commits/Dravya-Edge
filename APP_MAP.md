@@ -290,7 +290,7 @@ changeable only via `MANUAL_OVERRIDE` / future `BROKER_SYNC`.
 | `trade_state.json` | Legacy scanner state; promoted once on first lookup | `{}` (empty) |
 | `suggested_trade_state.json` | Suggestion lifecycle / cancellation source | populated |
 | `telegram_alert_state.json` | Dedupe + sent-state | 22 KB |
-| `auto_paper_settings.json` | Persisted sidebar automation controls (read by *both* processes) | present |
+| ~~`auto_paper_settings.json`~~ | Removed. Auto-paper controls are env vars; the sidebar wrote this on a host the scanner does not run on | gone |
 | `auto_paper_decision_log.json` | Capped UI copy of auto-paper decisions | 22 KB |
 | `signal_memory.json` | Signal memory | small |
 

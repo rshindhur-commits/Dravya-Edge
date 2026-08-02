@@ -64,12 +64,13 @@ FILE_ONLY_ARTIFACTS = (
 )
 
 # Operator state. `paper_trade_state.json` is the live book and is wiped by every
-# redeploy; `auto_paper_settings.json` is gitignored, so a fresh container cannot
-# tell you what the controls were set to when the day ran.
+# redeploy. `auto_paper_settings.json` was listed here to record what the controls
+# were set to when the day ran; the sidebar controls and the file are both gone,
+# and auto-paper settings now come from env vars that are visible in the Render
+# and Streamlit config for the deploy that ran.
 STATE_ARTIFACTS = (
     "paper_trade_state.json",
     "suggested_trade_state.json",
-    "auto_paper_settings.json",
 )
 
 EVIDENCE_STATUS_ARTIFACT = "candidate_evidence_status.json"
