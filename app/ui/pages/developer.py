@@ -2,14 +2,12 @@ def render(df, auto_paper_controls, refresh_state=None):
 
     from app.dashboard import (
         _current_trading_day,
-        _render_action_center,
         _render_auto_paper_decision_log,
         _render_compact_auto_paper_summary,
         _render_entry_diagnostics,
         _render_lazy_developer_section,
         _render_market_coverage_lazy,
         _render_metadata_card,
-        _render_paper_exit_controls,
         _render_runtime_performance_panel,
         _render_scanner_watchlist,
         _render_suggestion_lifecycle,
@@ -112,20 +110,17 @@ def render(df, auto_paper_controls, refresh_state=None):
             "market_coverage",
             lambda: _render_market_coverage_lazy(_current_trading_day())
         )
-        _render_lazy_developer_section(
-            "Action Center",
-            "action_center",
-            lambda: _render_action_center(df, auto_paper_controls)
-        )
+        # Action Center and Paper Exit Controls were here. Both acted on the
+        # paper book from the dashboard, which was safe while this process was
+        # also the scanner. It no longer is: the Render worker owns entries and
+        # exits, and closing a position from here races its exit logic across two
+        # hosts with no shared lock -- `scan_lock` is a local file and cannot
+        # serialise anything between containers. Same failure shape as two scan
+        # engines running at once, and the book is what it corrupts.
         _render_lazy_developer_section(
             "Scanner Watchlist",
             "scanner_watchlist",
             lambda: _render_scanner_watchlist(df)
-        )
-        _render_lazy_developer_section(
-            "Paper Exit Controls",
-            "paper_exit_controls",
-            lambda: _render_paper_exit_controls(df)
         )
         _render_lazy_developer_section(
             "Auto-Paper Summary",
