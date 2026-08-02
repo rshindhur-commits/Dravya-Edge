@@ -16,6 +16,7 @@ import argparse
 import csv
 import gzip
 import json
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -110,6 +111,35 @@ def check(root):
     return 0
 
 
+def prune_old(root, keep):
+    """Delete all but the newest `keep` archives.
+
+    Only ever called after a new export has verified, so the guarantee is that
+    pruning cannot run on the same pass that failed to produce a replacement.
+    Folder names are UTC timestamps, so lexical order is chronological.
+    """
+    if keep < 1:
+        return []
+
+    archives = existing_exports(root)
+    doomed = archives[:-keep] if len(archives) > keep else []
+    removed = []
+
+    for path in doomed:
+        # Requiring a manifest means an unrelated folder that happens to sit in
+        # the backup root is never a deletion candidate.
+        if not (path / "manifest.json").exists():
+            continue
+
+        try:
+            shutil.rmtree(path)
+            removed.append(path.name)
+        except Exception as exc:
+            print(f"  could not remove {path.name}: {exc}")
+
+    return removed
+
+
 def fetch_schema_sql(cur):
     """Best-effort DDL: columns, defaults, PKs, indexes.
 
@@ -162,7 +192,7 @@ def fetch_schema_sql(cur):
     return "\n".join(out)
 
 
-def export(root):
+def export(root, keep=None):
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = root / stamp
     (out_dir / "tables").mkdir(parents=True, exist_ok=True)
@@ -245,10 +275,20 @@ def export(root):
     if failures:
         print("VERIFICATION FAILED")
         print("\n".join(failures))
+        print("\nOld archives left in place -- this export cannot replace them.")
         return 1
 
     print(f"OK - all {len(tables)} tables match ({total_rows:,} rows verified)")
     print(f"\narchive: {out_dir}")
+
+    if keep:
+        removed = prune_old(root, keep)
+
+        if removed:
+            print(f"\npruned {len(removed)} archive(s) beyond the newest {keep}:")
+            for name in removed:
+                print(f"  {name}")
+
     return 0
 
 
@@ -258,10 +298,21 @@ def main():
         "--check", action="store_true",
         help="report whether the last export is stale; exit 1 if it is",
     )
+    parser.add_argument(
+        "--keep", type=int, default=10,
+        help="archives to retain after a verified export (default: 10)",
+    )
+    parser.add_argument(
+        "--no-prune", action="store_true",
+        help="keep every archive regardless of --keep",
+    )
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     args = parser.parse_args()
 
-    return check(args.root) if args.check else export(args.root)
+    if args.check:
+        return check(args.root)
+
+    return export(args.root, keep=None if args.no_prune else args.keep)
 
 
 if __name__ == "__main__":
