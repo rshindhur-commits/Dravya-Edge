@@ -20,6 +20,7 @@ WATCHLIST = [
     *CORE_WATCHLIST,
     "AMZN",
     "META",
+    "GOOGL",
     "TSLA",
     "AMD",
     "AVGO",
@@ -32,13 +33,12 @@ WATCHLIST = [
     "SMH",
     "ARM",
     "TSM",
-    "INTC",
     "AMAT",
-    "LRCX",
     "MRVL",
     "ORCL",
     "PANW",
-    "SOXL"
+    "JPM",
+    "XOM"
 ]
 
 
@@ -46,6 +46,8 @@ MARKET_REFERENCE_SYMBOLS = [
     "SMH",
     "SOXX",
     "XLK",
+    "XLF",
+    "XLE",
     "VIX"
 ]
 
