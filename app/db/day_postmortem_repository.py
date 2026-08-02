@@ -130,6 +130,33 @@ class DayPostmortemRepository(BestEffortRepository):
             {"day": str(trading_day), "limit": int(limit)},
         )
 
+    def entries_intended(self, trading_day):
+        """Decisions that said take it, with the key they claimed to open."""
+
+        return self._fetch_optional(
+            """
+            SELECT symbol, decision, trade_key, scan_timestamp
+            FROM auto_paper_decision
+            WHERE trading_day = CAST(:day AS date)
+              AND UPPER(decision) IN ('ENTER', 'ENTER_PAPER', 'TAKEN', 'OPENED')
+            ORDER BY scan_timestamp
+            """,
+            {"day": str(trading_day)},
+        )
+
+    def entries_recorded(self, trading_day):
+        """Positions the book actually holds for the day."""
+
+        return self._fetch_optional(
+            f"""
+            SELECT trade_key, symbol, status, entry_source, opened_at
+            FROM paper_trades
+            WHERE (opened_at AT TIME ZONE '{ET}')::date = CAST(:day AS date)
+            ORDER BY opened_at
+            """,
+            {"day": str(trading_day)},
+        )
+
     def alert_suppressions(self, trading_day, limit=15):
         """Alerts considered and not sent, by reason.
 

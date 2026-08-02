@@ -54,6 +54,55 @@ def _premium_measurable(trades):
     return trades[pd.to_numeric(trades["option_entry_ask"], errors="coerce").notna()]
 
 
+def spread_calibration_from_db(days=30, reference=None, repository=None):
+    """Calibration over a trailing window, straight from Postgres.
+
+    `build_spread_calibration` needs trades handed to it, and the only caller was
+    `learning_engine`, which writes the result into `validation_state.json`. The
+    dashboard read it back out of that file -- written by whichever process ran
+    the scan, so once scanning moved to Render the panel built to settle this
+    question would never have rendered at all.
+
+    A trailing window rather than one day because a measurable trade needs a
+    frozen `option_entry_ask`, which only exists for positions opened after
+    `eb56f75`. At one day at a time the panel would read zero for weeks.
+
+    Returns None when the read fails, which the caller must not draw as "no
+    measurable trades" -- that conflation is what published a false weekly
+    summary on 2026-08-01.
+    """
+
+    from datetime import timedelta
+
+    if repository is None:
+        from app.db.paper_trade_repository import PaperTradeRepository
+
+        repository = PaperTradeRepository()
+
+    end_day = reference or _today_et()
+    start_day = end_day - timedelta(days=int(days))
+
+    try:
+        trades = repository.fetch_closed_between(start_day, end_day)
+
+    except Exception as exc:
+        print(f"[SPREAD CALIBRATION] read failed: {exc}")
+
+        return None
+
+    if trades is None:
+        return None
+
+    return build_spread_calibration(pd.DataFrame(trades))
+
+
+def _today_et():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("America/New_York")).date()
+
+
 def build_spread_calibration(trades):
     """Does `option_quality_score` predict what the round trip actually costs?
 

@@ -128,6 +128,52 @@ def coverage_gaps(scans, threshold_minutes=GAP_MINUTES):
     return sorted(gaps, key=lambda gap: gap["minutes"], reverse=True)
 
 
+def build_reconciliation(trading_day, repository=None):
+    """Does the decision record agree with the book?
+
+    Two independent writers describe the same event: `auto_paper_decision` says
+    an entry was taken, `paper_trades` says a position exists. They are written
+    by different code on different paths, so they can disagree -- and when they
+    do, one of them is wrong about a real position.
+
+    This was previously checked by `_render_validation_data_health` against three
+    local files, which on a dashboard that never wrote them compared nothing to
+    nothing and reported agreement.
+    """
+
+    if repository is None:
+
+        from app.db.day_postmortem_repository import DayPostmortemRepository
+
+        repository = DayPostmortemRepository()
+
+    intended = _safe(repository.entries_intended, trading_day)
+    recorded = _safe(repository.entries_recorded, trading_day)
+
+    if intended is None or recorded is None:
+        return None
+
+    intended_keys = {row.get("trade_key") for row in intended if row.get("trade_key")}
+    recorded_keys = {row.get("trade_key") for row in recorded if row.get("trade_key")}
+
+    return {
+        "intended": len(intended),
+        "recorded": len(recorded),
+        # Decided to enter, but no position carries that key. Either the open
+        # failed after the decision was logged, or it opened under another key.
+        "missing_positions": [
+            row for row in intended
+            if row.get("trade_key") and row["trade_key"] not in recorded_keys
+        ],
+        # A position with no decision behind it. Manual entries land here
+        # legitimately; an AUTO_PAPER one does not.
+        "unexplained_positions": [
+            row for row in recorded
+            if row.get("trade_key") not in intended_keys
+        ],
+    }
+
+
 def alert_delivery(alerts):
     """Sent versus attempted-but-undelivered, or None if unreadable.
 

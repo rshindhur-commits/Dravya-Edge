@@ -1700,7 +1700,9 @@ def _render_cached_validation_state(state):
         ("False Alerts", telegram_quality.get("false_alerts", 0)),
     ])
 
-    _render_spread_calibration(state.get("spread_calibration"))
+    # Spread calibration was rendered here, from the cached state. The page now
+    # renders it from Postgres before this function is called, so it appears
+    # whether or not a state file exists -- see `pages/validation.py`.
 
     delay_attribution = state.get("delay_attribution") or []
 
@@ -1757,7 +1759,6 @@ def _render_cached_validation_state(state):
 
     _render_cached_recommendations(state.get("recommendations"))
     _render_trade_efficiency(state.get("trade_efficiency"))
-    _render_daily_validation_report_panel()
 
 
 def _render_observational_analytics(analytics):
@@ -2077,7 +2078,6 @@ def _render_cached_report_state(state):
 
             st.info(error)
 
-    _render_daily_validation_report_panel()
     _render_trade_efficiency_history(state.get("historical_trade_efficiency"))
     _render_v2_learning_history(state.get("historical_v2_learning"))
     _render_observational_analytics_history(
@@ -5994,115 +5994,6 @@ def _scanner_watchlist(df, limit=10):
     return rows.head(limit)
 
 
-def _render_scanner_watchlist(df):
-
-    st.subheader("Scanner Watchlist")
-    watchlist = _scanner_watchlist(df)
-
-    if watchlist.empty:
-
-        st.info("No scanner watchlist rows right now.")
-        return
-
-    st.dataframe(
-        _display_safe_dataframe(watchlist),
-        width="stretch",
-        hide_index=True
-    )
-
-
-def _render_entry_diagnostics(df):
-
-    if df is None or df.empty:
-
-        st.info("No scanner rows available for entry diagnostics.")
-        return
-
-    required_columns = [
-        "Symbol",
-        "ENTRY_SETUP_CANDIDATE",
-        "ENTRY_READINESS",
-        "FAILED_ENTRY_CONDITIONS",
-        "PASSED_ENTRY_CONDITIONS",
-        "ENTRY_DECISION_TIMELINE",
-        "Action Status",
-        "Market Regime",
-    ]
-
-    if not any(column in df.columns for column in required_columns):
-
-        st.info("Entry diagnostics will appear after the next scanner run.")
-        return
-
-    rows = df.copy()
-
-    for column in required_columns:
-
-        if column not in rows.columns:
-
-            rows[column] = None
-
-    rows["ENTRY_READINESS"] = pd.to_numeric(
-        rows["ENTRY_READINESS"],
-        errors="coerce"
-    )
-    display = rows[
-        [
-            "Symbol",
-            "Market Regime",
-            "Action Status",
-            "ENTRY_SETUP_CANDIDATE",
-            "ENTRY_READINESS",
-            "FAILED_ENTRY_CONDITIONS",
-            "PASSED_ENTRY_CONDITIONS",
-            "ENTRY_DECISION_TIMELINE",
-        ]
-    ].rename(
-        columns={
-            "ENTRY_SETUP_CANDIDATE": "Candidate",
-            "ENTRY_READINESS": "Readiness %",
-            "FAILED_ENTRY_CONDITIONS": "Failed",
-            "PASSED_ENTRY_CONDITIONS": "Passed",
-            "ENTRY_DECISION_TIMELINE": "Timeline",
-        }
-    )
-    display = display.sort_values(
-        by="Readiness %",
-        ascending=False,
-        na_position="last"
-    )
-    st.dataframe(
-        _display_safe_dataframe(display),
-        width="stretch",
-        hide_index=True
-    )
-
-    if "ENTRY_DIAGNOSTICS_JSON" in rows.columns:
-
-        symbol_options = rows["Symbol"].dropna().astype(str).tolist()
-
-        if symbol_options:
-
-            selected_symbol = st.selectbox(
-                "Inspect ticker diagnostics",
-                options=symbol_options,
-                key="entry_diagnostics_symbol"
-            )
-            selected_row = rows[rows["Symbol"].astype(str).eq(selected_symbol)].head(1)
-
-            if not selected_row.empty:
-
-                raw_payload = selected_row.iloc[0].get("ENTRY_DIAGNOSTICS_JSON")
-
-                try:
-
-                    st.json(json.loads(raw_payload or "{}"))
-
-                except Exception:
-
-                    st.code(str(raw_payload or "{}"), language="json")
-
-
 def _metadata_status(age_minutes, refresh_minutes):
 
     if age_minutes is None:
@@ -6228,7 +6119,6 @@ def _render_validation_page(df):
     st.subheader("Validation")
     _render_paper_validation_performance()
     _render_trade_efficiency_card()
-    _render_daily_validation_report_panel()
 
 
 def _render_replay_page(df=None, refresh_state=None):
@@ -6407,7 +6297,6 @@ def _render_reports_page(df):
         _render_cached_report_state(cached)
         return
 
-    _render_daily_validation_report_panel()
 
 
 def _load_runtime_json_state():
@@ -6562,96 +6451,6 @@ def _render_lazy_developer_section(title, key, render_fn, expanded=False):
         render_fn()
 
 
-def _render_telemetry_debug_panel(df):
-
-    st.subheader("Last Seen Candidates")
-    _render_last_seen_candidates(df)
-
-    st.subheader("Alert + Paper Performance Review")
-    telemetry_metrics = _telemetry_summary()
-    telemetry_cols = st.columns(3)
-
-    for col, (label, value) in zip(telemetry_cols, telemetry_metrics.items()):
-
-        col.metric(label, value)
-
-
-def _render_developer_page(df, auto_paper_controls, refresh_state=None):
-
-    metadata = _scan_metadata(df, refresh_state=refresh_state)
-    _render_metadata_card(
-        "Developer Diagnostics",
-        [
-            ("Diagnostics Status", "READY OK" if df is not None and not df.empty else "MISSING"),
-            ("Current Scan ID", metadata["scan_id"]),
-            ("Diagnostics Built", metadata["last_refreshed"]),
-            ("Based On Scan", metadata["scanner_finished"]),
-            ("Symbols", metadata["symbols"]),
-            ("Data Version", metadata["scan_id"]),
-            ("Status", _status_label(metadata["status"])),
-            ("Refresh Window", f"{metadata['refresh_minutes']} min"),
-        ]
-    )
-
-    with st.expander("Developer Diagnostics", expanded=True):
-
-        _render_lazy_developer_section(
-            "Runtime Performance",
-            "runtime_performance",
-            _render_runtime_performance_panel
-        )
-        _render_lazy_developer_section(
-            "Market Coverage",
-            "market_coverage",
-            lambda: _render_market_coverage_lazy(_current_trading_day())
-        )
-        _render_lazy_developer_section(
-            "Action Center",
-            "action_center",
-            lambda: _render_action_center(df, auto_paper_controls)
-        )
-        _render_lazy_developer_section(
-            "Scanner Watchlist",
-            "scanner_watchlist",
-            lambda: _render_scanner_watchlist(df)
-        )
-        _render_lazy_developer_section(
-            "Paper Exit Controls",
-            "paper_exit_controls",
-            lambda: _render_paper_exit_controls(df)
-        )
-        _render_lazy_developer_section(
-            "Auto-Paper Summary",
-            "auto_paper_summary",
-            _render_compact_auto_paper_summary
-        )
-        _render_lazy_developer_section(
-            "Suggestion Lifecycle",
-            "suggestion_lifecycle",
-            lambda: _render_suggestion_lifecycle(df)
-        )
-        _render_lazy_developer_section(
-            "Entry Diagnostics",
-            "entry_diagnostics",
-            lambda: _render_entry_diagnostics(df)
-        )
-        _render_lazy_developer_section(
-            "Full Auto-Paper Decision Log",
-            "auto_paper_decision_log",
-            lambda: _render_auto_paper_decision_log(show_full_expander=False)
-        )
-        _render_lazy_developer_section(
-            "Validation Data Health",
-            "validation_data_health",
-            lambda: _render_validation_data_health(df)
-        )
-        _render_lazy_developer_section(
-            "Telemetry & Debug",
-            "telemetry_debug",
-            lambda: _render_telemetry_debug_panel(df)
-        )
-
-
 def _latest_decisions_df(minutes=30):
 
     entries = _load_auto_paper_decision_log()
@@ -6681,48 +6480,6 @@ def _latest_decisions_df(minutes=30):
     return decisions[
         timestamps >= cutoff
     ].copy()
-
-
-def _render_compact_auto_paper_summary():
-
-    st.subheader("Paper / Real Validation Summary")
-    decisions = _latest_decisions_df(minutes=30)
-
-    if decisions.empty or "decision" not in decisions.columns:
-
-        st.info("No recent auto-paper decisions in the latest 30 minutes.")
-        return
-
-    counts = (
-        decisions["decision"]
-        .fillna("UNKNOWN")
-        .astype(str)
-        .str.upper()
-        .value_counts()
-    )
-    cols = st.columns(4)
-    with cols[0]:
-
-        kpi_card("Opened", str(int(counts.get("OPENED", 0))))
-
-    with cols[1]:
-
-        kpi_card("Blocked", str(int(counts.get("BLOCKED", 0))))
-
-    with cols[2]:
-
-        kpi_card("Skipped", str(int(counts.get("SKIPPED", 0))))
-
-    reason = "N/A"
-
-    if "reason" in decisions.columns and not decisions["reason"].dropna().empty:
-
-        reason = decisions["reason"].fillna("UNKNOWN").astype(str).value_counts().index[0]
-
-    with cols[3]:
-
-        kpi_card("Top Reason", reason)
-
 
 
 def _read_csv_safe(path):
@@ -8475,86 +8232,6 @@ def _daily_candidate_snapshot_count(trading_day):
         return _file_row_count(parquet_path, pd.read_parquet)
 
     return _file_row_count(csv_path, pd.read_csv)
-
-
-def _render_validation_data_health(df):
-
-    st.subheader("Validation Data Health")
-    trading_day = _current_trading_day()
-    decisions = _load_auto_paper_decision_log()
-    decision_df = pd.DataFrame(decisions) if decisions else pd.DataFrame()
-
-    try:
-
-        from app.state.paper_trade_manager import load_paper_trades
-        paper_trades = load_paper_trades()
-
-    except Exception:
-
-        paper_trades = {}
-
-    suggested = _load_suggested_trades_df()
-    opened_count = 0
-
-    if not decision_df.empty and "decision" in decision_df.columns:
-
-        opened_count = int(
-            decision_df["decision"]
-            .astype(str)
-            .str.upper()
-            .eq("OPENED")
-            .sum()
-        )
-
-    paper_events_path = daily_path(trading_day, "paper_trade_events.csv")
-    health = {
-        "Scanner rows": len(df),
-        "Candidate snapshots": _daily_candidate_snapshot_count(trading_day),
-        "Telemetry rows": len(_load_telemetry()),
-        "Paper trade events": _file_row_count(paper_events_path, pd.read_csv),
-        "Paper trade state records": len(paper_trades),
-        "Auto-paper decisions": len(decisions),
-        "OPENED decisions": opened_count,
-        "Suggested trades": len(suggested),
-        "Invalid geometry count": int(
-            df.apply(price_geometry_error, axis=1).notna().sum()
-        ) if not df.empty else 0,
-    }
-    health_df = pd.DataFrame(
-        list(health.items()),
-        columns=["Metric", "Value"]
-    )
-    st.dataframe(
-        _display_safe_dataframe(health_df),
-        width="stretch",
-        hide_index=True
-    )
-
-
-def _render_daily_validation_report_panel():
-
-    st.subheader("Daily Validation Report")
-    trading_day = _current_trading_day()
-    report_path = daily_path(
-        trading_day,
-        "daily_validation_report.html"
-    )
-    report_data = _read_download_file(report_path)
-
-    if report_data is None:
-
-        st.info(
-            "No daily validation report generated yet. Use the sidebar Daily Validation controls."
-        )
-        return
-
-    st.download_button(
-        label="Download daily_validation_report.html",
-        data=report_data,
-        file_name=f"daily_validation_{trading_day}.html",
-        mime="text/html",
-        key="download_daily_validation_report_main"
-    )
 
 
 def main():

@@ -204,6 +204,67 @@ class TradingDayPickerTests(unittest.TestCase):
         self.assertEqual([day.isoformat() for day in days],
                          ["2026-08-03", "2026-07-31", "2026-07-30"])
 
+class ReconciliationTests(unittest.TestCase):
+    """`auto_paper_decision` and `paper_trades` are written by different code on
+    different paths, so a disagreement is real: one of them is wrong about a
+    position that either does or does not exist.
+
+    The panel this replaced compared three local files. On a dashboard that
+    writes none of them it compared nothing to nothing and reported agreement --
+    a reconciliation that cannot fail is not a reconciliation.
+    """
+
+    class _Repository:
+        def __init__(self, intended, recorded):
+            self._intended, self._recorded = intended, recorded
+
+        def entries_intended(self, _day):
+            return self._intended
+
+        def entries_recorded(self, _day):
+            return self._recorded
+
+    def test_agreement_reports_no_discrepancies(self):
+        repository = self._Repository(
+            [{"symbol": "NVDA", "trade_key": "K1"}],
+            [{"symbol": "NVDA", "trade_key": "K1"}])
+
+        report = day_postmortem.build_reconciliation("2026-07-31", repository)
+
+        self.assertEqual(report["missing_positions"], [])
+        self.assertEqual(report["unexplained_positions"], [])
+
+    def test_a_decision_with_no_position_is_flagged(self):
+        """Either the open failed after the decision was logged, or it opened
+        under another key -- and the second means the cap counted it twice."""
+
+        repository = self._Repository([{"symbol": "AMD", "trade_key": "K2"}], [])
+
+        report = day_postmortem.build_reconciliation("2026-07-31", repository)
+
+        self.assertEqual(len(report["missing_positions"]), 1)
+
+    def test_a_position_with_no_decision_is_flagged(self):
+        """2026-07-30 has six of these, the day a daily cap of 3 produced 6
+        trades."""
+
+        repository = self._Repository([], [{"symbol": "SPY", "trade_key": "K3"}])
+
+        report = day_postmortem.build_reconciliation("2026-07-31", repository)
+
+        self.assertEqual(len(report["unexplained_positions"]), 1)
+
+    def test_either_side_unreadable_gives_none_not_a_clean_bill(self):
+        """Comparing against an empty read would report every position as
+        unexplained, or none as missing. Both are fabricated findings."""
+
+        for intended, recorded in (
+            (None, [{"trade_key": "K"}]),
+            ([{"trade_key": "K"}], None),
+            (None, None),
+        ):
+            self.assertIsNone(day_postmortem.build_reconciliation(
+                "2026-07-31", self._Repository(intended, recorded)))
 
 if __name__ == "__main__":
     unittest.main()

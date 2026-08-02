@@ -14,7 +14,12 @@ the Regression tab does not pay to read `scanner_output.xlsx`.
 
 from __future__ import annotations
 
-TABS = ("Postmortem", "Replay", "Regression", "Reports", "Learning")
+# "Reports" was here. It rendered `report_state.json` or the scanner frame, both
+# written by the process that ran the scan, so on Render-owned scanning it was
+# blank -- and what it showed before the state files were untracked was a
+# developer machine's July snapshot. Everything in it is answered better by
+# Postmortem (the day) and Validation (the performance), from Postgres.
+TABS = ("Live Funnel", "Postmortem", "Replay", "Regression", "Learning")
 
 
 def _cached(name, profile):
@@ -45,24 +50,6 @@ def _render_regression(_refresh_state, _load_frame):
     render()
 
 
-def _render_reports(_refresh_state, load_frame):
-    import streamlit as st
-
-    import pandas as pd
-
-    from app.ui.pages.reports import render
-
-    if _cached("report_state.json", profile="reports"):
-        render(pd.DataFrame())
-        st.caption("Rendered from report_state.json.")
-        return
-
-    frame = load_frame()
-    if frame is None:
-        return
-    render(frame)
-
-
 def _render_learning(_refresh_state, _load_frame):
     from app.ui.pages.learning import render
 
@@ -70,12 +57,12 @@ def _render_learning(_refresh_state, _load_frame):
 
 
 def _render_postmortem(_refresh_state, _load_frame):
-    """First tab, and the only one reading nothing but Postgres.
+    """The completed day, reading nothing but Postgres.
 
-    Every other tab here renders from a state file written by whichever process
-    ran the scan, which is now the Render worker -- so on the dashboard they show
-    whatever the deploy shipped. This one has no such dependency and is therefore
-    the tab to open when something has gone wrong.
+    Replay still renders from a state file written by whichever process ran the
+    scan, which is now the Render worker -- so on the dashboard it shows whatever
+    the deploy shipped. This tab has no such dependency, which is why it is the
+    one to open when something has gone wrong.
     """
 
     from app.ui.pages.postmortem import render
@@ -83,11 +70,20 @@ def _render_postmortem(_refresh_state, _load_frame):
     render()
 
 
+def _render_live_funnel(_refresh_state, _load_frame):
+    """First tab, because it is the only one that answers a question you have
+    while the market is open: why is nothing firing right now."""
+
+    from app.ui.pages.live_funnel import render
+
+    render()
+
+
 RENDERERS = {
+    "Live Funnel": _render_live_funnel,
     "Postmortem": _render_postmortem,
     "Replay": _render_replay,
     "Regression": _render_regression,
-    "Reports": _render_reports,
     "Learning": _render_learning,
 }
 
