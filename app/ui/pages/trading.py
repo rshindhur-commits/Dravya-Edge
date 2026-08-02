@@ -95,7 +95,22 @@ def _render_header(context):
     import streamlit as st
 
     from app.ui.components import operator_bar, status_card_grid
-    from app.ui.render_context import engine_label
+
+    # Guarded for the same reason the sidebar's imports are: Streamlit Cloud has
+    # twice served a partial checkout, and a newly added name is exactly what is
+    # missing when it does. A header badge is not worth a blank page.
+    try:
+        from app.ui.render_context import engine_label
+
+    except ImportError:
+
+        def engine_label(engine, short=False):
+            owner = str((engine or {}).get("owner") or "").strip()
+
+            if not owner:
+                return "ENGINE" if short else "Engine"
+
+            return f"{owner} engine".upper() if short else f"{owner} engine".capitalize()
 
     engine = context.engine
     # `running`, not `thread_alive`. Once scanning moved to the Render worker

@@ -206,3 +206,37 @@ class DatabaseStateIsReachabilityNotIntentTests(unittest.TestCase):
             render_context.database_state()
 
         reachable.assert_called_once()
+
+
+class SidebarSurvivesAStaleRenderContextTests(unittest.TestCase):
+    """Streamlit Cloud has twice served a new dashboard.py against an older
+    render_context.py. `_render_system_status` runs before page routing, so an
+    ImportError there is not a broken panel -- it is a blank site. It happened
+    with `scan_engine_heartbeats`, was fixed locally, then happened again with
+    `database_state` because the guard was never made general."""
+
+    def test_a_missing_name_falls_back_instead_of_raising(self):
+        from app import dashboard
+
+        sentinel = object()
+        got = dashboard._render_context_symbol("no_such_name_at_all", sentinel)
+
+        self.assertIs(got, sentinel)
+
+    def test_an_existing_name_is_returned(self):
+        from app import dashboard
+        from app.ui import render_context
+
+        got = dashboard._render_context_symbol("database_state", None)
+
+        self.assertIs(got, render_context.database_state)
+
+    def test_the_engine_label_fallback_still_names_the_owner(self):
+        from app import dashboard
+
+        self.assertEqual(
+            dashboard._fallback_engine_label({"owner": "worker"}), "Worker engine")
+        self.assertEqual(
+            dashboard._fallback_engine_label({"owner": "worker"}, short=True),
+            "WORKER ENGINE")
+        self.assertEqual(dashboard._fallback_engine_label({}), "Engine")

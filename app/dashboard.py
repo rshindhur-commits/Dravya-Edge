@@ -3360,6 +3360,56 @@ def _engine_from_heartbeat(row):
     return heartbeat_to_engine_status(row)
 
 
+def _render_context_symbol(name, fallback):
+    """Import one name from `render_context`, or fall back to a local stand-in.
+
+    Streamlit Cloud can serve a partial checkout: on 2026-08-01 it ran a new
+    `dashboard.py` against an older `render_context.py` twice, and each time a
+    bare import of a newly added name raised ImportError out of
+    `_render_system_status` -- which runs before page routing, so a missing
+    caption took the whole dashboard down.
+
+    The sidebar's job is to report health. Degrading one line of it is an
+    acceptable cost for a stale deploy; refusing to render anything is not.
+    """
+
+    try:
+
+        from app.ui import render_context
+
+        return getattr(render_context, name)
+
+    except Exception as exc:
+
+        print(f"[DASHBOARD] render_context.{name} unavailable ({exc}); using fallback")
+
+        return fallback
+
+
+def _fallback_engine_label(engine, short=False):
+
+    owner = str((engine or {}).get("owner") or "").strip()
+
+    if not owner:
+
+        return "ENGINE" if short else "Engine"
+
+    return f"{owner} engine".upper() if short else f"{owner} engine".capitalize()
+
+
+def _fallback_database_state():
+
+    try:
+
+        from app.db.persistence import db_writes_enabled
+
+        return "ON" if db_writes_enabled() else "OFF"
+
+    except Exception:
+
+        return "OFF"
+
+
 def _render_system_status(container):
     """Is the machine healthy, answered above the controls that change it.
 
@@ -3367,9 +3417,14 @@ def _render_system_status(container):
     scattered across three sidebar sections or, in the case of runtime keys, a
     function that nothing called. An operator checking "is it working" had to
     read the whole sidebar to find out.
+
+    Every `render_context` name is resolved through `_render_context_symbol`.
+    This function runs before routing, so anything that raises here is not a
+    broken panel, it is a blank site.
     """
 
-    from app.ui.render_context import engine_label, engine_status
+    engine_status = _render_context_symbol("engine_status", lambda: {})
+    engine_label = _render_context_symbol("engine_label", _fallback_engine_label)
 
     engine = engine_status()
     alive = bool(engine.get("thread_alive"))
@@ -3443,12 +3498,10 @@ def _render_system_status(container):
         + (f" · {failures} failed" if failures else "")
     )
 
-    from app.ui.render_context import database_state
-
     # Reachability, not intent. "DB writes on" was true of a container that could
     # not reach Postgres at all, so the one indicator that should have caught a
     # blind process instead vouched for it.
-    db_state = database_state()
+    db_state = _render_context_symbol("database_state", _fallback_database_state)()
     database = {
         "ON": "DB writes on",
         "OFF": "DB writes OFF",
