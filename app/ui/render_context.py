@@ -60,21 +60,119 @@ def read_jsonl(path):
     return rows
 
 
-def active_positions():
-    from app.state.paper_trade_manager import load_paper_trades
+OPEN_STATUSES = {"OPEN", "PAUSED"}
 
-    return [
-        trade for trade in load_paper_trades().values()
-        if str(trade.get("status") or "").upper() in {"OPEN", "PAUSED"}
-    ]
+
+def active_positions():
+    """Open positions, from Postgres first and the local file second.
+
+    `paper_trade_state.json` is written by whichever process opened the trade.
+    Once scanning moved to the Render worker that process is on another host, so
+    the dashboard was reading a file nobody in its container had ever written --
+    it would have shown "No active paper positions" all Monday while the worker
+    held a book. The scanner recovers from Postgres for the same reason
+    (`restore_open_trades_from_db`); this is the read-only half of it.
+
+    Local wins on conflict, matching that restore: the database mirror is
+    written through a background queue and can lag, so a position closed locally
+    must not reappear because the mirror has not caught up.
+    """
+
+    local = {
+        key: trade
+        for key, trade in _local_open_positions().items()
+    }
+    remote = _remote_open_positions()
+
+    for trade_key, payload in (remote or {}).items():
+
+        if trade_key not in local and payload.get("symbol"):
+
+            local[trade_key] = payload
+
+    return list(local.values())
+
+
+def _local_open_positions():
+
+    try:
+        from app.state.paper_trade_manager import load_paper_trades
+
+        return {
+            key: trade
+            for key, trade in (load_paper_trades() or {}).items()
+            if str(trade.get("status") or "").upper() in OPEN_STATUSES
+        }
+
+    except Exception:
+        return {}
+
+
+def _remote_open_positions():
+    """`{trade_key: payload}` for open rows, or `{}` when unreadable."""
+
+    try:
+        from app.db.paper_trade_repository import PaperTradeRepository
+
+        rows = PaperTradeRepository().fetch_open()
+
+    except Exception as exc:
+        print(f"[RENDER CONTEXT] open positions unavailable: {exc}")
+
+        return {}
+
+    if rows is None:
+        return {}
+
+    return {
+        row.get("trade_key"): dict(row.get("payload") or {},
+                                   trade_key=row.get("trade_key"))
+        for row in rows
+        if row.get("trade_key")
+    }
 
 
 def telegram_rows(trading_day):
+    """Today's dispatch events, from the local audit file or Postgres.
+
+    The audit file is written by whichever container sent the alert. With
+    alerting on the Render worker it never exists on Streamlit, so this returned
+    nothing and the health cell read `0 sent / 0 failed` while alerts were going
+    out. Worse, the file was tracked in git until 2026-08-01, so what it did show
+    was a developer machine's July history presented as today's delivery health.
+    """
+
     prefix = str(trading_day or "")
-    return [
+    local = [
         row for row in read_jsonl(TELEGRAM_AUDIT_FILE)
         if str(row.get("observed_at_utc") or "").startswith(prefix)
         and not str(row.get("message_type") or "").startswith("TEST_")
+    ]
+
+    if local:
+        return local
+
+    return _remote_telegram_rows(trading_day) or []
+
+
+def _remote_telegram_rows(trading_day):
+
+    try:
+        from app.db.telegram_dispatch_repository import TelegramDispatchRepository
+
+        rows = TelegramDispatchRepository().fetch_for_day(trading_day)
+
+    except Exception as exc:
+        print(f"[RENDER CONTEXT] telegram history unavailable: {exc}")
+
+        return None
+
+    if rows is None:
+        return None
+
+    return [
+        row for row in rows
+        if not str(row.get("message_type") or "").startswith("TEST_")
     ]
 
 
@@ -98,13 +196,36 @@ def entries_used(events, trading_day):
     also keeps a next-day close from counting as a fresh entry.
     """
     if events is None or events.empty or "trade_key" not in events.columns:
-        return 0
+        local = 0
 
-    day = str(trading_day)
-    return len({
-        key for key in events["trade_key"].dropna().astype(str)
-        if key.rsplit("|", 1)[-1].strip().startswith(day)
-    })
+    else:
+        day = str(trading_day)
+        local = len({
+            key for key in events["trade_key"].dropna().astype(str)
+            if key.rsplit("|", 1)[-1].strip().startswith(day)
+        })
+
+    # The CSV lives in whichever container opened the trade, so on the dashboard
+    # it is routinely absent and this read 0 while the worker had used its
+    # allowance. Both sources undercount in different ways -- the file misses
+    # another host, the mirror lags -- so the larger is the safer number to show
+    # against a cap.
+    remote = _remote_entries_used(trading_day)
+
+    return max(local, remote or 0)
+
+
+def _remote_entries_used(trading_day):
+
+    try:
+        from app.db.paper_trade_repository import PaperTradeRepository
+
+        return PaperTradeRepository().count_opened_on(trading_day)
+
+    except Exception as exc:
+        print(f"[RENDER CONTEXT] entry count unavailable: {exc}")
+
+        return None
 
 
 def closed_trades(events):
@@ -117,6 +238,55 @@ def closed_trades(events):
         return []
 
     events = events.copy()
+    return _stitch_closed(events)
+
+
+def closed_trades_for_day(events, trading_day):
+    """Closed trades for the day, from the CSV when present and Postgres when not.
+
+    `data/daily/<day>/paper_trade_events.csv` is written by the process that ran
+    the scan. With scanning on Render the dashboard's container never has it, so
+    Today's Result rendered empty on days that had trades.
+    """
+
+    stitched = closed_trades(events)
+
+    if stitched:
+        return stitched
+
+    return _remote_closed_trades(trading_day)
+
+
+def _remote_closed_trades(trading_day):
+
+    try:
+        from app.db.paper_trade_repository import PaperTradeRepository
+
+        rows = PaperTradeRepository().fetch_closed(trading_day) or []
+
+    except Exception as exc:
+        print(f"[RENDER CONTEXT] closed trades unavailable: {exc}")
+
+        return []
+
+    return [
+        {
+            "trade_key": row.get("trade_key"),
+            "symbol": row.get("symbol"),
+            "direction": row.get("direction"),
+            "entry_price": row.get("entry_price"),
+            "exit_price": row.get("close_price"),
+            "r_multiple": row.get("r_multiple"),
+            "exit_reason": row.get("exit_reason"),
+            "entry_time": row.get("opened_at"),
+            "exit_time": row.get("closed_at"),
+            "closed_how": row.get("trade_status") or row.get("status"),
+        }
+        for row in rows
+    ]
+
+
+def _stitch_closed(events):
     events["event_type"] = events["event_type"].astype(str).str.upper()
     opens = {
         str(row.get("trade_key")): row
@@ -351,7 +521,7 @@ class RenderContext:
 
     @cached_property
     def closed_trades(self):
-        return closed_trades(self.paper_events)
+        return closed_trades_for_day(self.paper_events, self.trading_day)
 
     @cached_property
     def engine(self):
@@ -360,6 +530,18 @@ class RenderContext:
     @cached_property
     def db_writes_active(self):
         return db_writes_active()
+
+    @cached_property
+    def db_state(self):
+        """`ON`, `OFF` or `UNREACHABLE`. Prefer this to `db_writes_active`.
+
+        The sidebar was taught reachability and the Operator Console was not, so
+        the page's most prominent trust signal went on reporting a flag. That is
+        the same split that had the sidebar reporting the Render worker while the
+        console two feet away said ENGINE DOWN.
+        """
+
+        return database_state()
 
     @cached_property
     def max_daily_entries(self):
