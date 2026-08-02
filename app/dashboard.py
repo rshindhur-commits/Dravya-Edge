@@ -173,7 +173,6 @@ PAPER_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "paper_trade_state.json"
 SUGGESTED_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "suggested_trade_state.json"
 AI_SUMMARY_CACHE_FILE = ROOT_DIR / settings.ai_summary_cache_file
 AUTO_PAPER_DECISION_LOG_FILE = ROOT_DIR / "app" / "state" / "auto_paper_decision_log.json"
-AUTO_PAPER_SETTINGS_FILE = ROOT_DIR / "app" / "state" / "auto_paper_settings.json"
 SUGGESTED_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "suggested_trade_state.json"
 TELEGRAM_DISPATCH_AUDIT_FILE = ROOT_DIR / "data" / "live" / "telegram_dispatch_audit.jsonl"
 
@@ -2847,22 +2846,6 @@ def _load_auto_paper_decision_log():
     )
 
 
-def _load_auto_paper_settings():
-
-    return load_json_file(
-        str(AUTO_PAPER_SETTINGS_FILE),
-        {}
-    )
-
-
-def _save_auto_paper_settings(settings_data):
-
-    save_json_file(
-        str(AUTO_PAPER_SETTINGS_FILE),
-        settings_data
-    )
-
-
 def _save_auto_paper_decision_log(entries):
 
     save_json_file(
@@ -3793,8 +3776,6 @@ def _scanner_output_age_minutes():
 
 def _auto_refresh_defaults():
 
-    saved_auto_settings = _load_auto_paper_settings()
-
     if "auto_refresh_enabled" not in st.session_state:
 
         st.session_state["auto_refresh_enabled"] = _is_market_hours()
@@ -3803,165 +3784,27 @@ def _auto_refresh_defaults():
 
         st.session_state["refresh_interval_label"] = "1 min"
 
-    if "auto_paper_enabled" not in st.session_state:
-
-        st.session_state["auto_paper_enabled"] = bool(
-            saved_auto_settings.get(
-                "auto_paper_enabled",
-                _env_bool("AUTO_PAPER_ENABLED", True)
-            )
-        )
-
-    if "auto_paper_max_daily" not in st.session_state:
-
-        # Falls back to MAX_DAILY_ENTRIES, matching load_auto_paper_controls.
-        # A bare 3 here defeated that fallback rather than merely differing from
-        # it: on a fresh container the settings file does not exist, this default
-        # became the widget value, and the widget value is written straight back
-        # to auto_paper_settings.json. The backend then found the key present and
-        # never reached its own `or env_int("MAX_DAILY_ENTRIES", 3)`.
-        #
-        # So MAX_DAILY_ENTRIES=5 in Secrets was silently enforced as 3. On
-        # 2026-07-31 the cap bound the instant the third trade opened at
-        # 12:57:59 and blocked AMZN five times after that, at RR 2.88 -- a better
-        # ratio than any of the three trades actually taken.
-        st.session_state["auto_paper_max_daily"] = int(
-            saved_auto_settings.get(
-                "auto_paper_max_daily",
-                env_int("MAX_DAILY_ENTRIES", 3),
-            )
-        )
-
-    if "auto_paper_min_setup" not in st.session_state:
-
-        st.session_state["auto_paper_min_setup"] = int(
-            saved_auto_settings.get(
-                "auto_paper_min_setup",
-                70
-            )
-        )
-
-    if "auto_paper_min_rr" not in st.session_state:
-
-        st.session_state["auto_paper_min_rr"] = float(
-            saved_auto_settings.get(
-                "auto_paper_min_rr",
-                DEFAULT_AUTO_PAPER_MIN_RR
-            )
-        )
-
-    if "auto_paper_direction" not in st.session_state:
-
-        st.session_state["auto_paper_direction"] = saved_auto_settings.get(
-            "auto_paper_direction",
-            "Both"
-        )
-
-    if "auto_paper_eod_close_enabled" not in st.session_state:
-
-        # Default ON, matching app.runtime.paper_automation_support. The settings
-        # file is gitignored, so a deployed container starts with no saved settings
-        # and this default decides whether intraday positions are flattened at
-        # 15:55 ET.
-        st.session_state["auto_paper_eod_close_enabled"] = _boolish(
-            saved_auto_settings.get(
-                "auto_paper_eod_close_enabled",
-                True
-            )
-        )
-
-    if "restore_multiday_positions" not in st.session_state:
-
-        st.session_state["restore_multiday_positions"] = _boolish(
-            saved_auto_settings.get(
-                "restore_multiday_positions",
-                True
-            )
-        )
 
 
+def _auto_paper_controls():
+    """What the scanner will actually apply. Read-only; there is no widget.
 
-def _render_auto_paper_controls():
+    This used to render seven sidebar controls that wrote
+    `app/state/auto_paper_settings.json`. That only ever worked while one process
+    both rendered the sidebar and ran the scans. With `SCAN_ENGINE_OWNER=worker`
+    the scanner is a Render Background Worker on a different host with its own
+    (empty) disk, so nothing it read could ever be what the sidebar wrote -- the
+    controls moved values the scanner never saw, while continuing to display them
+    as though they were in force.
 
-    st.sidebar.subheader("Paper Automation")
+    Reading the same env-backed function the scanner reads means the dashboard
+    cannot show a limit that is not the one being enforced. Changing any of these
+    is a config change in Render and Streamlit, not a click.
+    """
 
-    auto_paper_enabled = st.sidebar.toggle(
-        "Auto Paper Trading",
-        key="auto_paper_enabled"
-    )
-    max_daily = st.sidebar.number_input(
-        "Max Auto Paper Trades Per Day",
-        min_value=1,
-        max_value=10,
-        step=1,
-        key="auto_paper_max_daily"
-    )
-    min_setup = st.sidebar.number_input(
-        "Minimum Setup %",
-        min_value=0,
-        max_value=100,
-        step=1,
-        key="auto_paper_min_setup"
-    )
-    min_rr = st.sidebar.number_input(
-        "Minimum RR",
-        min_value=0.0,
-        max_value=10.0,
-        step=0.1,
-        key="auto_paper_min_rr"
-    )
-    direction = st.sidebar.selectbox(
-        "Allowed Direction",
-        options=["Both", "Calls", "Puts"],
-        key="auto_paper_direction"
-    )
-    eod_close_enabled = st.sidebar.toggle(
-        "Force Close Intraday at Market Close",
-        key="auto_paper_eod_close_enabled"
-    )
-    restore_multiday_positions = st.sidebar.toggle(
-        "Restore Multi-day Positions Next Session",
-        key="restore_multiday_positions"
-    )
+    from app.runtime.paper_automation_support import load_auto_paper_controls
 
-    st.sidebar.caption(
-        "Paper only. Real orders remain manual. Exits are owned by the scanner's "
-        "exit engine and cannot be disabled here."
-    )
-
-    controls = {
-        "auto_paper_enabled": auto_paper_enabled,
-        "max_daily": int(max_daily),
-        "min_setup": float(min_setup),
-        "min_rr": float(min_rr),
-        "direction": direction,
-        "eod_close_enabled": eod_close_enabled,
-        "restore_multiday_positions": restore_multiday_positions,
-    }
-
-    persisted = {
-        "auto_paper_enabled": controls["auto_paper_enabled"],
-        "auto_paper_max_daily": controls["max_daily"],
-        "auto_paper_min_setup": controls["min_setup"],
-        "auto_paper_min_rr": controls["min_rr"],
-        "auto_paper_direction": controls["direction"],
-        "auto_paper_eod_close_enabled": controls["eod_close_enabled"],
-        "restore_multiday_positions": controls["restore_multiday_positions"],
-    }
-
-    # Only on an actual change. This wrote on every render, so simply loading
-    # the dashboard rewrote the settings file with that browser session's widget
-    # values -- and `session_state` is per session. Two devices stayed in step
-    # only while they agreed: change a control on the phone, let the laptop tab
-    # auto-refresh, and the laptop wrote its stale values back over it.
-    #
-    # Comparing against what is on disk rather than tracking a dirty flag means
-    # a session that never touches a control can never write, however it reruns.
-    if persisted != _load_auto_paper_settings():
-
-        _save_auto_paper_settings(persisted)
-
-    return controls
+    return load_auto_paper_controls()
 
 
 
@@ -7717,7 +7560,7 @@ def main():
     system = st.sidebar.container()
 
     refresh_state = _render_auto_refresh_controls()
-    auto_paper_controls = _render_auto_paper_controls()
+    auto_paper_controls = _auto_paper_controls()
     _render_daily_validation_report_controls()
     _render_download_exports()
 

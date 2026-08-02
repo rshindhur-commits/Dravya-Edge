@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -16,18 +17,26 @@ from app.runtime.paper_automation_support import (
 
 class PaperAutomationRuntimeTests(unittest.TestCase):
 
-    def test_control_loader_uses_persisted_settings(self):
+    def test_control_loader_reads_the_environment(self):
+        """Env is the only source. The settings file used to win over it.
 
-        with patch(
-            "app.runtime.paper_automation_support.load_json_file",
-            return_value={
-                "auto_paper_enabled": True,
-                "auto_paper_max_daily": 2,
-                "auto_paper_min_setup": 81,
-                "auto_paper_min_rr": 2.3,
-                "auto_paper_direction": "Calls",
-                "auto_paper_eod_close_enabled": True,
+        The file was written by the dashboard sidebar and read by the scanner --
+        fine while one process did both, wrong the moment SCAN_ENGINE_OWNER moved
+        scanning to the Render worker, which has its own empty disk. Every
+        control was inert while still displaying its value.
+        """
+
+        with patch.dict(
+            os.environ,
+            {
+                "AUTO_PAPER_ENABLED": "true",
+                "MAX_DAILY_ENTRIES": "2",
+                "AUTO_PAPER_MIN_SETUP": "81",
+                "AUTO_PAPER_MIN_RR": "2.3",
+                "AUTO_PAPER_DIRECTION": "Calls",
+                "AUTO_PAPER_EOD_CLOSE_ENABLED": "true",
             },
+            clear=False,
         ):
             controls = load_auto_paper_controls()
 
@@ -37,6 +46,15 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
         self.assertEqual(controls["min_rr"], 2.3)
         self.assertEqual(controls["direction"], "Calls")
         self.assertTrue(controls["eod_close_enabled"])
+
+    def test_eod_close_defaults_on_when_unset(self):
+        """An unset variable must not carry day trades overnight."""
+
+        with patch.dict(os.environ, {}, clear=True):
+            controls = load_auto_paper_controls()
+
+        self.assertTrue(controls["eod_close_enabled"])
+        self.assertEqual(controls["direction"], "Both")
 
     def test_auto_paper_entries_logs_disabled_candidates(self):
 
@@ -255,8 +273,10 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
         """Market exits belong to the exit engine, not the lifecycle sweep.
 
         The retired `auto_exit_enabled` / `profit_r` controls are passed on
-        purpose: a stale auto_paper_settings.json must not be able to resurrect
-        the second exit rule set. Do not remove them from this call.
+        purpose: an unrecognised control must not be able to resurrect the second
+        exit rule set. Do not remove them from this call. (They used to arrive
+        from a stale auto_paper_settings.json; that file is gone, but controls
+        now come from env vars, which persist across deploys just as stubbornly.)
         """
 
         df = pd.DataFrame([

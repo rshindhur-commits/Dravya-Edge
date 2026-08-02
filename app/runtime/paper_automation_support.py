@@ -30,7 +30,6 @@ from app.utils.json_store import load_json_file
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 AUTO_PAPER_DECISION_LOG_FILE = state_path("auto_paper_decision_log.json")
-AUTO_PAPER_SETTINGS_FILE = state_path("auto_paper_settings.json")
 AUTO_PAPER_TOP_CANDIDATES = [
     "BULLISH_TOP_1",
     "BEARISH_TOP_1",
@@ -89,33 +88,37 @@ def max_active_per_direction():
 
 
 def load_auto_paper_controls():
-    settings = load_json_file(str(AUTO_PAPER_SETTINGS_FILE), {})
+    """Auto-paper settings, read from the environment and nowhere else.
+
+    These used to come from `app/state/auto_paper_settings.json`, written by the
+    dashboard sidebar. That worked only while the same process rendered the
+    sidebar and ran the scans. Once `SCAN_ENGINE_OWNER=worker` moved scanning to
+    Render, the sidebar wrote to one host's disk and the scanner read another's --
+    which on a Background Worker does not exist at all. Every control was
+    therefore inert, while still displaying whatever the operator had last set:
+    a UI that reported a limit the scanner was not applying.
+
+    Env vars are the single source of truth because they are the only thing both
+    hosts actually share. The file is gone rather than synced through Postgres:
+    this codebase has repeatedly been bitten by one limit living in two places
+    that drift (the hardcoded 3 vs MAX_DAILY_ENTRIES, the two copies of
+    REVIEW_VALIDATION_ENTRY_TYPES, the eleven inert Telegram throttles), and a
+    setting that changes trading behaviour is worth a deploy.
+    """
+
     return {
-        "auto_paper_enabled": _boolish(
-            settings.get("auto_paper_enabled", _env_bool("AUTO_PAPER_ENABLED", True))
-        ),
-        # Falls back to MAX_DAILY_ENTRIES rather than a bare 3. The two settings
-        # named the same limit and disagreed: MAX_DAILY_ENTRIES=5 was read by the
-        # affordability config while this path silently enforced 3, so the
-        # configured daily cap was never the one that applied.
-        #
-        # auto_paper_settings.json still wins where present -- it is the sidebar
-        # control -- but it is gitignored and therefore absent on Streamlit Cloud
-        # after every redeploy, which is exactly when the default matters.
-        "max_daily": int(
-            settings.get("auto_paper_max_daily")
-            or env_int("MAX_DAILY_ENTRIES", 3)
-        ),
-        "min_setup": float(settings.get("auto_paper_min_setup", MIN_SETUP_BASE)),
-        "min_rr": float(settings.get("auto_paper_min_rr", DEFAULT_AUTO_PAPER_MIN_RR)),
-        "direction": settings.get("auto_paper_direction", "Both"),
-        # Default ON. `app/state/auto_paper_settings.json` is gitignored, so on
-        # Streamlit Cloud it does not exist after a redeploy and every setting falls
-        # back to its code default. With this defaulted to False, the standing policy
-        # of flattening intraday positions at 15:55 ET silently reverted to OFF on
-        # every deploy, leaving day trades to be carried overnight.
-        "eod_close_enabled": _boolish(settings.get("auto_paper_eod_close_enabled", True)),
-        "restore_multiday_positions": _boolish(settings.get("restore_multiday_positions", True)),
+        "auto_paper_enabled": _env_bool("AUTO_PAPER_ENABLED", True),
+        # Named the same limit as the affordability config and disagreed with it
+        # for as long as both existed; MAX_DAILY_ENTRIES is now the only spelling.
+        "max_daily": env_int("MAX_DAILY_ENTRIES", 3),
+        "min_setup": _env_float("AUTO_PAPER_MIN_SETUP", MIN_SETUP_BASE),
+        "min_rr": _env_float("AUTO_PAPER_MIN_RR", DEFAULT_AUTO_PAPER_MIN_RR),
+        "direction": _env_str("AUTO_PAPER_DIRECTION", "Both"),
+        # Default ON. This is the standing policy of flattening intraday
+        # positions at 15:55 ET; defaulting it off would carry day trades
+        # overnight whenever the variable was simply not set.
+        "eod_close_enabled": _env_bool("AUTO_PAPER_EOD_CLOSE_ENABLED", True),
+        "restore_multiday_positions": _env_bool("RESTORE_MULTIDAY_POSITIONS", True),
     }
 
 
@@ -143,6 +146,15 @@ def _env_float(name, default):
     except Exception:
 
         return default
+
+
+def _env_str(name, default):
+
+    import os
+
+    value = os.getenv(name)
+
+    return str(value).strip() if value is not None and str(value).strip() else default
 
 
 def _safe_float(value, default=0.0):

@@ -112,19 +112,31 @@ def test_a_dead_engine_is_restarted():
     ensure_started.assert_called_once()
 
 
-def test_auto_paper_settings_are_written_only_on_change():
-    """Rendering must not rewrite the settings file with this session's values."""
+def test_the_dashboard_cannot_write_auto_paper_settings():
+    """The sidebar must not own settings the scanner reads from another host.
 
-    import inspect
+    This previously guarded a narrower bug -- one browser session overwriting
+    another's values on every render. The whole file is gone now: with
+    SCAN_ENGINE_OWNER=worker the sidebar wrote to the Streamlit container's disk
+    while the Render worker read its own, which does not exist, so every control
+    was inert and every displayed value a fiction. Env vars are the only thing
+    both hosts share.
+
+    A reintroduced writer would restore a UI that reports limits nothing applies.
+    """
 
     from app import dashboard
 
-    source = inspect.getsource(dashboard._render_auto_paper_controls)
-
-    assert "if persisted != _load_auto_paper_settings():" in source, (
-        "an unconditional save lets the most recently rendered browser session "
-        "overwrite settings another session changed"
-    )
+    for name in (
+        "_load_auto_paper_settings",
+        "_save_auto_paper_settings",
+        "AUTO_PAPER_SETTINGS_FILE",
+        "_render_auto_paper_controls",
+    ):
+        assert not hasattr(dashboard, name), (
+            f"{name} is back; auto-paper settings must come from the environment "
+            "so the dashboard cannot display a limit the scanner is not applying"
+        )
 
 
 def test_engine_is_restarted_even_when_the_cadence_is_unchanged():
@@ -142,28 +154,27 @@ def test_engine_is_restarted_even_when_the_cadence_is_unchanged():
     assert 'not engine.get("thread_alive")' in source
 
 
-def test_daily_cap_default_defers_to_max_daily_entries():
-    """The sidebar default must not defeat the backend's own fallback.
+def test_daily_cap_comes_from_max_daily_entries():
+    """MAX_DAILY_ENTRIES must be the cap that binds.
 
-    A bare 3 here was not merely a different default. On a fresh container the
-    settings file does not exist, so this value became the widget value, and the
-    widget value is written straight back to auto_paper_settings.json. The
-    backend then found the key present and never reached its own
-    `or env_int("MAX_DAILY_ENTRIES", 3)`, so MAX_DAILY_ENTRIES=5 was enforced
-    as 3. On 2026-07-31 that bound the instant the third trade opened and
-    blocked AMZN five times at RR 2.88.
+    A sidebar default of 3 used to defeat this. On a fresh container the settings
+    file did not exist, so the widget default became the widget value and was
+    written straight back to auto_paper_settings.json; the backend then found the
+    key present and never reached its own fallback. MAX_DAILY_ENTRIES=5 was
+    enforced as 3, and on 2026-07-31 that bound the instant the third trade
+    opened and blocked AMZN five times at RR 2.88.
+
+    Asserted against the loader now rather than against sidebar source, because
+    the sidebar no longer has an opinion to defeat it with.
     """
 
-    import inspect
+    import os
+    from unittest.mock import patch
 
-    from app import dashboard
+    from app.runtime.paper_automation_support import load_auto_paper_controls
 
-    source = inspect.getsource(dashboard._auto_refresh_defaults)
-
-    assert 'env_int("MAX_DAILY_ENTRIES", 3)' in source, (
-        "the sidebar default must defer to MAX_DAILY_ENTRIES, as "
-        "load_auto_paper_controls does"
-    )
+    with patch.dict(os.environ, {"MAX_DAILY_ENTRIES": "5"}, clear=False):
+        assert load_auto_paper_controls()["max_daily"] == 5
 
 
 def test_candidate_rank_limit_matches_the_daily_entry_cap():
