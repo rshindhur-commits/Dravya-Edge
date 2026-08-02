@@ -142,3 +142,27 @@ def test_delivered_trade_ids_come_only_from_successful_sends():
     ]
 
     assert context.delivered_trade_ids == {"t1"}
+
+
+def test_engine_label_names_which_engine_is_being_reported():
+    """`Engine SLEEPING_WEEKEND · worker` read as one opaque string, and once
+    scanning moved to Render the owner became the fact that mattered most."""
+
+    assert render_context.engine_label({"owner": "worker"}) == "Worker engine (Render)"
+    assert render_context.engine_label(
+        {"owner": "dashboard"}) == "Dashboard engine (Streamlit)"
+    assert render_context.engine_label({"owner": "worker"}, short=True) == "WORKER ENGINE"
+
+
+def test_engine_label_infers_the_dashboard_only_from_a_local_thread():
+    """A supervisor thread in this process is proof of which engine it is; an
+    empty dict is not, and guessing there would name an engine that never ran."""
+
+    assert render_context.engine_label({"thread_alive": True}) == "Dashboard engine (Streamlit)"
+    assert render_context.engine_label({}) == "Unknown engine"
+    assert render_context.engine_label(None) == "Unknown engine"
+
+
+def test_engine_label_passes_through_an_owner_it_does_not_know():
+
+    assert render_context.engine_label({"owner": "backfill"}) == "Backfill engine"

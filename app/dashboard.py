@@ -3345,41 +3345,19 @@ def _remote_engine_summary():
 
 
 def _engine_from_heartbeat(row):
-    """Heartbeat row shaped like `engine_status()`, with times rendered in ET.
+    """Heartbeat row shaped like `engine_status()`, times already in ET.
 
     Shaping is shared with `render_context.engine_status` so the sidebar and the
-    Operator Console cannot disagree about whether an engine is running. Only the
-    timestamp conversion is local: this panel slices a fixed offset out of the
-    string, and Postgres hands back TIMESTAMPTZ in the session timezone (UTC), so
-    without this a UTC time would be printed under an "ET" label.
+    Operator Console cannot disagree about whether an engine is running. The ET
+    conversion used to live here, which meant it applied to the sidebar and
+    nowhere else -- every other reader of `engine_status()` printed UTC under an
+    "ET" label. It now happens in `heartbeat_to_engine_status`, at the one point
+    where a database row becomes an engine status.
     """
 
     from app.runtime.scan_engine_heartbeat import heartbeat_to_engine_status
 
-    engine = heartbeat_to_engine_status(row)
-    engine["last_completed_at"] = _as_et_isoformat((row or {}).get("last_scan_at"))
-    engine["next_due_at"] = _as_et_isoformat((row or {}).get("next_due_at"))
-
-    return engine
-
-
-def _as_et_isoformat(moment):
-
-    if moment is None:
-
-        return None
-
-    try:
-
-        if getattr(moment, "tzinfo", None) is None:
-
-            moment = moment.replace(tzinfo=timezone.utc)
-
-        return moment.astimezone(ZoneInfo("America/New_York")).isoformat()
-
-    except Exception:
-
-        return str(moment)
+    return heartbeat_to_engine_status(row)
 
 
 def _render_system_status(container):
@@ -3391,7 +3369,7 @@ def _render_system_status(container):
     read the whole sidebar to find out.
     """
 
-    from app.ui.render_context import engine_status
+    from app.ui.render_context import engine_label, engine_status
 
     engine = engine_status()
     alive = bool(engine.get("thread_alive"))
@@ -3428,10 +3406,12 @@ def _render_system_status(container):
     else:
 
         interval = engine.get("interval_seconds")
-        owner = engine.get("owner")
+        # Which engine, then what it is doing. One line each: the previous single
+        # line read as one opaque string, and the owner in the middle of it was
+        # the part an operator most needed and least saw.
+        container.caption(f"**{engine_label(engine)}**")
         container.caption(
-            f"Engine {engine.get('status') or 'IDLE'}"
-            + (f" · {owner}" if owner and not alive else "")
+            f"Status {engine.get('status') or 'IDLE'}"
             + (f" · every {int(interval) // 60} min" if interval else "")
         )
 
@@ -3454,8 +3434,12 @@ def _render_system_status(container):
 
         container.caption(f"Next due {str(next_due)[11:19]} ET")
 
+    # "this run", because the counter lives in the loop's stack frame and resets
+    # whenever the container restarts, while `Last scan` above survives a restart
+    # by design. Unqualified, the two read as a contradiction: a worker showing
+    # `Scans 0` directly beneath `Last scan 12:03:26 ET` looks broken and is not.
     container.caption(
-        f"Scans {int(engine.get('scans') or 0)}"
+        f"Scans {int(engine.get('scans') or 0)} this run"
         + (f" · {failures} failed" if failures else "")
     )
 
