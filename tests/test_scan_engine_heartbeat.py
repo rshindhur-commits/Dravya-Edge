@@ -537,3 +537,42 @@ class DeadStatusTests(unittest.TestCase):
 if __name__ == "__main__":
 
     unittest.main()
+
+
+def test_engine_status_times_are_converted_to_et():
+    """Callers slice these strings and paste " ET" after them, so an unconverted
+    UTC value is not unlabelled -- it is labelled wrongly by four hours. The
+    conversion lived in the sidebar only, and `Next due 01:10:32 ET` reached the
+    dashboard for a beat that was actually due at 21:10."""
+
+    from datetime import datetime, timezone
+
+    engine = heartbeat_to_engine_status({
+        "status": "SLEEPING_WEEKEND",
+        "last_scan_at": datetime(2026, 8, 1, 16, 3, 26, tzinfo=timezone.utc),
+        "next_due_at": datetime(2026, 8, 2, 1, 10, 32, tzinfo=timezone.utc),
+    })
+
+    assert engine["last_completed_at"][11:19] == "12:03:26"
+    assert engine["next_due_at"][11:19] == "21:10:32"
+
+
+def test_naive_timestamps_are_read_as_utc_not_as_local():
+    """Postgres is the only writer here and it stores UTC. Treating a naive value
+    as local time would shift it by the reader's offset, which differs between a
+    developer laptop and the Streamlit container."""
+
+    from datetime import datetime
+
+    engine = heartbeat_to_engine_status(
+        {"status": "IDLE", "last_scan_at": datetime(2026, 8, 1, 16, 3, 26)})
+
+    assert engine["last_completed_at"][11:19] == "12:03:26"
+
+
+def test_missing_timestamps_stay_none():
+
+    engine = heartbeat_to_engine_status({"status": "IDLE"})
+
+    assert engine["last_completed_at"] is None
+    assert engine["next_due_at"] is None
