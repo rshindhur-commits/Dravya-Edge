@@ -89,6 +89,44 @@ def _publish_heartbeat(status, **fields):
         print(f"[SCAN LOOP WARNING] heartbeat failed: {exc}")
 
 
+def _report_database_state():
+    """Say once, at startup, whether this container can reach Postgres.
+
+    Every repository here is best-effort: reads return empty and writes are
+    dropped, both without raising. That is right for keeping a scan alive through
+    a blip and wrong as a permanent condition, because a container that never had
+    a database is indistinguishable from a quiet market -- it reports no open
+    trades, no dedup keys, and no history, all confidently.
+
+    Recorded in the heartbeat as well as the log, so the state is visible from
+    the dashboard rather than only to whoever is watching Render's console at the
+    moment the process starts.
+    """
+
+    try:
+        from app.db.persistence import database_status
+
+        status = database_status()
+
+    except Exception as exc:
+        status = "UNREACHABLE"
+        print(f"[SCAN LOOP] database status check failed: {exc}")
+
+    if status == "ON":
+        print("[SCAN LOOP] database reachable; persistence and dedup are live.")
+        return status
+
+    warning = (
+        "[SCAN LOOP WARNING] database is "
+        + ("switched off (DB_WRITE_ENABLED)" if status == "OFF" else "UNREACHABLE")
+        + ". Alert dedup cannot be verified and trade history will read as empty."
+    )
+    print(warning)
+    _publish_heartbeat("STARTING", last_error=warning)
+
+    return status
+
+
 def _run_one_scan():
     """Run a scan, absorbing any failure so the loop survives a bad cycle."""
 
@@ -126,6 +164,7 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
            else "session-aware cadence " + ", ".join(
                f"{name}={seconds}s" for name, seconds in SESSION_INTERVALS.items()))
     )
+    _report_database_state()
 
     while not _stopping:
 

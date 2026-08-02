@@ -156,7 +156,11 @@ class OwnershipStandbyTests(unittest.TestCase):
         run_scanner, heartbeat = self._run_once({"SCAN_ENGINE_OWNER": "dashboard"})
 
         run_scanner.assert_not_called()
-        self.assertEqual(heartbeat.call_args_list[0].args[0], "STANDBY")
+        # Looks for STANDBY among the statuses rather than pinning it to index 0.
+        # A startup preflight now reports database state before the loop begins,
+        # and this assertion broke on an addition it was never about.
+        statuses = [call.args[0] for call in heartbeat.call_args_list if call.args]
+        self.assertIn("STANDBY", statuses)
 
     def test_the_worker_scans_when_it_owns_scanning(self):
 

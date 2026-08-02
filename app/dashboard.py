@@ -3443,11 +3443,26 @@ def _render_system_status(container):
         + (f" · {failures} failed" if failures else "")
     )
 
-    from app.ui.render_context import db_writes_active
+    from app.ui.render_context import database_state
 
-    database = "DB writes on" if db_writes_active() else "DB writes OFF"
+    # Reachability, not intent. "DB writes on" was true of a container that could
+    # not reach Postgres at all, so the one indicator that should have caught a
+    # blind process instead vouched for it.
+    db_state = database_state()
+    database = {
+        "ON": "DB writes on",
+        "OFF": "DB writes OFF",
+    }.get(db_state, "DB UNREACHABLE")
     polygon = "Polygon key set" if os.getenv("POLYGON_API_KEY", "").strip() else "Polygon key MISSING"
     container.caption(f"{database} · {polygon}")
+
+    if db_state == "UNREACHABLE":
+
+        container.error(
+            "Database unreachable. Trade history, open positions and alert dedup "
+            "all read as empty in this state — treat anything reporting zero as "
+            "unknown, not as nothing."
+        )
 
     if failures and engine.get("last_error"):
 

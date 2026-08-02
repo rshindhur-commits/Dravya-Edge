@@ -54,6 +54,16 @@ def main(argv=None):
     repository = TelegramAlertStateRepository()
     existing = repository.fetch_recent()
 
+    # None means the read failed. Treating it as "nothing stored yet" would
+    # rewrite every key and stamp a fresh `updated_at` across the table, which is
+    # the opposite of what a backfill is for.
+    if existing is None:
+
+        print("[BACKFILL] could not read existing keys; aborting rather than "
+              "assuming the table is empty.")
+
+        return 1
+
     missing = [key for key in sent if key not in existing]
 
     print(f"[BACKFILL] local keys: {len(sent)}")
