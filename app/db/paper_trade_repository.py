@@ -91,21 +91,24 @@ class PaperTradeRepository(BestEffortRepository):
         half-open intervals, and an exclusive bound silently drops Friday.
         """
 
-        return self._flatten_closed(
-            self._fetch(
-                """
-                SELECT symbol, direction, status, entry_price, close_price,
-                       pnl_pct, r_multiple, option_entry_mid, option_close_mid,
-                       holding_profile, opened_at, closed_at, payload
-                FROM paper_trades
-                WHERE closed_at IS NOT NULL
-                  AND closed_at >= CAST(:start_day AS date)
-                  AND closed_at < CAST(:end_day AS date) + INTERVAL '1 day'
-                ORDER BY closed_at
-                """,
-                {"start_day": str(start_day), "end_day": str(end_day)},
-            )
+        rows = self._fetch_optional(
+            """
+            SELECT symbol, direction, status, entry_price, close_price,
+                   pnl_pct, r_multiple, option_entry_mid, option_close_mid,
+                   holding_profile, opened_at, closed_at, payload
+            FROM paper_trades
+            WHERE closed_at IS NOT NULL
+              AND closed_at >= CAST(:start_day AS date)
+              AND closed_at < CAST(:end_day AS date) + INTERVAL '1 day'
+            ORDER BY closed_at
+            """,
+            {"start_day": str(start_day), "end_day": str(end_day)},
         )
+
+        # None survives to the caller. This feeds the subscriber summary, which
+        # states a result rather than rendering a table, so "the query failed"
+        # must not arrive there as "nothing happened".
+        return None if rows is None else self._flatten_closed(rows)
 
     def _flatten_closed(self, rows):
         """Lift the fields analytics needs out of the JSONB payload."""

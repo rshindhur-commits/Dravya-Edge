@@ -204,3 +204,48 @@ class MirrorTests(unittest.TestCase):
 if __name__ == "__main__":
 
     unittest.main()
+
+
+class HydrationRetriesAfterAFailedReadTests(unittest.TestCase):
+    """Giving up permanently on one bad read is how a container spends its whole
+    life with an empty dedup set, re-sending everything it is asked to send."""
+
+    def setUp(self):
+        alerts._alert_state_hydrated = False
+        self.addCleanup(
+            setattr, alerts, "_alert_state_hydrated", False)
+
+    def test_a_failed_read_does_not_mark_hydration_done(self):
+
+        with patch("app.db.telegram_alert_state_repository."
+                   "TelegramAlertStateRepository.fetch_recent", return_value=None):
+
+            alerts._hydrate_alert_state_from_db({"sent": {}})
+
+        self.assertFalse(alerts._alert_state_hydrated)
+
+    def test_a_successful_read_marks_hydration_done_once(self):
+
+        with patch("app.db.telegram_alert_state_repository."
+                   "TelegramAlertStateRepository.fetch_recent",
+                   return_value={"K": {"sent_at": "2026-08-01T00:00:00+00:00"}}), \
+             patch("app.db.telegram_alert_state_repository."
+                   "TelegramAlertStateRepository.prune"), \
+             patch.object(alerts, "_save_alert_state"):
+
+            state = alerts._hydrate_alert_state_from_db({"sent": {}})
+
+        self.assertTrue(alerts._alert_state_hydrated)
+        self.assertIn("K", state["sent"])
+
+    def test_an_empty_result_is_not_a_failure(self):
+        """No keys stored yet is a real state, and must not retry forever."""
+
+        with patch("app.db.telegram_alert_state_repository."
+                   "TelegramAlertStateRepository.fetch_recent", return_value={}), \
+             patch("app.db.telegram_alert_state_repository."
+                   "TelegramAlertStateRepository.prune"):
+
+            alerts._hydrate_alert_state_from_db({"sent": {}})
+
+        self.assertTrue(alerts._alert_state_hydrated)

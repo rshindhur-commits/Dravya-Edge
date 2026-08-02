@@ -244,3 +244,95 @@ class WeeklyDispatchTests(unittest.TestCase):
 if __name__ == "__main__":
 
     unittest.main()
+
+
+class WeeklySummaryFailsClosedTests(unittest.TestCase):
+    """A summary that cannot be verified must not be published.
+
+    On 2026-08-01 subscribers received the same weekly summary more than ten
+    times, each copy claiming "No positions were closed this week" over a week
+    with seven closed trades. One outage caused both halves: the dedup read came
+    back empty so nothing looked sent, and the trade read came back empty so the
+    week looked quiet.
+    """
+
+    def test_a_failed_trade_read_is_not_reported_as_a_quiet_week(self):
+        from app.analytics import weekly_summary as module
+
+        with patch.object(module, "load_weekly_trades", return_value=None), \
+             patch("app.alerts.telegram_alerts.maybe_send_weekly_outcome_summary") as send:
+
+            result = module.dispatch_weekly_summary_if_due(
+                window=(date(2026, 7, 27), date(2026, 7, 31)))
+
+        self.assertEqual(result["reason"], "TRADES_UNAVAILABLE")
+        send.assert_not_called()
+
+    def test_a_genuinely_empty_week_still_sends(self):
+        """The guard must not swallow the real "no trades" case, which is a
+        legitimate and informative thing to publish."""
+
+        from app.analytics import weekly_summary as module
+
+        with patch.object(module, "load_weekly_trades", return_value=[]), \
+             patch("app.alerts.telegram_alerts.maybe_send_weekly_outcome_summary",
+                   return_value={"sent": True}) as send:
+
+            result = module.dispatch_weekly_summary_if_due(
+                window=(date(2026, 7, 27), date(2026, 7, 31)))
+
+        self.assertTrue(result["sent"])
+        send.assert_called_once()
+
+    def test_an_unverifiable_dedup_blocks_the_send(self):
+        from app.alerts import telegram_alerts
+
+        with patch.dict("os.environ",
+                        {"TELEGRAM_ALERTS_ENABLED": "1",
+                         "TELEGRAM_WEEKLY_SUMMARY_ENABLED": "1"}, clear=False), \
+             patch.object(telegram_alerts, "alert_was_sent", return_value=False), \
+             patch.object(telegram_alerts, "_weekly_summary_sent_in_db",
+                          return_value=None), \
+             patch.object(telegram_alerts, "send_telegram_alert") as send:
+
+            result = telegram_alerts.maybe_send_weekly_outcome_summary(
+                {"completed_trades": 0}, date(2026, 7, 27), date(2026, 7, 31))
+
+        self.assertEqual(result["reason"], "DEDUP_UNVERIFIABLE")
+        send.assert_not_called()
+
+    def test_the_database_catches_what_an_empty_local_file_misses(self):
+        """The restart case: the file is gone, so `alert_was_sent` says no."""
+
+        from app.alerts import telegram_alerts
+
+        with patch.dict("os.environ",
+                        {"TELEGRAM_ALERTS_ENABLED": "1",
+                         "TELEGRAM_WEEKLY_SUMMARY_ENABLED": "1"}, clear=False), \
+             patch.object(telegram_alerts, "alert_was_sent", return_value=False), \
+             patch.object(telegram_alerts, "_weekly_summary_sent_in_db",
+                          return_value=True), \
+             patch.object(telegram_alerts, "send_telegram_alert") as send:
+
+            result = telegram_alerts.maybe_send_weekly_outcome_summary(
+                {"completed_trades": 0}, date(2026, 7, 27), date(2026, 7, 31))
+
+        self.assertEqual(result["reason"], "DUPLICATE_ALERT")
+        send.assert_not_called()
+
+    def test_a_confirmed_unsent_week_goes_out(self):
+        from app.alerts import telegram_alerts
+
+        with patch.dict("os.environ",
+                        {"TELEGRAM_ALERTS_ENABLED": "1",
+                         "TELEGRAM_WEEKLY_SUMMARY_ENABLED": "1"}, clear=False), \
+             patch.object(telegram_alerts, "alert_was_sent", return_value=False), \
+             patch.object(telegram_alerts, "_weekly_summary_sent_in_db",
+                          return_value=False), \
+             patch.object(telegram_alerts, "send_telegram_alert",
+                          return_value={"ok": True}) as send:
+
+            telegram_alerts.maybe_send_weekly_outcome_summary(
+                {"completed_trades": 0}, date(2026, 7, 27), date(2026, 7, 31))
+
+        send.assert_called_once()

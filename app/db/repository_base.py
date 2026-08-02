@@ -40,10 +40,25 @@ class BestEffortRepository:
         disguises itself as a quiet day.
         """
 
+        rows = self._fetch_optional(statement, params)
+
+        return [] if rows is None else rows
+
+    def _fetch_optional(self, statement, params=None):
+        """Same read, but `None` for failure and `[]` for genuinely empty.
+
+        `_fetch` collapses the two, which is safe for a caller that falls back to
+        files and unsafe for one that acts on the absence of rows. The dedup
+        check is the second kind: "no record of sending this" and "could not ask"
+        must not both mean send. On 2026-08-01 they did, and a weekly summary
+        went to subscribers repeatedly, each copy also reporting zero trades
+        because the same outage emptied the trade query.
+        """
+
         try:
             with get_engine().connect() as connection:
                 rows = connection.execute(text(statement), params or {}).mappings().all()
             return [dict(row) for row in rows]
         except Exception:
             logger.warning("Artifact DB read failed; caller falls back to files", exc_info=True)
-            return []
+            return None

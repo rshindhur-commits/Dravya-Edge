@@ -663,14 +663,24 @@ def _hydrate_alert_state_from_db(state):
 
             return state
 
-        _alert_state_hydrated = True
-
         try:
 
             from app.db.telegram_alert_state_repository import TelegramAlertStateRepository
 
             repository = TelegramAlertStateRepository()
             stored = repository.fetch_recent()
+
+            # Marked done only once a read has actually succeeded. Setting it
+            # before the attempt meant a container that came up during a database
+            # blip hydrated nothing, gave up permanently, and spent its whole life
+            # with an empty dedup set -- re-sending anything it was asked to send.
+            if stored is None:
+
+                print("[ALERT STATE HYDRATE WARNING] read failed; will retry")
+
+                return state
+
+            _alert_state_hydrated = True
 
             # Once per process, on the one code path guaranteed to run before any
             # alert is considered. Keys this old cannot dedup anything -- the
@@ -2966,6 +2976,22 @@ def build_weekly_outcome_summary_message(stats, start_day, end_day):
     return "\n".join(lines)
 
 
+def _weekly_summary_sent_in_db(alert_key):
+    """True / False / None, where None means the question could not be asked."""
+
+    try:
+
+        from app.db.telegram_alert_state_repository import TelegramAlertStateRepository
+
+        return TelegramAlertStateRepository().was_sent(alert_key)
+
+    except Exception as exc:
+
+        print(f"[WEEKLY SUMMARY WARNING] dedup check failed: {exc}")
+
+        return None
+
+
 def maybe_send_weekly_outcome_summary(
     stats,
     start_day,
@@ -2981,9 +3007,31 @@ def maybe_send_weekly_outcome_summary(
 
     alert_key = _weekly_summary_alert_key(start_day)
 
-    if not force and alert_was_sent(alert_key):
+    if not force:
 
-        return {"sent": False, "reason": "DUPLICATE_ALERT", "alert_key": alert_key}
+        if alert_was_sent(alert_key):
+
+            return {"sent": False, "reason": "DUPLICATE_ALERT", "alert_key": alert_key}
+
+        # Confirmed against Postgres, not just the local file. This message goes
+        # to every subscriber once a week, so the cost of one query is nothing
+        # against the cost of a duplicate -- and the file lives on an ephemeral
+        # disk, so a fresh container's copy is empty by construction.
+        #
+        # Fails closed. `None` means the database could not be asked, and a
+        # missing record is then no evidence at all. On 2026-08-01 this path
+        # failed open and subscribers got the same weekly summary more than ten
+        # times, once per container restart.
+        confirmed = _weekly_summary_sent_in_db(alert_key)
+
+        if confirmed is not False:
+
+            return {
+                "sent": False,
+                "alert_key": alert_key,
+                "reason": ("DUPLICATE_ALERT" if confirmed
+                           else "DEDUP_UNVERIFIABLE"),
+            }
 
     metadata = {
         "event_type": WEEKLY_SUMMARY_EVENT_TYPE,
