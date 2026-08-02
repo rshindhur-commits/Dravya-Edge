@@ -55,10 +55,16 @@ FAILURES_BEFORE_ALERT = 3
 
 _stopping = False
 
+# Which signal ended the loop, so the shutdown heartbeat can say why. A STOPPED
+# row on its own records that the process died and nothing about what killed it,
+# which is the first question asked every time it happens.
+_stop_signal = None
+
 
 def _request_stop(signum, _frame):
-    global _stopping
+    global _stopping, _stop_signal
     _stopping = True
+    _stop_signal = signum
     print(f"\n[SCAN LOOP] signal {signum} received; finishing the current scan then exiting.")
 
 
@@ -318,10 +324,42 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
     # A clean shutdown is worth recording. Without it the last heartbeat says
     # IDLE and the dashboard has to infer death from staleness, which takes 15
     # minutes to conclude something the process knew at the time.
-    _publish_heartbeat("STOPPED", scans=scans, failures=failures)
+    reason = (f"terminated by signal {_stop_signal}" if _stop_signal
+              else f"reached --max-scans={max_scans}" if max_scans
+              else "loop ended")
+    _publish_heartbeat(
+        "STOPPED", scans=scans, failures=failures, last_error=f"stopped: {reason}")
 
-    print(f"[SCAN LOOP] stopped after {scans} scan(s), {failures} failure(s).")
+    _announce_shutdown(reason, scans)
+
+    print(f"[SCAN LOOP] stopped after {scans} scan(s), {failures} failure(s) ({reason}).")
     return {"scans": scans, "failures": failures}
+
+
+def _announce_shutdown(reason, scans):
+    """Tell the operator only when the worker dies at a time it should be working.
+
+    A deploy sends SIGTERM every time, so alerting on every shutdown would make
+    this channel noise -- and the redeploys are mostly evenings and weekends,
+    when nothing is missed. During a live session the same event means scanning
+    has stopped and no one would otherwise know until they looked.
+    """
+
+    try:
+        session = current_session()
+        idle = idle_reason(session, datetime.now(ET))
+
+    except Exception:
+        return
+
+    if idle:
+        return
+
+    _notify_operator(
+        "worker_stopped",
+        f"The scan worker exited during {session} ({reason}) after {scans} scan(s). "
+        "Nothing is scanning until it comes back.",
+    )
 
 
 def _sleep(seconds):
