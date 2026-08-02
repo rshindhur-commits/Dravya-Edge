@@ -70,17 +70,51 @@ class PaperTradeRepository(BestEffortRepository):
         drop it.
         """
 
+        rows = self._fetch_optional(
+            """
+            SELECT trade_key, payload
+            FROM paper_trades
+            WHERE UPPER(status) IN ('OPEN', 'PAUSED')
+            ORDER BY opened_at
+            """
+        )
+
+        # None on failure, so the caller can tell "the database says no open
+        # positions" from "the database did not answer". Restoring acts on that
+        # answer, and acting on a failed read means opening a position the book
+        # already holds.
+        if rows is None:
+
+            return None
+
         return [
             {"trade_key": row.get("trade_key"), "payload": row.get("payload") or {}}
-            for row in self._fetch(
-                """
-                SELECT trade_key, payload
-                FROM paper_trades
-                WHERE UPPER(status) IN ('OPEN', 'PAUSED')
-                ORDER BY opened_at
-                """
-            )
+            for row in rows
         ]
+
+    def count_opened_on(self, trading_day):
+        """Positions opened on a trading day, or None when unreadable.
+
+        Backs the daily entry cap on a host that did not open the trades. The
+        file-based count is per-container, so the dashboard reported `0/5` while
+        the worker had used its allowance.
+        """
+
+        rows = self._fetch_optional(
+            """
+            SELECT COUNT(DISTINCT trade_key) AS opened
+            FROM paper_trades
+            WHERE opened_at >= CAST(:day AS date)
+              AND opened_at <  CAST(:day AS date) + INTERVAL '1 day'
+            """,
+            {"day": str(trading_day)},
+        )
+
+        if rows is None:
+
+            return None
+
+        return int((rows[0] or {}).get("opened") or 0)
 
     def fetch_closed_between(self, start_day, end_day):
         """Closed trades over an inclusive date range, flattened like `fetch_closed`.

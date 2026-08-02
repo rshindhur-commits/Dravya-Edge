@@ -101,6 +101,11 @@ def restore_open_trades_from_db():
     best-effort mirror written through a background queue and can lag. Only keys
     absent locally are re-adopted, so a restore can never overwrite fresher state
     or resurrect a position that was closed while the mirror was behind.
+
+    Returns `None` when the database could not be read, distinct from `[]` for
+    "nothing to restore". The caller latches on success only; treating a failed
+    read as "no open positions" is precisely the state the two failures above
+    describe.
     """
 
     try:
@@ -109,7 +114,11 @@ def restore_open_trades_from_db():
         open_rows = PaperTradeRepository().fetch_open()
     except Exception as exc:
         print(f"[PAPER STATE RESTORE WARNING] {exc}")
-        return []
+        return None
+
+    if open_rows is None:
+        print("[PAPER STATE RESTORE WARNING] could not read open positions")
+        return None
 
     if not open_rows:
         return []

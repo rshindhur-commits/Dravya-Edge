@@ -112,16 +112,29 @@ def _restore_lost_positions_once():
     if _positions_restored:
         return []
 
-    _positions_restored = True
-
     try:
         from app.state.paper_trade_manager import restore_open_trades_from_db
 
-        return restore_open_trades_from_db()
+        restored = restore_open_trades_from_db()
 
     except Exception as exc:
         print(f"[PAPER STATE RESTORE WARNING] {exc}")
         return []
+
+    # Latched only once a read has actually succeeded. Setting it beforehand
+    # meant a worker that started during a database blip gave up permanently and
+    # traded the whole session believing the book was empty -- which is the exact
+    # state the docstring above describes: a second NVDA position opened against
+    # an invisible first, and a daily cap of 3 that produced 6 trades.
+    if restored is None:
+
+        print("[PAPER STATE RESTORE] read failed; will retry on the next scan")
+
+        return []
+
+    _positions_restored = True
+
+    return restored
 
 
 def initialize_paper_session(controls=None, trading_day=None):
