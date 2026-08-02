@@ -14,7 +14,7 @@ the Regression tab does not pay to read `scanner_output.xlsx`.
 
 from __future__ import annotations
 
-TABS = ("Replay", "Regression", "Reports", "Learning")
+TABS = ("Postmortem", "Replay", "Regression", "Reports", "Learning")
 
 
 def _cached(name, profile):
@@ -69,7 +69,22 @@ def _render_learning(_refresh_state, _load_frame):
     render()
 
 
+def _render_postmortem(_refresh_state, _load_frame):
+    """First tab, and the only one reading nothing but Postgres.
+
+    Every other tab here renders from a state file written by whichever process
+    ran the scan, which is now the Render worker -- so on the dashboard they show
+    whatever the deploy shipped. This one has no such dependency and is therefore
+    the tab to open when something has gone wrong.
+    """
+
+    from app.ui.pages.postmortem import render
+
+    render()
+
+
 RENDERERS = {
+    "Postmortem": _render_postmortem,
     "Replay": _render_replay,
     "Regression": _render_regression,
     "Reports": _render_reports,
