@@ -100,6 +100,24 @@ def _publish_heartbeat(status, **fields):
         print(f"[SCAN LOOP WARNING] heartbeat failed: {exc}")
 
 
+def _maybe_prune():
+    """Daily retention pass. Never allowed to break the loop."""
+
+    try:
+        from app.runtime.retention_scheduler import maybe_run_retention
+
+        report = maybe_run_retention(datetime.now(ET), idle_reason_value="IDLE")
+
+        if report and report.get("total_deleted"):
+            print(
+                f"[SCAN LOOP] retention removed {report['total_deleted']:,} "
+                "expired diagnostic rows."
+            )
+
+    except Exception as exc:
+        print(f"[SCAN LOOP WARNING] retention failed: {exc}")
+
+
 def _report_database_state():
     """Say once, at startup, whether this container can reach Postgres.
 
@@ -253,6 +271,10 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
                 interval_seconds=wait,
                 next_due_at=(datetime.now(ET) + timedelta(seconds=wait)).isoformat(),
             )
+            # Idle is the only safe window for a batched DELETE: it competes with
+            # the scans writing to the same tables. Self-gated to once per ET
+            # date, so this branch looping all weekend runs it once a day.
+            _maybe_prune()
             print(f"[SCAN LOOP] {idle}; sleeping {wait}s without scanning.")
             _sleep(wait)
             continue
