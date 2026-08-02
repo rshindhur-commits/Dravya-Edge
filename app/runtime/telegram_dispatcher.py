@@ -301,9 +301,19 @@ def dispatch_telegram_message(
     after_success=None,
     on_error=None,
     dispatch_metadata=None,
+    job_id=None,
 ):
+    """`job_id` re-sends an existing queue row under its own identity.
 
-    job_id_holder = {"job_id": None}
+    Recovery replays a queued row by calling back into here, and without this it
+    arrived as a brand new job: a second queue row was written, and success was
+    audited against the *new* id. The original never appeared in the audit as
+    SENT, so it stayed pending and replayed on every startup, adding another row
+    each time. Passing the original id makes the send settle the row it came
+    from, so recovery converges instead of accumulating.
+    """
+
+    job_id_holder = {"job_id": job_id}
     dispatch_metadata = dict(dispatch_metadata or {})
     metadata = dict(dispatch_metadata.get("metadata") or {})
     metadata.setdefault("message_length", len(str(message or "")))
@@ -419,16 +429,22 @@ def dispatch_telegram_message(
 
     if telegram_dispatch_mode() == "QUEUED":
 
-        job_id = str(uuid4())
+        replaying = job_id is not None
+        job_id = job_id or str(uuid4())
         job_id_holder["job_id"] = job_id
 
         # The durable queue row is written before the send is handed off, so a
         # crash between here and delivery is recoverable by
-        # `recover_pending_telegram_dispatches`.
-        _append_jsonl(
-            TELEGRAM_QUEUE_FILE,
-            _queue_record(job_id, name, scan_id, message, dispatch_metadata)
-        )
+        # `recover_pending_telegram_dispatches`. A replay skips the write: the
+        # row it is replaying is already in the file, and appending a copy is
+        # what made the queue grow by one on every restart.
+        if not replaying:
+
+            _append_jsonl(
+                TELEGRAM_QUEUE_FILE,
+                _queue_record(job_id, name, scan_id, message, dispatch_metadata)
+            )
+
         get_telegram_sender().submit(job_id, execute_send)
 
         return {
@@ -469,7 +485,10 @@ def recover_pending_telegram_dispatches(send_func, limit=None):
             row.get("message"),
             name=row.get("name") or "recovered_telegram_send",
             scan_id=row.get("scan_id"),
-            dispatch_metadata=row.get("dispatch_metadata") or {}
+            dispatch_metadata=row.get("dispatch_metadata") or {},
+            # Under its own id, so a successful send audits SENT against this row
+            # and the next startup skips it.
+            job_id=row.get("job_id"),
         )
         recovered.append({
             "original_job_id": row.get("job_id"),

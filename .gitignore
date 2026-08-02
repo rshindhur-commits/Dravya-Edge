@@ -147,6 +147,11 @@ app/state/entry_exit_v2_shadow_state.json
 data/live/scanner_run.lock
 data/live/scanner_run_status.json
 data/live/scanner_output_latest.csv
+# Telegram dispatch queue and audit are per-container runtime state.
+# Tracked until 2026-08-01, so every deploy shipped 42 undelivered rows
+# from July and overwrote whatever the running container had written.
+data/live/telegram_dispatch_queue.jsonl
+data/live/telegram_dispatch_audit.jsonl
 
 # Spyder project settings
 .spyderproject
