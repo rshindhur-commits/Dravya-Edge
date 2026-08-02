@@ -20,6 +20,9 @@ class FakeContext:
         self.entries_used = 0
         self.max_daily_entries = 3
         self.db_writes_active = True
+        # Reachability, not intent. The cell reports UNREACHABLE for a
+        # container holding a database URL it cannot actually reach.
+        self.db_state = "ON"
         self.scan_age_minutes = 3.0
         self.post_market = False
         self.archived_scans = 12
@@ -42,7 +45,7 @@ def test_health_cells_are_all_green_on_a_healthy_live_session():
 def test_a_dead_engine_and_dead_db_writer_both_read_as_faults():
     tones = _tones(trading._health_cells(FakeContext(
         engine={"thread_alive": False, "status": "RUNNING"},
-        db_writes_active=False,
+        db_state="OFF",
     )))
 
     assert tones["Engine"] == "bad"
@@ -237,3 +240,24 @@ def test_an_unreadable_archive_is_reported_as_unknown_not_as_healthy():
              in trading._health_cells(FakeContext(archived_scans=None))}
 
     assert cells["Archive"] == ("unavailable", "neutral")
+
+
+def test_an_unreachable_database_is_a_fault_not_an_active_writer():
+    """"ACTIVE" was true of a container that could not reach Postgres at all, so
+    the cell that exists to catch a blind process vouched for one instead. That
+    container published "No positions were closed this week" over a week with
+    seven, and re-sent it on every restart."""
+
+    cells = {label: (value, tone)
+             for label, value, tone in trading._health_cells(
+                 FakeContext(db_state="UNREACHABLE"))}
+
+    assert cells["DB writes"] == ("UNREACHABLE", "bad")
+
+
+def test_a_deliberately_disabled_writer_reads_as_off():
+    cells = {label: (value, tone)
+             for label, value, tone in trading._health_cells(
+                 FakeContext(db_state="OFF"))}
+
+    assert cells["DB writes"] == ("OFF", "bad")

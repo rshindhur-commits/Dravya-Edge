@@ -240,3 +240,85 @@ class SidebarSurvivesAStaleRenderContextTests(unittest.TestCase):
             dashboard._fallback_engine_label({"owner": "worker"}, short=True),
             "WORKER ENGINE")
         self.assertEqual(dashboard._fallback_engine_label({}), "Engine")
+
+
+class CrossHostReadsTests(unittest.TestCase):
+    """With scanning on Render, the dashboard's container never writes the files
+    this page used to read. Every panel below rendered a confident empty state
+    while the worker held a book and sent alerts."""
+
+    def test_open_positions_come_from_postgres_when_the_local_file_is_empty(self):
+        with patch.object(render_context, "_local_open_positions", return_value={}),              patch.object(render_context, "_remote_open_positions",
+                          return_value={"NVDA|X|2026-08-03 10:00:00":
+                                        {"symbol": "NVDA", "status": "OPEN"}}):
+
+            positions = render_context.active_positions()
+
+        self.assertEqual([p["symbol"] for p in positions], ["NVDA"])
+
+    def test_local_state_wins_so_a_lagging_mirror_cannot_resurrect_a_close(self):
+        """The mirror is written through a background queue and can lag. A
+        position closed locally must not reappear because it has not caught up."""
+
+        key = "NVDA|X|2026-08-03 10:00:00"
+
+        with patch.object(render_context, "_local_open_positions",
+                          return_value={key: {"symbol": "NVDA", "status": "PAUSED"}}),              patch.object(render_context, "_remote_open_positions",
+                          return_value={key: {"symbol": "NVDA", "status": "OPEN"}}):
+
+            positions = render_context.active_positions()
+
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0]["status"], "PAUSED")
+
+    def test_an_unreadable_database_leaves_local_positions_alone(self):
+        with patch.object(render_context, "_local_open_positions",
+                          return_value={"K": {"symbol": "AMD", "status": "OPEN"}}),              patch("app.db.paper_trade_repository.PaperTradeRepository.fetch_open",
+                   return_value=None):
+
+            positions = render_context.active_positions()
+
+        self.assertEqual([p["symbol"] for p in positions], ["AMD"])
+
+    def test_the_entry_cap_takes_the_larger_of_file_and_database(self):
+        """Both undercount in different ways -- the file misses another host, the
+        mirror lags -- and under-reporting against a cap is the harmful direction."""
+
+        with patch.object(render_context, "_remote_entries_used", return_value=3):
+
+            self.assertEqual(render_context.entries_used(None, "2026-08-03"), 3)
+
+        with patch.object(render_context, "_remote_entries_used", return_value=None):
+
+            self.assertEqual(render_context.entries_used(None, "2026-08-03"), 0)
+
+    def test_telegram_counts_fall_back_to_the_dispatch_table(self):
+        with patch.object(render_context, "read_jsonl", return_value=[]),              patch.object(render_context, "_remote_telegram_rows",
+                          return_value=[{"event": "SENT", "trade_id": "t1"},
+                                        {"event": "FAILED", "trade_id": "t2"}]):
+
+            rows = render_context.telegram_rows("2026-08-03")
+
+        self.assertEqual([r["event"] for r in rows], ["SENT", "FAILED"])
+
+    def test_a_queued_but_undelivered_send_is_not_counted_as_sent(self):
+        """ATTEMPTED means handed off, not delivered. Counting it as a success is
+        how a stuck queue would read as a healthy one."""
+
+        from app.db.telegram_dispatch_repository import TelegramDispatchRepository
+
+        with patch.object(TelegramDispatchRepository, "_fetch_optional",
+                          return_value=[{"status": "ATTEMPTED", "trade_id": "t1"}]):
+
+            rows = TelegramDispatchRepository().fetch_for_day("2026-08-03")
+
+        self.assertEqual(rows[0]["event"], "ATTEMPT")
+
+    def test_closed_trades_come_from_postgres_when_the_csv_is_missing(self):
+        with patch.object(render_context, "_remote_closed_trades",
+                          return_value=[{"symbol": "SPY"}]) as remote:
+
+            trades = render_context.closed_trades_for_day(None, "2026-08-03")
+
+        remote.assert_called_once()
+        self.assertEqual(trades[0]["symbol"], "SPY")

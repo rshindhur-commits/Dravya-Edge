@@ -77,9 +77,12 @@ def _health_cells(context):
          f"{scans} / {failures}",
          "warn" if failures else "ok"),
         ("Archive", archive_text, archive_tone),
+        # Reachability, not intent. "ACTIVE" was true of a container that could
+        # not reach Postgres at all, so on 2026-08-01 the cell that exists to
+        # catch a blind process vouched for one instead.
         ("DB writes",
-         "ACTIVE" if context.db_writes_active else "OFF",
-         "ok" if context.db_writes_active else "bad"),
+         {"ON": "ACTIVE", "OFF": "OFF"}.get(context.db_state, "UNREACHABLE"),
+         "ok" if context.db_state == "ON" else "bad"),
         ("Telegram",
          f"{sent} sent / {failed} failed",
          "bad" if failed else "ok"),
