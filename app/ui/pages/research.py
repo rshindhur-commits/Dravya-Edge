@@ -28,20 +28,13 @@ def _cached(name, profile):
     return _load_cached_state(name, profile=profile)
 
 
-def _render_replay(refresh_state, load_frame):
-    import streamlit as st
+def _render_replay(refresh_state, _load_frame):
+    """Reads the archive from Postgres, so it no longer needs the scanner frame
+    or `replay_state.json` -- neither of which this container writes."""
 
     from app.ui.pages.replay import render
 
-    if _cached("replay_state.json", profile="replay"):
-        render(df=None, refresh_state=refresh_state)
-        st.caption("Rendered from replay_state.json.")
-        return
-
-    frame = load_frame()
-    if frame is None:
-        return
-    render(df=frame, refresh_state=refresh_state)
+    render(refresh_state=refresh_state)
 
 
 def _render_regression(_refresh_state, _load_frame):

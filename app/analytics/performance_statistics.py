@@ -54,6 +54,69 @@ def _premium_measurable(trades):
     return trades[pd.to_numeric(trades["option_entry_ask"], errors="coerce").notna()]
 
 
+def closed_trades_from_db(days=30, reference=None, repository=None):
+    """Closed trades over a trailing window, or None when unreadable.
+
+    The shared read behind every Postgres-backed Validation panel. They were each
+    reading their own CSV under `data/daily/`, written by the process that ran the
+    scan -- so on a dashboard that never ran one, the whole page reported an empty
+    record as a quiet week.
+    """
+
+    from datetime import timedelta
+
+    if repository is None:
+        from app.db.paper_trade_repository import PaperTradeRepository
+
+        repository = PaperTradeRepository()
+
+    end_day = reference or _today_et()
+    start_day = end_day - timedelta(days=int(days))
+
+    try:
+        trades = repository.fetch_closed_between(start_day, end_day)
+
+    except Exception as exc:
+        print(f"[VALIDATION] closed trade read failed: {exc}")
+
+        return None
+
+    return None if trades is None else pd.DataFrame(trades)
+
+
+def trade_efficiency_summary(trades):
+    """How much of the available move the exits actually kept.
+
+    Computed from the columns `_flatten_closed` already lifts, rather than from
+    `trend_capture_analysis.csv`. The CSV is written per trading day by the
+    scanning process, so the dashboard's copy was routinely absent and the panel
+    reported nothing on days that had trades.
+    """
+
+    if trades is None:
+        return None
+
+    frame = strategy_trades_only(trades if trades is not None else pd.DataFrame())
+
+    if frame is None or not len(frame):
+        return {"trades": 0}
+
+    def _mean(column):
+        if column not in frame.columns:
+            return None
+
+        values = pd.to_numeric(frame[column], errors="coerce").dropna()
+
+        return round(float(values.mean()), 3) if len(values) else None
+
+    return {
+        "trades": int(len(frame)),
+        "trend_capture": _mean("trend_capture"),
+        "left_on_table": _mean("left_on_table"),
+        "mfe_r": _mean("mfe_r"),
+    }
+
+
 def spread_calibration_from_db(days=30, reference=None, repository=None):
     """Calibration over a trailing window, straight from Postgres.
 
@@ -72,28 +135,9 @@ def spread_calibration_from_db(days=30, reference=None, repository=None):
     summary on 2026-08-01.
     """
 
-    from datetime import timedelta
+    trades = closed_trades_from_db(days, reference, repository)
 
-    if repository is None:
-        from app.db.paper_trade_repository import PaperTradeRepository
-
-        repository = PaperTradeRepository()
-
-    end_day = reference or _today_et()
-    start_day = end_day - timedelta(days=int(days))
-
-    try:
-        trades = repository.fetch_closed_between(start_day, end_day)
-
-    except Exception as exc:
-        print(f"[SPREAD CALIBRATION] read failed: {exc}")
-
-        return None
-
-    if trades is None:
-        return None
-
-    return build_spread_calibration(pd.DataFrame(trades))
+    return None if trades is None else build_spread_calibration(trades)
 
 
 def _today_et():
