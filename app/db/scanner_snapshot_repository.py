@@ -109,7 +109,7 @@ class ScannerSnapshotRepository:
         save_json_file(str(path), metrics)
         return metrics
 
-    def load_day(self, trading_day):
+    def load_day(self, trading_day, strict=False):
         # A swallowed failure here is indistinguishable from an empty archive,
         # which is how an unconfigured DATABASE_URL surfaced to the operator as
         # "No scanner snapshots" for a day holding 702 rows. Read failures are
@@ -127,7 +127,12 @@ class ScannerSnapshotRepository:
             return [dict(row) for row in rows]
         except Exception as exc:
             print(f"[SCANNER SNAPSHOT WARNING] load_day({trading_day}) failed: {exc}")
-            return []
+            # [] for a day that was genuinely not archived; None only when the
+            # read itself failed. The comment above says these must be
+            # distinguishable, and until now they were not -- HSR's fallback
+            # needs [] but a UI that draws "nothing was archived" needs to know
+            # it was never told.
+            return None if strict else []
 
     def archive_status(self, trading_day):
         try:

@@ -48,6 +48,11 @@ SESSION_INTERVALS = {
 }
 DEFAULT_INTERVAL = 300
 
+# Consecutive failures before the operator is told. One bad cycle is a
+# Polygon hiccup and the loop is built to survive it; three in a row means
+# the session is being missed.
+FAILURES_BEFORE_ALERT = 3
+
 _stopping = False
 
 
@@ -124,7 +129,34 @@ def _report_database_state():
     print(warning)
     _publish_heartbeat("STARTING", last_error=warning)
 
+    # Pushed, not left for someone to find. This is the exact condition that ran
+    # for hours on 2026-08-01 while the dashboard showed "DB writes ACTIVE", and
+    # Telegram does not depend on the database, so the alert still gets out when
+    # nothing else can be recorded.
+    if status == "UNREACHABLE":
+
+        _notify_operator(
+            "database",
+            "The scan worker cannot reach Postgres. Alert dedup cannot be "
+            "verified, trade history reads as empty, and nothing this container "
+            "does will be recorded.",
+        )
+
     return status
+
+
+def _notify_operator(key, message, healthy=False):
+    """Monitoring must never be able to stop a scan."""
+
+    try:
+        from app.alerts.operator_alerts import notify_operator
+
+        return notify_operator(key, message, healthy=healthy)
+
+    except Exception as exc:
+        print(f"[SCAN LOOP WARNING] operator alert failed: {exc}")
+
+        return {"sent": False}
 
 
 def _run_one_scan():
@@ -157,6 +189,7 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
 
     scans = 0
     failures = 0
+    consecutive_failures = 0
 
     print(
         "[SCAN LOOP] started. "
@@ -225,7 +258,31 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
 
         if not result["ok"]:
             failures += 1
+            consecutive_failures += 1
             print(f"[SCAN LOOP ERROR] scan {scans} failed: {result['error']}")
+
+            # Consecutive, not cumulative. One bad cycle is a Polygon hiccup and
+            # the loop is built to survive it; three in a row means the session
+            # is being missed, and that is worth waking someone for.
+            if consecutive_failures >= FAILURES_BEFORE_ALERT:
+
+                _notify_operator(
+                    "scan_failures",
+                    f"{consecutive_failures} consecutive scans have failed. "
+                    f"Latest: {result['error']}",
+                )
+
+        else:
+
+            if consecutive_failures >= FAILURES_BEFORE_ALERT:
+
+                _notify_operator(
+                    "scan_failures",
+                    f"Scanning recovered after {consecutive_failures} failures.",
+                    healthy=True,
+                )
+
+            consecutive_failures = 0
 
         interval = interval_for_session(session, interval_override)
         elapsed = result["seconds"]

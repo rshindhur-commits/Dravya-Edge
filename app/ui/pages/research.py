@@ -14,7 +14,12 @@ the Regression tab does not pay to read `scanner_output.xlsx`.
 
 from __future__ import annotations
 
-TABS = ("Replay", "Regression", "Reports", "Learning")
+# "Reports" was here. It rendered `report_state.json` or the scanner frame, both
+# written by the process that ran the scan, so on Render-owned scanning it was
+# blank -- and what it showed before the state files were untracked was a
+# developer machine's July snapshot. Everything in it is answered better by
+# Postmortem (the day) and Validation (the performance), from Postgres.
+TABS = ("Live Funnel", "Postmortem", "Replay", "Regression", "Learning")
 
 
 def _cached(name, profile):
@@ -23,20 +28,13 @@ def _cached(name, profile):
     return _load_cached_state(name, profile=profile)
 
 
-def _render_replay(refresh_state, load_frame):
-    import streamlit as st
+def _render_replay(refresh_state, _load_frame):
+    """Reads the archive from Postgres, so it no longer needs the scanner frame
+    or `replay_state.json` -- neither of which this container writes."""
 
     from app.ui.pages.replay import render
 
-    if _cached("replay_state.json", profile="replay"):
-        render(df=None, refresh_state=refresh_state)
-        st.caption("Rendered from replay_state.json.")
-        return
-
-    frame = load_frame()
-    if frame is None:
-        return
-    render(df=frame, refresh_state=refresh_state)
+    render(refresh_state=refresh_state)
 
 
 def _render_regression(_refresh_state, _load_frame):
@@ -45,34 +43,40 @@ def _render_regression(_refresh_state, _load_frame):
     render()
 
 
-def _render_reports(_refresh_state, load_frame):
-    import streamlit as st
-
-    import pandas as pd
-
-    from app.ui.pages.reports import render
-
-    if _cached("report_state.json", profile="reports"):
-        render(pd.DataFrame())
-        st.caption("Rendered from report_state.json.")
-        return
-
-    frame = load_frame()
-    if frame is None:
-        return
-    render(frame)
-
-
 def _render_learning(_refresh_state, _load_frame):
     from app.ui.pages.learning import render
 
     render()
 
 
+def _render_postmortem(_refresh_state, _load_frame):
+    """The completed day, reading nothing but Postgres.
+
+    Replay still renders from a state file written by whichever process ran the
+    scan, which is now the Render worker -- so on the dashboard it shows whatever
+    the deploy shipped. This tab has no such dependency, which is why it is the
+    one to open when something has gone wrong.
+    """
+
+    from app.ui.pages.postmortem import render
+
+    render()
+
+
+def _render_live_funnel(_refresh_state, _load_frame):
+    """First tab, because it is the only one that answers a question you have
+    while the market is open: why is nothing firing right now."""
+
+    from app.ui.pages.live_funnel import render
+
+    render()
+
+
 RENDERERS = {
+    "Live Funnel": _render_live_funnel,
+    "Postmortem": _render_postmortem,
     "Replay": _render_replay,
     "Regression": _render_regression,
-    "Reports": _render_reports,
     "Learning": _render_learning,
 }
 

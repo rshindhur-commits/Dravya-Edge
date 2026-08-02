@@ -153,6 +153,30 @@ data/live/scanner_output_latest.csv
 data/live/telegram_dispatch_queue.jsonl
 data/live/telegram_dispatch_audit.jsonl
 
+# Per-container runtime state, tracked until 2026-08-01. Every deploy shipped a
+# developer machine's snapshot into production and overwrote whatever the running
+# container had written -- so Validation, Research and Developer rendered a laptop's
+# state as current, with nothing on screen saying so. All of it is either derivable
+# from Postgres or rebuilt on the next scan; every loader already defaults to
+# empty when the file is absent.
+data/live/validation_state.json
+data/live/replay_state.json
+data/live/report_state.json
+data/live/dashboard_state.json
+data/live/daily_engine_summary.json
+data/live/runtime_performance_summary.json
+data/live/runtime_state.json
+data/live/runtime_shutdown.json
+data/live/regression_snapshot_metrics.json
+data/live/quote_refresh_events.jsonl
+data/live/scanner_output_latest.xlsx
+app/state/paper_trade_state.json
+app/state/trade_state.json
+app/state/signal_memory.json
+app/state/signal_lifecycle_state.json
+app/state/suggested_trade_state.json
+app/state/auto_paper_decision_log.json
+
 # Spyder project settings
 .spyderproject
 .spyproject

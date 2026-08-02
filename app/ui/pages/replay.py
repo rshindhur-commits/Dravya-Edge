@@ -1,184 +1,93 @@
-def render(df=None, refresh_state=None):
+"""What the scanner actually saw on an archived day.
 
+The previous version read `scanner_output_close.csv` and `offline_replay.csv`
+under `data/daily/`, generating the second from the first. Both are written by
+the process that runs the scan, so on this host the tab reported "Not generated"
+every session -- and the generation itself re-runs the scanner, which is not work
+a dashboard should be doing on a Streamlit container while a page waits on it.
+
+`scanner_snapshot` holds the archive: one row per symbol per scan, with the
+decision the scanner reached, kept for every archived day rather than only the
+one on local disk. That is the substance of what Replay was for -- what did we
+see, and what did we conclude.
+
+Re-running current code against an archived day is a genuinely different question
+and still belongs in `tools/`, where the scanner is available.
+"""
+
+from __future__ import annotations
+
+
+UNAVAILABLE = "Unavailable — the archive could not be read. This is not the same as a day that was never archived."
+
+# The decision payload carries well over a hundred columns. These are the ones
+# that say what the scanner concluded; the rest stay behind the expander.
+DECISION_COLUMNS = [
+    "Symbol", "Action Status", "Action Reason", "Candidate Direction",
+    "Setup Valid", "Setup %", "Market Regime", "ENTRY_READINESS",
+]
+
+
+def render(df=None, refresh_state=None):
     import pandas as pd
     import streamlit as st
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from app.dashboard import (
-        _current_trading_day,
-        _display_safe_dataframe,
-        _file_row_count,
-        _generate_offline_replay,
-        _load_cached_state,
-        _render_cached_replay_state,
-        _render_compact_card_grid,
-        _render_file_download_button,
-        _render_metadata_card,
-        _scan_metadata,
-        _status_label,
-    )
-    from app.storage.daily_paths import daily_path
 
-    trading_day = _current_trading_day()
-    cached = _load_cached_state("replay_state.json", profile="replay")
-
-    if cached:
-
-        _render_cached_replay_state(cached, trading_day)
-        return
+    from app.analytics.day_postmortem import previous_trading_days
+    from app.db.scanner_snapshot_repository import ScannerSnapshotRepository
 
     st.subheader("Replay")
-    input_path = daily_path(trading_day, "scanner_output_close.csv")
-    output_path = daily_path(trading_day, "offline_replay.csv")
-    summary_path = output_path.with_name("offline_replay_summary.csv")
-    metadata = _scan_metadata(df, refresh_state=refresh_state)
-    replay_generated = (
-        datetime.fromtimestamp(summary_path.stat().st_mtime, ZoneInfo("America/New_York")).strftime("%m/%d/%Y %H:%M:%S ET")
-        if summary_path.exists()
-        else "Not generated"
-    )
-    scanner_rows_for_metadata = _file_row_count(input_path, pd.read_csv)
-    replay_rows_for_metadata = _file_row_count(output_path, pd.read_csv)
-    coverage_for_metadata = (
-        f"{replay_rows_for_metadata} / {scanner_rows_for_metadata} ({round((replay_rows_for_metadata / scanner_rows_for_metadata) * 100, 1)}%)"
-        if scanner_rows_for_metadata
-        else "pending"
+    st.caption(
+        "The archived scanner record for a day, from Postgres. Re-running current "
+        "code against an archive is a separate job and lives in tools/."
     )
 
-    _render_metadata_card(
-        "Replay Session",
-        [
-            ("Replay Status", "READY OK" if summary_path.exists() else "MISSING"),
-            ("Replay Scan ID", metadata["scan_id"]),
-            ("Replay Generated", replay_generated),
-            ("Based On Scan", metadata["scanner_finished"]),
-            ("Replay Coverage", coverage_for_metadata),
-            ("Replay Version", "v1"),
-            ("Data Version", metadata["scan_id"]),
-            ("Status", _status_label(metadata["status"])),
-        ]
-    )
-    st.caption(f"Input: {input_path}")
+    days = [day.isoformat() for day in previous_trading_days(15)]
+    chosen = st.selectbox("Trading day", days, index=0, key="replay_day")
 
-    if st.button("Generate Replay", key="generate_offline_replay"):
+    rows = ScannerSnapshotRepository().load_day(chosen, strict=True)
 
-        try:
+    if rows is None:
+        st.warning(UNAVAILABLE)
+        return
 
-            _generate_offline_replay(trading_day)
-            st.success("Offline replay generated.")
+    if not rows:
+        st.caption(
+            f"Nothing was archived for {chosen}. If the scanner ran that day, "
+            "check the Postmortem tab for coverage gaps."
+        )
+        return
 
-        except Exception as exc:
+    scans = sorted({row.get("scan_id") for row in rows if row.get("scan_id")})
+    symbols = sorted({row.get("symbol") for row in rows if row.get("symbol")})
 
-            st.error(f"Offline replay failed: {exc}")
+    columns = st.columns(3)
+    columns[0].metric("Archived rows", len(rows))
+    columns[1].metric("Scans", len(scans))
+    columns[2].metric("Symbols", len(symbols))
 
-    st.markdown("**Today's Replay Analysis**")
-    replay_df = pd.DataFrame()
-    summary_df = pd.DataFrame()
+    if not scans:
+        st.caption("Archived rows carry no scan id.")
+        return
 
-    if output_path.exists() and output_path.stat().st_size > 0:
+    scan = st.selectbox("Scan", scans, index=len(scans) - 1, key="replay_scan")
+    frame = pd.DataFrame([
+        {"Symbol": row.get("symbol"), **(row.get("decision_payload") or {})}
+        for row in rows
+        if row.get("scan_id") == scan
+    ])
 
-        try:
+    if frame.empty:
+        st.caption("No rows for this scan.")
+        return
 
-            replay_df = pd.read_csv(output_path)
+    present = [column for column in DECISION_COLUMNS if column in frame.columns]
 
-        except Exception:
+    st.dataframe(frame[present] if present else frame,
+                 width="stretch", hide_index=True)
 
-            replay_df = pd.DataFrame()
-
-    if summary_path.exists() and summary_path.stat().st_size > 0:
-
-        try:
-
-            summary_df = pd.read_csv(summary_path)
-
-        except Exception:
-
-            summary_df = pd.DataFrame()
-
-    if replay_df.empty and summary_df.empty:
-
-        st.info("Generate replay after a scanner run to see coverage, blockers, and ticker-level replay results.")
-
-    else:
-
-        scanner_rows = _file_row_count(input_path, pd.read_csv)
-        replay_rows = len(replay_df) if not replay_df.empty else len(summary_df)
-        missing_indicators = 0
-
-        if not replay_df.empty and "FAILED_ENTRY_CONDITIONS" in replay_df.columns:
-
-            missing_indicators = int(
-                replay_df["FAILED_ENTRY_CONDITIONS"]
-                .astype(str)
-                .str.contains("Missing replay indicators", na=False)
-                .sum()
-            )
-
-        coverage_pct = round((replay_rows / scanner_rows) * 100, 2) if scanner_rows else 0
-        cards = [
-            ("Symbols Replayed", replay_rows),
-            ("Coverage", f"{coverage_pct}%"),
-            ("Missing Indicators", missing_indicators),
-            ("Partial Replay", missing_indicators),
-        ]
-        _render_compact_card_grid(cards)
-
-        blocker_source = summary_df if not summary_df.empty else replay_df
-
-        if "Gate Failure Stage" in blocker_source.columns:
-
-            blockers = (
-                blocker_source["Gate Failure Stage"]
-                .fillna("Unknown")
-                .astype(str)
-                .value_counts(normalize=True)
-                .mul(100)
-                .round(1)
-                .reset_index()
-            )
-            blockers.columns = ["Blocker", "Share %"]
-            st.markdown("**Today's Biggest Blockers**")
-            st.dataframe(
-                _display_safe_dataframe(blockers),
-                width="stretch",
-                hide_index=True
-            )
-
-        if not summary_df.empty:
-
-            st.markdown("**Replay Summary**")
-            preferred_columns = [
-                "Symbol",
-                "Closest Setup",
-                "Readiness",
-                "First Failed Rule",
-                "Recommendation",
-                "Trade Block Details",
-                "Final Decision",
-                "Gate Failure Stage",
-            ]
-            display_summary = summary_df[
-                [column for column in preferred_columns if column in summary_df.columns]
-            ].copy()
-            st.dataframe(
-                _display_safe_dataframe(display_summary),
-                width="stretch",
-                hide_index=True
-            )
-
-    _render_file_download_button(
-        "Download offline_replay.csv",
-        output_path,
-        file_name="offline_replay.csv",
-        mime="text/csv",
-        key="download_offline_replay",
-        container=st
-    )
-    _render_file_download_button(
-        "Download offline_replay_summary.csv",
-        summary_path,
-        file_name="offline_replay_summary.csv",
-        mime="text/csv",
-        key="download_offline_replay_summary",
-        container=st
-    )
+    with st.expander("Every archived field for this scan", expanded=False):
+        st.caption(
+            f"{len(frame.columns)} columns. This is the decision payload as it "
+            "was written at the time, not a reconstruction."
+        )
+        st.dataframe(frame, width="stretch", hide_index=True)

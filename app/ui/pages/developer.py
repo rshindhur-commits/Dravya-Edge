@@ -2,22 +2,16 @@ def render(df, auto_paper_controls, refresh_state=None):
 
     from app.dashboard import (
         _current_trading_day,
-        _render_action_center,
-        _render_auto_paper_decision_log,
-        _render_compact_auto_paper_summary,
-        _render_entry_diagnostics,
         _render_lazy_developer_section,
         _render_market_coverage_lazy,
         _render_metadata_card,
-        _render_paper_exit_controls,
         _render_runtime_performance_panel,
-        _render_scanner_watchlist,
         _render_suggestion_lifecycle,
-        _render_telemetry_debug_panel,
-        _render_validation_data_health,
         _scan_metadata,
         _status_label,
     )
+    from app.ui.pages.data_health import render as _render_data_health
+    from app.ui.pages.entry_diagnostics import render as _render_entry_diagnostics
 
     metadata = _scan_metadata(df, refresh_state=refresh_state)
     _render_metadata_card(
@@ -71,35 +65,26 @@ def render(df, auto_paper_controls, refresh_state=None):
                 + ", ".join(stray)
             )
 
-    def render_regression_snapshot_metrics():
-        import os
-
-        from app.storage.daily_paths import live_path
-        from app.utils.json_store import load_json_file
-
-        metrics = load_json_file(str(live_path("regression_snapshot_metrics.json")), {})
-        enabled = str(os.getenv("REGRESSION_SNAPSHOT_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}
-        columns = st.columns(3)
-        columns[0].metric("Enabled", "Yes" if enabled else "No")
-        columns[1].metric("Queued", metrics.get("queued", 0))
-        columns[2].metric("Completed", metrics.get("completed", 0))
-        columns = st.columns(3)
-        columns[0].metric("Dropped", metrics.get("dropped", 0))
-        columns[1].metric("Failures", metrics.get("failures", 0))
-        columns[2].metric("Average Persist", f"{metrics.get('average_persist_ms', 0):.0f} ms")
-
+    # Six sections were removed here on 2026-08-02, all of them reading files
+    # this container does not write now that the Render worker runs the scan --
+    # so each rendered blank during the session, and before the state files were
+    # untracked, rendered a developer machine's July state instead.
+    #
+    #   Regression Snapshot          plumbing telemetry; no decision hung on it
+    #   Scanner Watchlist            the Trading page already shows the scan
+    #   Auto-Paper Summary           a 30-minute window on `auto_paper_decision`
+    #   Full Auto-Paper Decision Log the same log again, capped at 500 rows
+    #   Telemetry & Debug            win rate and avg R, from worse data than
+    #                                Validation and Postmortem already use
+    #
+    # The decision data behind the two auto-paper sections is in Postgres and is
+    # surfaced properly by the Postmortem tab, unbounded and durable.
     with st.expander("Developer Diagnostics", expanded=True):
 
         _render_lazy_developer_section(
             "Database Tables",
             "database_catalog",
             render_database_catalog,
-        )
-
-        _render_lazy_developer_section(
-            "Regression Snapshot",
-            "regression_snapshot",
-            render_regression_snapshot_metrics,
         )
 
         _render_lazy_developer_section(
@@ -112,48 +97,29 @@ def render(df, auto_paper_controls, refresh_state=None):
             "market_coverage",
             lambda: _render_market_coverage_lazy(_current_trading_day())
         )
-        _render_lazy_developer_section(
-            "Action Center",
-            "action_center",
-            lambda: _render_action_center(df, auto_paper_controls)
-        )
-        _render_lazy_developer_section(
-            "Scanner Watchlist",
-            "scanner_watchlist",
-            lambda: _render_scanner_watchlist(df)
-        )
-        _render_lazy_developer_section(
-            "Paper Exit Controls",
-            "paper_exit_controls",
-            lambda: _render_paper_exit_controls(df)
-        )
-        _render_lazy_developer_section(
-            "Auto-Paper Summary",
-            "auto_paper_summary",
-            _render_compact_auto_paper_summary
-        )
+        # Action Center and Paper Exit Controls were here. Both acted on the
+        # paper book from the dashboard, which was safe while this process was
+        # also the scanner. It no longer is: the Render worker owns entries and
+        # exits, and closing a position from here races its exit logic across two
+        # hosts with no shared lock -- `scan_lock` is a local file and cannot
+        # serialise anything between containers. Same failure shape as two scan
+        # engines running at once, and the book is what it corrupts.
         _render_lazy_developer_section(
             "Suggestion Lifecycle",
             "suggestion_lifecycle",
             lambda: _render_suggestion_lifecycle(df)
         )
+        # Both read Postgres now. The frame-backed versions said "No scanner rows
+        # available" through every session on this host, and the data-health one
+        # was worse: it compared three files this container never writes, so it
+        # reported agreement between nothing and nothing.
         _render_lazy_developer_section(
             "Entry Diagnostics",
             "entry_diagnostics",
-            lambda: _render_entry_diagnostics(df)
-        )
-        _render_lazy_developer_section(
-            "Full Auto-Paper Decision Log",
-            "auto_paper_decision_log",
-            lambda: _render_auto_paper_decision_log(show_full_expander=False)
+            _render_entry_diagnostics,
         )
         _render_lazy_developer_section(
             "Validation Data Health",
             "validation_data_health",
-            lambda: _render_validation_data_health(df)
-        )
-        _render_lazy_developer_section(
-            "Telemetry & Debug",
-            "telemetry_debug",
-            lambda: _render_telemetry_debug_panel(df)
+            _render_data_health,
         )

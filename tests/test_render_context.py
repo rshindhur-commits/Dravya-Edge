@@ -322,3 +322,31 @@ class CrossHostReadsTests(unittest.TestCase):
 
         remote.assert_called_once()
         self.assertEqual(trades[0]["symbol"], "SPY")
+
+
+class ArchiveReadDistinguishesFailureFromAbsenceTests(unittest.TestCase):
+    """Replay draws "nothing was archived" from an empty result, so a swallowed
+    read failure would render an outage as a day the scanner never ran. The
+    repository's own comment said these must be distinguishable; until now the
+    return value could not express it."""
+
+    def test_strict_mode_returns_none_when_the_read_fails(self):
+        from app.db.scanner_snapshot_repository import ScannerSnapshotRepository
+
+        with patch("app.db.scanner_snapshot_repository.get_engine",
+                   side_effect=RuntimeError("no database")):
+
+            self.assertIsNone(
+                ScannerSnapshotRepository().load_day("2026-07-31", strict=True))
+
+    def test_the_default_still_returns_a_list_for_existing_callers(self):
+        """HSR falls back to the local snapshot folder and iterates the result,
+        so the default must not start handing it None."""
+
+        from app.db.scanner_snapshot_repository import ScannerSnapshotRepository
+
+        with patch("app.db.scanner_snapshot_repository.get_engine",
+                   side_effect=RuntimeError("no database")):
+
+            self.assertEqual(
+                ScannerSnapshotRepository().load_day("2026-07-31"), [])

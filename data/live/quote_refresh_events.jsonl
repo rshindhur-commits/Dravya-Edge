@@ -1,5 +1,0 @@
-{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.16, "refresh_time": "2026-07-23T22:21:55.618297+00:00"}
-{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.34, "refresh_time": "2026-07-24T02:44:49.997144+00:00"}
-{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.14, "refresh_time": "2026-07-24T03:27:42.847660+00:00"}
-{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.11, "refresh_time": "2026-07-30T02:06:38.029502+00:00"}
-{"ticker": "O:NVDA", "outcome": "LIVE_QUOTE", "retry_count": 1, "latency_ms": 0.15, "refresh_time": "2026-07-30T02:08:04.581514+00:00"}
