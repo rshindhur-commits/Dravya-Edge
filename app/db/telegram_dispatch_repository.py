@@ -1,3 +1,5 @@
+import json
+
 from app.db.repository_base import BestEffortRepository
 
 
@@ -49,5 +51,23 @@ class TelegramDispatchRepository(BestEffortRepository):
         ]
 
     def insert(self, row):
-        row = row or {}
+        """`telegram_response` is serialised here, at the JSONB boundary.
+
+        It binds into `CAST(:telegram_response AS JSONB)`, which needs a JSON
+        string. A successful send hands back Telegram's reply as a nested dict,
+        psycopg2 raises "can't adapt type 'dict'", and `_batch_execute` swallows
+        it -- so from 2026-07-23 every DELIVERED row was lost while ATTEMPTED and
+        FAILED, whose response is None, wrote fine.
+
+        The table therefore held 255 ATTEMPTED against 2 DELIVERED and looked
+        like a delivery catastrophe on days when every alert landed. It was the
+        record that was broken, not the delivery.
+        """
+
+        row = dict(row or {})
+        response = row.get("telegram_response")
+
+        if response is not None and not isinstance(response, str):
+            row["telegram_response"] = json.dumps(response, default=str)
+
         return self._execute("""INSERT INTO telegram_dispatch (scan_id,trade_id,symbol,direction,candidate_key,message_type,decision,policy,parse_mode,message_length,telegram_response,attempt,latency_ms,attempted,delivered,status,failure_reason,telegram_message_id,timestamp) VALUES (:scan_id,:trade_id,:symbol,:direction,:candidate_key,:message_type,:decision,:policy,:parse_mode,:message_length,CAST(:telegram_response AS JSONB),:attempt,:latency_ms,:attempted,:delivered,:status,:failure_reason,:telegram_message_id,:timestamp)""", row)
