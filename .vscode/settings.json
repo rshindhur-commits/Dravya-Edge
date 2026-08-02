@@ -2,17 +2,15 @@
   "python.terminal.useEnvFile": true,
   "CodeGPT.apiKey": "OpenAI",
   "chat.utilityModel": "openai/gpt-5.5",
-  "chat.utilitySmallModel": "openai/gpt-5.5",
-  "cronTasks.tasks": [
-    {
-      "at": "0 18 * * 0",
-      "run": "workbench.action.tasks.runTask",
-      "args": ["DB export"]
-    },
-    {
-      "at": "0 18 * * 3",
-      "run": "workbench.action.tasks.runTask",
-      "args": ["DB export"]
-    }
-  ]
+  "chat.utilitySmallModel": "openai/gpt-5.5"
 }
+// The DB export schedule lives in Windows Task Scheduler ("Dravya DB export"),
+// not here. `cronTasks.tasks` used to duplicate it exactly -- same interpreter,
+// same tools/export_db.py, same Sun+Wed 18:00 -- so whenever VS Code happened to
+// be open at 18:00 both fired at once, and export_db.py takes no lock: two runs
+// write schema.sql, manifest.json and the table dumps into the same directory
+// concurrently. The scheduler also runs with the editor closed and records an
+// exit code, which the editor cron cannot do.
+//
+// The "DB export" / "DB export check" entries in tasks.json are kept: they are
+// still the way to run one by hand from the command palette.
