@@ -66,18 +66,50 @@ def test_years_beyond_the_table_scan_rather_than_guess():
     assert is_market_holiday(beyond) is False
 
 
-def test_cadence_control_adopts_engine_state_rather_than_its_default():
-    """A fresh browser session must not reset the running cadence.
+def test_a_rerun_does_not_restart_a_live_engine():
+    """Replaces a test of the `Full Scanner Cadence` control, removed once it
+    stopped doing anything: it fed `_ensure_scan_engine_started`, which returns
+    early when the worker owns scanning.
 
-    The label seeded into a new session has to reflect what the engine is
-    actually doing, so opening the dashboard on a second device is a read.
+    The property that outlives it is the one that test was really protecting --
+    an auto-refreshing tab must not reconfigure a running engine on every rerun.
     """
+
+    from unittest.mock import patch
 
     from app import dashboard
 
-    assert dashboard._cadence_label_for_engine() == next(
-        iter(dashboard.SCANNER_CADENCE_INTERVALS)
-    ), "with no override running, a new session must adopt the session-aware option"
+    with patch("app.runtime.scan_supervisor.status",
+               return_value={"thread_alive": True, "status": "IDLE"}), \
+         patch("app.runtime.scan_supervisor.ensure_started") as ensure_started, \
+         patch.dict("os.environ", {"SCAN_ENGINE_OWNER": "dashboard"}, clear=False), \
+         patch.object(dashboard, "_prime_scanner_environment"):
+
+        for _ in range(3):
+            dashboard._ensure_scan_engine_started()
+
+    ensure_started.assert_not_called()
+
+
+def test_a_dead_engine_is_restarted():
+    """The other half: not touching a live engine must not become not starting
+    a dead one. Flipping SCAN_ENGINE_OWNER back to `dashboard` because the
+    worker is down is exactly when this has to work."""
+
+    from unittest.mock import patch
+
+    from app import dashboard
+
+    with patch("app.runtime.scan_supervisor.status",
+               return_value={"thread_alive": False}), \
+         patch("app.runtime.scan_supervisor.ensure_started",
+               return_value={"thread_alive": True}) as ensure_started, \
+         patch.dict("os.environ", {"SCAN_ENGINE_OWNER": "dashboard"}, clear=False), \
+         patch.object(dashboard, "_prime_scanner_environment"):
+
+        dashboard._ensure_scan_engine_started()
+
+    ensure_started.assert_called_once()
 
 
 def test_auto_paper_settings_are_written_only_on_change():
