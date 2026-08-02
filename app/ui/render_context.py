@@ -212,6 +212,39 @@ def engine_status():
     return local
 
 
+ENGINE_LABELS = {
+    "worker": ("Worker engine (Render)", "WORKER ENGINE"),
+    "dashboard": ("Dashboard engine (Streamlit)", "DASHBOARD ENGINE"),
+}
+
+
+def engine_label(engine, short=False):
+    """Name the engine being reported, instead of trailing the owner behind it.
+
+    `Engine SLEEPING_WEEKEND · worker · every 30 min` packed three unrelated
+    facts into one line and left `worker` reading as part of the status rather
+    than as the thing being described. Since scanning moved to Render there are
+    two engines this could be and the panel shows exactly one of them, so which
+    one it is has to lead, not qualify.
+
+    Falls back to the raw owner rather than to a guess: a name nobody recognises
+    is a better prompt to investigate than a confident "Dashboard".
+    """
+
+    engine = engine or {}
+    owner = str(engine.get("owner") or "").strip().lower()
+
+    if not owner and engine.get("thread_alive"):
+        owner = "dashboard"
+
+    long_form, short_form = ENGINE_LABELS.get(
+        owner,
+        (f"{owner or 'unknown'} engine".capitalize(), f"{owner or 'unknown'} engine".upper()),
+    )
+
+    return short_form if short else long_form
+
+
 def scan_engine_heartbeats(within_seconds=1800):
     """Scan engines reporting to Postgres, summarised.
 

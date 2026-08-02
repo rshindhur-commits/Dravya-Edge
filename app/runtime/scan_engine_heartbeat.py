@@ -24,9 +24,12 @@ from __future__ import annotations
 
 import os
 import socket
+from datetime import timezone
+from zoneinfo import ZoneInfo
 
 
 DEFAULT_OWNER = "dashboard"
+ET = ZoneInfo("America/New_York")
 
 
 def scan_engine_owner():
@@ -117,6 +120,30 @@ def _is_scanning(row):
     return not (status in IDLE_STATUSES or status.startswith(IDLE_STATUS_PREFIX))
 
 
+def as_et_isoformat(moment):
+    """Postgres hands back TIMESTAMPTZ in the session timezone, which is UTC.
+
+    Callers render these by slicing a fixed offset out of the string and pasting
+    " ET" after it, so an unconverted value is not merely unlabelled -- it is
+    labelled wrongly, four or five hours out depending on the season. Converting
+    here rather than at each call site because the sidebar did convert and
+    nothing else did, which is how `Next due 01:10:32 ET` reached the dashboard
+    for a beat that was actually due at 21:10.
+    """
+
+    if moment is None:
+        return None
+
+    try:
+        if getattr(moment, "tzinfo", None) is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+
+        return moment.astimezone(ET).isoformat()
+
+    except Exception:
+        return str(moment)
+
+
 def heartbeat_to_engine_status(row):
     """Shape a heartbeat row like `scan_supervisor.status()`.
 
@@ -147,9 +174,9 @@ def heartbeat_to_engine_status(row):
         "scans": row.get("scans"),
         "failures": row.get("failures"),
         "last_error": row.get("last_error"),
-        "last_completed_at": row.get("last_scan_at"),
+        "last_completed_at": as_et_isoformat(row.get("last_scan_at")),
         "last_duration_seconds": row.get("last_duration_sec"),
-        "next_due_at": row.get("next_due_at"),
+        "next_due_at": as_et_isoformat(row.get("next_due_at")),
         "thread_alive": False,
         "running": status not in DEAD_STATUSES,
         "remote": True,

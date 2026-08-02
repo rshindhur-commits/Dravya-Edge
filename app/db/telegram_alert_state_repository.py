@@ -67,7 +67,7 @@ class TelegramAlertStateRepository(BestEffortRepository):
         longest-lived key, which is an ENTRY alert for a multiday position.
         """
 
-        rows = self._fetch(
+        rows = self._fetch_optional(
             """
             SELECT alert_key, metadata, sent_at
             FROM telegram_alert_state
@@ -77,6 +77,12 @@ class TelegramAlertStateRepository(BestEffortRepository):
             """,
             {"within_days": int(within_days)},
         )
+
+        # None, not {}, when the read failed. The caller adopts these keys as its
+        # dedup set, and an empty set is an instruction to re-send everything.
+        if rows is None:
+
+            return None
 
         hydrated = {}
 
@@ -92,6 +98,23 @@ class TelegramAlertStateRepository(BestEffortRepository):
             hydrated[row["alert_key"]] = metadata or {}
 
         return hydrated
+
+    def was_sent(self, alert_key):
+        """True, False, or None when the database could not be asked.
+
+        The JSON file plus once-per-process hydration is the right shape for the
+        hot path, but it fails open: a container that cannot reach Postgres
+        hydrates nothing, finds the key missing and sends. For an alert that must
+        go out at most once a week, asking directly is cheap and the ambiguity is
+        not worth carrying.
+        """
+
+        rows = self._fetch_optional(
+            "SELECT 1 FROM telegram_alert_state WHERE alert_key = :alert_key LIMIT 1",
+            {"alert_key": str(alert_key)},
+        )
+
+        return None if rows is None else bool(rows)
 
     def mark_closed(self, symbol, option_ticker=None, event_type="ENTRY", closed_at=None):
         """Close every open alert for a symbol, matching `mark_alert_closed`."""

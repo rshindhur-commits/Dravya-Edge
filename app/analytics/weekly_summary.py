@@ -62,7 +62,15 @@ def _now_et():
 
 
 def load_weekly_trades(start_day, end_day, repository=None):
-    """Closed trades for the window, straight from Postgres."""
+    """Closed trades for the window, straight from Postgres.
+
+    Returns `None` when the query could not be run, distinct from `[]` for a week
+    that genuinely had no closes. `BestEffortRepository._fetch` warns about
+    exactly this: "reporting zero completed trades when the query simply failed
+    is how a broken pipeline disguises itself as a quiet day." Swallowing the
+    failure here published that disguise -- subscribers were told "No positions
+    were closed this week" for a week with seven closed trades.
+    """
 
     if repository is None:
 
@@ -72,13 +80,13 @@ def load_weekly_trades(start_day, end_day, repository=None):
 
     try:
 
-        return repository.fetch_closed_between(start_day, end_day) or []
+        return repository.fetch_closed_between(start_day, end_day)
 
     except Exception as exc:
 
         print(f"[WEEKLY SUMMARY WARNING] could not load trades: {exc}")
 
-        return []
+        return None
 
 
 def build_weekly_summary_stats(trades):
@@ -149,6 +157,13 @@ def dispatch_weekly_summary_if_due(scan_id=None, now=None, force=False, window=N
     start_day, end_day = window
     summary = build_weekly_summary(start_day, end_day)
 
+    # A week we could not read is not a week with nothing in it. Silence is the
+    # only honest output here: the alternative published "No positions were
+    # closed this week" over a week that had seven.
+    if summary["trades"] is None:
+
+        return {"sent": False, "reason": "TRADES_UNAVAILABLE"}
+
     return maybe_send_weekly_outcome_summary(
         summary["stats"],
         start_day,
@@ -170,6 +185,7 @@ def build_weekly_summary(start_day=None, end_day=None, repository=None, referenc
     return {
         "start_day": start_day,
         "end_day": end_day,
+        # None when the read failed, so callers can tell it from a quiet week.
         "trades": trades,
-        "stats": build_weekly_summary_stats(trades),
+        "stats": build_weekly_summary_stats(trades or []),
     }

@@ -95,6 +95,7 @@ def _render_header(context):
     import streamlit as st
 
     from app.ui.components import operator_bar, status_card_grid
+    from app.ui.render_context import engine_label
 
     engine = context.engine
     # `running`, not `thread_alive`. Once scanning moved to the Render worker
@@ -103,15 +104,27 @@ def _render_header(context):
     # which had already been taught about the worker, reported it running two
     # feet away. See engine_status().
     running = bool(engine.get("running") or engine.get("thread_alive"))
-    owner = str(engine.get("owner") or "").strip()
+
+    # Named whether local or remote. The owner used to appear only for a remote
+    # engine, so the badge silently changed shape depending on where scanning
+    # lived -- exactly when knowing which engine you are looking at matters most.
+    # With no owner at all there is nothing to name, and saying so beats
+    # inventing a label for an engine that never reported.
+    if not engine.get("owner"):
+        badge = ("NO ENGINE REPORTING", "bad") if not running else ("ENGINE UP", "live")
+
+    elif running:
+        badge = (engine_label(engine, short=True)
+                 + " · " + str(engine.get("status") or "IDLE"), "live")
+
+    else:
+        badge = (engine_label(engine, short=True) + " DOWN", "bad")
 
     operator_bar("Operator Console", [
         (context.trading_day, "neutral"),
         ("POST-MARKET" if context.post_market else "LIVE SESSION",
          "post" if context.post_market else "live"),
-        ("ENGINE DOWN", "bad") if not running
-        else ("ENGINE " + str(engine.get("status") or "IDLE")
-              + (f" · {owner}" if owner and engine.get("remote") else ""), "live"),
+        badge,
     ])
 
     status_card_grid(_health_cells(context))
