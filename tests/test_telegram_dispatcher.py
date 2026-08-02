@@ -241,8 +241,71 @@ class TelegramDispatcherTests(unittest.TestCase):
 
         self.assertEqual(recovered[0]["original_job_id"], "old")
         self.assertTrue(recovered[0]["result"]["queued"])
-        self.assertNotEqual(recovered[0]["result"]["job_id"], "old")
+        # Replayed under the ORIGINAL id. This previously asserted the opposite,
+        # pinning the behaviour that stopped recovery ever converging: success
+        # was audited against a fresh id, the original stayed pending, and the
+        # row replayed on every startup while the queue grew by one each time.
+        self.assertEqual(recovered[0]["result"]["job_id"], "old")
         sender_factory.return_value.submit.assert_called_once()
+
+    def test_a_replay_does_not_append_a_second_queue_row(self):
+        """The row being replayed is already in the file."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            live_dir = Path(temp_dir)
+
+            def live_path(filename):
+                return live_dir / filename
+
+            queue_path = live_path("telegram_dispatch_queue.jsonl")
+            queue_path.write_text(
+                '{"event":"QUEUED","job_id":"old","name":"n","scan_id":"s","message":"hello"}\n',
+                encoding="utf-8")
+            live_path("telegram_dispatch_audit.jsonl").write_text("", encoding="utf-8")
+
+            with patch.dict("os.environ", {"TELEGRAM_DISPATCH_MODE": "QUEUED"},
+                            clear=False),                  patch("app.runtime.telegram_dispatcher.live_path",
+                       side_effect=live_path),                  patch("app.runtime.telegram_dispatcher.get_telegram_sender"):
+
+                recover_pending_telegram_dispatches(lambda message: None)
+
+            rows = [line for line in
+                    queue_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        self.assertEqual(len(rows), 1)
+
+    def test_recovery_converges_instead_of_replaying_forever(self):
+        """The property the whole mechanism depends on: once a queued message is
+        actually delivered, the next startup must not send it again."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            live_dir = Path(temp_dir)
+
+            def live_path(filename):
+                return live_dir / filename
+
+            live_path("telegram_dispatch_queue.jsonl").write_text(
+                '{"event":"QUEUED","job_id":"old","name":"n","scan_id":"s","message":"hello"}\n',
+                encoding="utf-8")
+            live_path("telegram_dispatch_audit.jsonl").write_text("", encoding="utf-8")
+
+            sent = []
+
+            with patch.dict("os.environ", {"TELEGRAM_DISPATCH_MODE": "QUEUED"},
+                            clear=False),                  patch("app.runtime.telegram_dispatcher.live_path",
+                       side_effect=live_path),                  patch("app.runtime.telegram_dispatcher._record_dispatch_db"),                  patch("app.runtime.telegram_dispatcher.get_telegram_sender") as factory:
+
+                # Deliver inline so the SENT audit row is written.
+                factory.return_value.submit.side_effect = lambda job_id, fn: fn()
+
+                first = recover_pending_telegram_dispatches(sent.append)
+                second = recover_pending_telegram_dispatches(sent.append)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [], "a delivered message was replayed again")
+        self.assertEqual(sent, ["hello"])
 
 
 if __name__ == "__main__":
