@@ -72,16 +72,34 @@ class HistoricalDataError(RuntimeError):
     """
 
 
+# Statuses that are not answers. 429 is the rate limiter and 408 is the request
+# timing out server-side; a 5xx is a gateway or backend fault, which means
+# Polygon never looked at the question, so the identical request can succeed
+# moments later. Every other 4xx *is* an answer -- about the key, the plan, or
+# the URL -- and will say the same thing however long we wait.
+_RETRYABLE_STATUSES = frozenset({408, 429})
+
+
+def _is_retryable(status_code):
+
+    return status_code in _RETRYABLE_STATUSES or status_code >= 500
+
+
 def request_with_retry(url, params, timeout=30, max_retries=4, context=""):
-    """GET with backoff over both rate limits and transient transport faults.
+    """GET with backoff over rate limits, gateway faults and transport faults.
 
     Retrying only on 429 is not enough at replay volume. A single scan can
     price seventy contracts, each needing bars and a quote, so a year-long run
-    makes millions of requests and will meet dropped connections and read
-    timeouts regardless of how well-behaved it is. Those are not answers from
-    Polygon and must not be treated as fatal, but a non-429 HTTP status is an
-    answer -- it will say the same thing however long we wait -- so only
-    transport faults and 429 are retried.
+    makes millions of requests and will meet dropped connections, read timeouts
+    and gateway errors regardless of how well-behaved it is.
+
+    This used to treat every non-429 status as final, on the reasoning that an
+    HTTP status is an answer. That holds for 4xx and not for 5xx: a 502 is the
+    edge saying it could not reach the backend, which is the *absence* of an
+    answer and is exactly the failure a long run meets most. One such 502 -- a
+    single quote, mid-run -- aborted a nine-trade parity check, and the same
+    request succeeded immediately afterwards. At a year and 26 symbols, refusing
+    to retry those means no long replay ever finishes.
     """
 
     last_error = None
@@ -106,12 +124,19 @@ def request_with_retry(url, params, timeout=30, max_retries=4, context=""):
 
             return response
 
-        if response.status_code != 429:
+        if not _is_retryable(response.status_code):
 
             raise HistoricalDataError(
                 f"Polygon returned {response.status_code} for {context or url}: "
                 f"{response.text[:200]}"
             )
+
+        # Kept so exhausting the retries reports what actually kept failing.
+        # Reporting `None` here -- which is what a run that exhausted its 429s
+        # used to say -- turns a rate limit into an unexplained outage.
+        last_error = (
+            f"HTTP {response.status_code}: {response.text[:200]}"
+        )
 
         time.sleep(2 ** attempt)
 
