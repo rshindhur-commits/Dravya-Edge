@@ -597,6 +597,26 @@ def replay_day(
 
                 continue
 
+            active = open_trades.get(symbol)
+
+            # The two gates below cost nothing and used to be checked *after*
+            # build_frames, which is three full indicator computations. With
+            # max_open_positions at 1, that meant every symbol but the one
+            # holding the position computed a full frame set at every scan and
+            # threw it away -- the single largest cost in a forward run, spent
+            # on decisions that could not be taken. Order is otherwise
+            # unchanged: a symbol with an open position still builds frames,
+            # because it has to be managed.
+            if not active:
+
+                if len(open_trades) >= config.max_open_positions:
+
+                    continue
+
+                if not _within_entry_window(moment, config):
+
+                    continue
+
             df_5m, df_15m, _, analysis_5m, analysis_15m, analysis_1h = build_frames(
                 raw, moment, symbol, config
             )
@@ -604,8 +624,6 @@ def replay_day(
             if df_5m is None:
 
                 continue
-
-            active = open_trades.get(symbol)
 
             if active:
 
@@ -618,14 +636,6 @@ def replay_day(
 
                 # Live evaluates exits first and never re-enters the same
                 # symbol on the scan that closed it.
-                continue
-
-            if len(open_trades) >= config.max_open_positions:
-
-                continue
-
-            if not _within_entry_window(moment, config):
-
                 continue
 
             trade = _open_trade(
