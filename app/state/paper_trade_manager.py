@@ -21,7 +21,7 @@ from app.storage.session_manager import (
     get_session_id,
     get_trading_day
 )
-from app.config.settings import get_int_env
+from app.config.settings import get_float_env, get_int_env
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -310,6 +310,9 @@ def update_paper_trade(
             "option_quote_age_minutes": "quote_age_minutes",
         }.items():
             trade[field] = option_data.get(option_field)
+
+        _track_spread_widening(trade)
+
     if option_pl:
         trade["option_pl_pct"] = option_pl.get("option_pl_pct")
         trade["option_pl_dollars"] = option_pl.get("option_pl_dollars")
@@ -606,6 +609,63 @@ def _append_trend_capture_for_closed_trade(trade):
 
         print(f"[TREND CAPTURE WARNING] {exc}")
         return None
+
+
+def spread_widening_exit_ratio():
+    """How far the spread may widen before that alone is an exit. 0 disables.
+
+    **Ships disabled, deliberately.** The observation is real and it is on every
+    trade -- 2026-08-03 went 2.70%->3.16%, 2.65%->4.55% and 1.12%->2.81%, with
+    realised round-trip cost above the entry spread in all three -- but three
+    trades is not a threshold, and the correct *response* is genuinely unclear:
+    exiting into a widened spread pays that spread to escape it. Closing early
+    may cost less than closing later, or may just realise the cost sooner.
+
+    So this records what it would have done and does not do it, the same way
+    stop viability shipped observe-only until the archive answered its rejection
+    rate. `spread_widening_would_exit` is the counter to read in a week.
+    """
+
+    return get_float_env("EXIT_MAX_SPREAD_WIDENING_RATIO", 0.0)
+
+
+def _track_spread_widening(trade):
+    """Peak spread and how far it has widened since entry.
+
+    The live spread is refreshed on every scan and the entry spread is frozen at
+    open, so the comparison was always available and nothing made it. It is the
+    mechanism behind 2026-08-03's SMCI loss: entry spread 2.65%, exit spread
+    4.55%, realised cost 3.51% against a gross loss of 2.46% -- friction was 59%
+    of the loss and none of it was visible at entry, so no entry-time gate could
+    have caught it.
+    """
+
+    live = _safe_float(trade.get("option_spread_pct"))
+    entry = _safe_float(trade.get("option_entry_spread_pct"))
+
+    if live is None or live <= 0:
+        return
+
+    trade["option_spread_pct_peak"] = max(
+        _safe_float(trade.get("option_spread_pct_peak")) or 0.0, live
+    )
+
+    if entry is None or entry <= 0:
+        return
+
+    ratio = live / entry
+    trade["option_spread_widening_ratio"] = round(ratio, 3)
+    trade["option_spread_peak_widening_ratio"] = round(
+        trade["option_spread_pct_peak"] / entry, 3
+    )
+
+    limit = spread_widening_exit_ratio()
+
+    if limit > 0 and ratio >= limit and not trade.get("spread_widening_would_exit"):
+        # Latched, not recomputed: the question is whether it ever crossed, and a
+        # spread that widens and comes back still cost something on the way.
+        trade["spread_widening_would_exit"] = True
+        trade["spread_widening_would_exit_at_r"] = trade.get("rr_progress")
 
 
 def _option_trade_result(trade):

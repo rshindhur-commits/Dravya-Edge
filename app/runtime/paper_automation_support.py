@@ -694,6 +694,10 @@ _DECISION_OPTION_COLUMNS = {
     "option_contract_cost": "Option Contract Cost",
     "option_quote_freshness": "Option Quote Freshness",
     "option_rejection_reason": "Option Rejection Reason",
+    # Which contract was refused and against what threshold. The reason alone
+    # ("Low open interest") cannot say whether the floor is too high or the
+    # selector picked a bad strike.
+    "option_rejection_evidence": "Option Rejection Evidence",
     "expiration_bucket": "Expiration Bucket",
     "candidate_entry_price": "Candidate Entry Price",
     "candidate_stop_price": "Candidate Stop Price",

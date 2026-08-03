@@ -605,6 +605,62 @@ on 08-03 came in as `BULLISH_TOP_1`, so neither would have been blocked by this
 change. Folding leverage into the expected-value ordering would alter which trades
 are taken on every scan and is its own decision.
 
+### 2026-08-03, second pass
+
+| Area | Change |
+| --- | --- |
+| MFE at close | `update_paper_trade` ratchets `mfe_r` but runs on **holding** scans only — the closing scan takes another path, so the final and usually highest excursion was never folded in. ORCL recorded `mfe_r 1.43` against a realised **+2.41R**: a peak below the outcome, which cannot happen. Trend capture reported 168%, and §1.1's profit-lock watch was comparing an exit against a peak lower than itself. Ratcheted at close against the realised R, so a genuine giveback still shows. |
+| Spread widening | Recorded, **not acted on.** `option_spread_pct_peak`, `option_spread_widening_ratio` and `option_spread_peak_widening_ratio` on every scan. `EXIT_MAX_SPREAD_WIDENING_RATIO` ships at **0 (disabled)** and only latches `spread_widening_would_exit`. |
+| Rejection evidence | Every non-liquid verdict now carries the ticker, strike, DTE, OI, volume, bid/ask, delta and the **threshold it failed** (`required_value`), and reaches the ledger as `option_rejection_evidence`. |
+| Telemetry sandbox | `telemetry/` resolved as a bare relative path and so escaped the test sandbox — any test reaching `close_paper_trade` appended real rows to the tracked `telemetry/trade_telemetry.csv`. Now anchored to a storage root, with `DRAVYA_TELEMETRY_DIR` set in `tests/__init__.py`. |
+
+Tests 844 → **858**.
+
+#### Spread widening — the finding behind it
+
+Every gate here judges the spread **once, at entry**. 2026-08-03 says that is the
+wrong end of the trade:
+
+| Trade | Entry spread | Exit spread | Realised round trip | Ratio |
+| --- | --- | --- | --- | --- |
+| ORCL | 2.70% | 3.16% | 3.68% | 1.36× |
+| SMCI (loss) | 2.65% | **4.55%** | 3.51% | 1.32× |
+| SMCI (win) | 1.12% | **2.81%** | 2.08% | **1.86×** |
+
+**Three of three widened**, and realised cost exceeded the entry spread in all
+three. On the loss, friction was 3.51% against a gross loss of 2.46% — **59% of
+the loss** — while the entry gate had cleared it at 1.69× with room. No
+entry-time multiple could have caught that, because at entry the spread genuinely
+was 2.65%.
+
+**Shipped disabled on purpose.** Three trades is not a threshold, and the correct
+*response* is genuinely unclear: exiting into a widened spread pays that spread to
+escape it. Closing early may cost less than closing later, or may only realise the
+cost sooner. This records what it would have done, exactly as stop viability
+shipped observe-only until the archive answered its rejection rate.
+
+**Watch.** `option_spread_peak_widening_ratio` on closed trades, and
+`spread_widening_would_exit` once a ratio is set. **Trigger.** A median peak ratio
+above ~1.5× over ten trades makes this the dominant cost and worth acting on;
+below ~1.2× the 08-03 sample was noise.
+
+#### Rejection evidence — what it is for
+
+`OPTION_REJECTED` was the fourth-largest blocker on 08-03 (98 decisions) and the
+least legible. MSFT alone produced 29 rejections reading `Low open interest` and
+`Wide bid/ask spread` with the ticker, the open interest and the threshold all
+absent — so *is `OPTION_MIN_OPEN_INTEREST=500` too high, or is the selector
+reaching for an illiquid strike?* was unanswerable from the record.
+
+**Do not raise `OPTION_MIN_OPEN_INTEREST`.** It is a floor; raising it blocks
+more. At 1200 it would have rejected **ORCL at OI 888 — the only good trade of
+the day, +2.41R and +22.67% net** — and TSLA at 888, while both SMCI trades at
+OI 5,452 sail through. Of the 77 contracts selected that day, 100% pass at 500 and
+91% at 1200, and the 9% lost are the ones that earned.
+
+**Watch.** `option_rejection_evidence` grouped by `code`, with the observed OI
+distribution against `required_value`.
+
 ### Manual data corrections
 
 **2026-07-31 16:17 ET.** The third NVDA trade was left `OPEN` by the

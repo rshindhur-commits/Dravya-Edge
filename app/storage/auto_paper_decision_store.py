@@ -69,6 +69,7 @@ AUTO_PAPER_DECISION_FIELDS = [
     "scanner_blocked_by",
     "action_reason",
     "option_rejection_reason",
+    "option_rejection_evidence",
     "realtime_block_reason",
     "option_quality_score",
     "option_spread_pct",
