@@ -54,7 +54,12 @@ from app.backtesting.historical_market_data import (
     HistoricalDataError,
     load_replay_frames,
 )
-from app.backtesting.replay_engine import ReplayConfig, build_frames, replay_day
+from app.backtesting.replay_engine import (
+    ReplayConfig,
+    build_frames,
+    replay_day,
+    replay_days,
+)
 from app.config.watchlist import WATCHLIST
 
 ET = "America/New_York"
@@ -83,18 +88,43 @@ def scan_grid(trading_day, cadence_minutes, start="09:45", end="15:30"):
     return list(pd.date_range(first, last, freq=f"{cadence_minutes}min"))
 
 
-def make_recording_selector(frames, replay_config, selection_config, log):
+def make_recording_selector(replay_config, selection_config, log):
     """``make_selector``, but keeping the diagnostics for the report.
 
     Spot has to be the close of the same candle the entry was decided on.
     ``_open_trade`` uses ``df_5m["Close"].iloc[-1]`` from ``build_frames``, so
     this recomputes exactly that rather than refetching a price, which could
     land on a different bar and quietly decide a different contract.
+
+    Frames are loaded per (symbol, session) and cached here rather than handed
+    in, because a multi-day run loads a fresh lookback window per day and the
+    selector has to follow whichever session ``moment`` falls in.
     """
+
+    cache = {}
+
+    def _frames_for(symbol, moment):
+
+        day = pd.Timestamp(moment).tz_convert(ET).date()
+        key = (symbol, day)
+
+        if key not in cache:
+
+            try:
+
+                cache[key] = load_replay_frames(
+                    symbol, str(day), lookback_days=replay_config.lookback_days
+                )
+
+            except HistoricalDataError:
+
+                cache[key] = None
+
+        return cache[key]
 
     def _select(symbol, direction, moment):
 
-        raw = frames.get(symbol)
+        raw = _frames_for(symbol, moment)
 
         if raw is None or raw.empty:
 
@@ -147,7 +177,12 @@ def make_recording_selector(frames, replay_config, selection_config, log):
             flush=True,
         )
 
-        return ticker
+        # The contract travels with the ticker: without it the engine cannot
+        # read option quality or the expiration bucket, and every trade is
+        # classified INTRADAY on incomplete inputs. Returning a bare ticker
+        # here is what the first two-day run did, and the incomplete-input
+        # count is what caught it.
+        return ticker, contract
 
     return _select
 
@@ -165,45 +200,42 @@ def describe(ticker, spot):
     return spec, abs(spec["strike"] - spot) / spot * 100.0
 
 
-def run_day(trading_day, symbols, cadence, selection_config):
+def run_days(trading_days, symbols, cadence, selection_config):
+    """Replay consecutive sessions, carrying MULTIDAY positions across them."""
 
     replay_config = ReplayConfig()
 
-    frames = {}
-
-    for symbol in symbols:
-
-        try:
-
-            frames[symbol] = load_replay_frames(
-                symbol, trading_day, lookback_days=replay_config.lookback_days
-            )
-
-        except HistoricalDataError as exc:
-
-            print(f"  {symbol}: no frames ({str(exc)[:70]})")
-
     log = []
     replay_config.contract_selector = make_recording_selector(
-        frames, replay_config, selection_config, log
+        replay_config, selection_config, log
     )
 
-    result = replay_day(
+    def _on_day(trading_day, result):
+
+        forced = len(result["forced_eod"])
+        carried = len(result["carried"])
+
+        print(
+            f"  {trading_day}: {len(result['closed'])} closed "
+            f"({forced} forced at the bell), {carried} carried overnight"
+        )
+
+    result = replay_days(
         symbols,
-        trading_day,
-        scan_grid(trading_day, cadence),
+        trading_days,
+        lambda day: scan_grid(day, cadence),
         config=replay_config,
-        raw_frames=frames,
+        on_day=_on_day,
     )
 
-    # Positions still open at the close are reported too. Dropping them would
-    # flatter the result by silently discarding whatever was going badly enough
-    # not to have hit an exit rule yet.
+    # Still open after the final session. Reported rather than dropped: they
+    # have no exit, so they belong in no P&L total, and silently discarding
+    # them would flatter whatever was going badly enough not to have closed.
     still_open = result["open"]
 
     if still_open:
 
-        print(f"  {len(still_open)} still open at the close")
+        print(f"  {len(still_open)} still open after the last session")
 
     return result["closed"] + still_open, log
 
@@ -243,24 +275,17 @@ def main():
         f"{len(days)} day(s), {len(symbols)} symbols, {args.cadence}m cadence\n"
     )
 
-    all_trades = []
-    all_logs = []
+    all_trades, all_logs = run_days(
+        days, symbols, args.cadence, selection_config
+    )
 
-    for day in days:
+    print(f"  {len(all_trades)} trades, {len(all_logs)} selection attempts")
 
-        print(f"--- {day} ---")
-
-        trades, log = run_day(day, symbols, args.cadence, selection_config)
-
-        all_trades.extend(trades)
-        all_logs.extend(log)
-
-        print(f"  {len(trades)} trades, {len(log)} selection attempts")
-
-    print(f"\n{'='*104}")
+    print(f"\n{'='*116}")
     print(
         f"{'sym':6}{'scan':18}{'dir':5}{'contract':24}{'dte':>5}{'OTM%':>7}"
-        f"{'cost':>8}{'fill':>7}{'exit':>7}{'R':>7}  {'rule':<16}"
+        f"{'cost':>8}{'fill':>7}{'exit':>7}{'R':>7}  {'hold':<10}{'held':>5}"
+        f"  {'rule':<16}"
     )
 
     for trade in all_trades:
@@ -294,6 +319,7 @@ def main():
             f"{trade.option_ticker:24}{dte:>5}{otm:>7.1f}"
             f"{fill*100:>8.0f}{fill:>7.2f}"
             f"{exit_cell:>7}{r_cell:>7}"
+            f"  {trade.holding_profile:<10}{trade.sessions_held:>5}"
             f"  {rule_cell:<16}"
         )
 
@@ -329,6 +355,11 @@ def _persist(path, trades, log):
                 "r_multiple": trade.r_multiple,
                 "mfe_r": trade.mfe_r,
                 "mae_r": trade.mae_r,
+                "holding_profile": trade.holding_profile,
+                "holding_profile_inputs_complete": (
+                    trade.holding_profile_inputs_complete
+                ),
+                "sessions_held": trade.sessions_held,
                 "open_at_close": trade.r_multiple is None,
             }
             for trade in trades
@@ -481,6 +512,32 @@ def _summarise(trades, log):
         f"{sorted(otms)[len(otms)//2]:>5.1f}  max {max(otms):>5.1f}"
         f"\n  cost $   min {min(costs):>5.0f}  median "
         f"{sorted(costs)[len(costs)//2]:>5.0f}  max {max(costs):>5.0f}"
+    )
+
+    # Whether the MULTIDAY path is alive at all. Every unavailable input to the
+    # profile decision lowers Setup %, so a run where nothing is ever MULTIDAY
+    # is indistinguishable from a run where the classification never worked --
+    # the incomplete count is what separates them.
+    profiles = {}
+    incomplete = 0
+
+    for trade in traded:
+
+        profiles[trade.holding_profile] = profiles.get(trade.holding_profile, 0) + 1
+        incomplete += not trade.holding_profile_inputs_complete
+
+    print(
+        "\nholding profile: "
+        + ", ".join(f"{k} x{v}" for k, v in sorted(profiles.items()))
+        + f"   (decided on incomplete inputs: {incomplete}/{len(traded)})"
+    )
+
+    forced = [t for t in traded if t.exit_rule == "FORCE_EOD_EXIT"]
+    carried = [t for t in traded if t.sessions_held > 0]
+
+    print(
+        f"  force-closed at the bell: {len(forced)}"
+        f"   carried overnight: {len(carried)}"
     )
 
     closed = [t for t in traded if t.r_multiple is not None]
