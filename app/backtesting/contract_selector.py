@@ -55,7 +55,13 @@ class SelectionConfig:
     min_dte: int = DEFAULT_MIN_DTE
     max_dte: int = DEFAULT_MAX_DTE
     max_moneyness_pct: float = DEFAULT_MAX_MONEYNESS_PCT
-    max_priced_contracts: int = 24
+    # Must be large enough to reach the strikes affordability actually selects.
+    # At 24, sorted nearest-the-money and split across the two or three expiries
+    # in the DTE window, the band is only about +/-4 strikes -- so on a $122
+    # underlying the $130 call live bought was never priced, and the selector
+    # reported "no affordable contract" for a trade that had one. The prefilter
+    # exists to avoid pricing the whole chain, not to pre-empt the ranker.
+    max_priced_contracts: int = 72
     paper_mode: bool = True
     require_quote: bool = True
     # Live's preferred DTE window, applied after ranking.

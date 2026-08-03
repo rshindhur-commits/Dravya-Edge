@@ -38,6 +38,7 @@ from app.backtesting.historical_market_data import (
     HistoricalDataError,
     POLYGON_BASE_URL,
     fetch_bars,
+    request_with_retry,
 )
 
 MARKET_TZ = "America/New_York"
@@ -139,16 +140,12 @@ def list_contracts_as_of(
 
     while next_url:
 
-        response = requests.get(next_url, params=params, timeout=timeout)
-
-        if response.status_code != 200:
-
-            raise HistoricalDataError(
-                f"Polygon returned {response.status_code} listing contracts for "
-                f"{underlying} as of {day}: {response.text[:200]}"
-            )
-
-        payload = response.json()
+        payload = request_with_retry(
+            next_url,
+            params,
+            timeout=timeout,
+            context=f"contracts for {underlying} as of {day}",
+        ).json()
         contracts.extend(payload.get("results") or [])
 
         next_url = payload.get("next_url")
@@ -184,31 +181,12 @@ def quote_at(ticker, moment, lookback_minutes=30, max_retries=4):
 
     url = f"{POLYGON_BASE_URL}/v3/quotes/{ticker}"
 
-    payload = None
-
-    for attempt in range(max_retries):
-
-        response = requests.get(url, params=params, timeout=30)
-
-        if response.status_code == 200:
-
-            payload = response.json()
-            break
-
-        if response.status_code != 429:
-
-            raise HistoricalDataError(
-                f"Polygon returned {response.status_code} quoting {ticker} at "
-                f"{end}: {response.text[:200]}"
-            )
-
-        time.sleep(2 ** attempt)
-
-    if payload is None:
-
-        raise HistoricalDataError(
-            f"Polygon rate limit not cleared quoting {ticker}"
-        )
+    payload = request_with_retry(
+        url,
+        params,
+        max_retries=max_retries,
+        context=f"quote for {ticker} at {end}",
+    ).json()
 
     results = payload.get("results") or []
 

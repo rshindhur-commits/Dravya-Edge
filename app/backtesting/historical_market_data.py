@@ -72,6 +72,55 @@ class HistoricalDataError(RuntimeError):
     """
 
 
+def request_with_retry(url, params, timeout=30, max_retries=4, context=""):
+    """GET with backoff over both rate limits and transient transport faults.
+
+    Retrying only on 429 is not enough at replay volume. A single scan can
+    price seventy contracts, each needing bars and a quote, so a year-long run
+    makes millions of requests and will meet dropped connections and read
+    timeouts regardless of how well-behaved it is. Those are not answers from
+    Polygon and must not be treated as fatal, but a non-429 HTTP status is an
+    answer -- it will say the same thing however long we wait -- so only
+    transport faults and 429 are retried.
+    """
+
+    last_error = None
+
+    for attempt in range(max_retries):
+
+        try:
+
+            response = requests.get(url, params=params, timeout=timeout)
+
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ) as exc:
+
+            last_error = exc
+            time.sleep(2 ** attempt)
+            continue
+
+        if response.status_code == 200:
+
+            return response
+
+        if response.status_code != 429:
+
+            raise HistoricalDataError(
+                f"Polygon returned {response.status_code} for {context or url}: "
+                f"{response.text[:200]}"
+            )
+
+        time.sleep(2 ** attempt)
+
+    raise HistoricalDataError(
+        f"Polygon unreachable for {context or url} after {max_retries} "
+        f"attempts: {last_error}"
+    )
+
+
 def _api_key():
 
     key = os.getenv("POLYGON_API_KEY")
@@ -149,34 +198,12 @@ def fetch_bars(
 
     while next_url:
 
-        payload = None
-
-        for attempt in range(max_retries):
-
-            response = requests.get(next_url, params=params, timeout=30)
-
-            if response.status_code == 200:
-
-                payload = response.json()
-                break
-
-            # 429 is the only status worth waiting on; anything else will
-            # return the same answer however long we sit on it.
-            if response.status_code != 429:
-
-                raise HistoricalDataError(
-                    f"Polygon returned {response.status_code} for {ticker} "
-                    f"{start_day}..{end_day}: {response.text[:200]}"
-                )
-
-            time.sleep(2 ** attempt)
-
-        if payload is None:
-
-            raise HistoricalDataError(
-                f"Polygon rate limit not cleared for {ticker} after "
-                f"{max_retries} attempts"
-            )
+        payload = request_with_retry(
+            next_url,
+            params,
+            max_retries=max_retries,
+            context=f"{ticker} {start_day}..{end_day}",
+        ).json()
 
         results.extend(payload.get("results") or [])
 
