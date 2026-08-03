@@ -72,6 +72,21 @@ def _load_dotenv_keeping_db_disabled(*args, **kwargs):
 dotenv.load_dotenv = _load_dotenv_keeping_db_disabled
 
 
+# Imported last, so the env above and the patch above are both already in place
+# when app.db.connection runs its own load_dotenv at import.
+#
+# The env kill switch is necessary and was not sufficient. On 2026-08-03 four
+# full-suite runs put four `failure_reason='boom'` rows into the production
+# telegram_dispatch table with all of the above already in force, and the route
+# was never identified -- so this closes the class rather than the instance. It
+# is a module-level flag, not an environment variable, which is the point:
+# db_writes_enabled() is read at execution time inside RuntimeScheduler threads,
+# and no amount of .env reloading can turn this back on.
+from app.db.persistence import disable_db_writes_for_process  # noqa: E402
+
+disable_db_writes_for_process()
+
+
 @atexit.register
 def _cleanup_sandbox():
 

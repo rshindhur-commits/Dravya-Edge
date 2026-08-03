@@ -16,7 +16,39 @@ from app.db.connection import get_engine
 logger = logging.getLogger(__name__)
 
 
+# Set once, never cleared. Everything below answers from os.environ, which stays
+# mutable for the life of the process and -- because BestEffortRepository checks
+# at *execution* time -- is read inside RuntimeScheduler threads, long after the
+# caller queued the job. So a write can be queued while writes are off and land
+# after something turns them back on.
+#
+# tests/__init__ blanks DATABASE_URL and DB_WRITE_ENABLED before any app import,
+# and on 2026-08-03 dispatch rows from tests/test_telegram_dispatcher.py reached
+# the production telegram_dispatch table anyway: `failure_reason='boom'`, four
+# rows, one per full-suite run. The route was never pinned down. That is the
+# argument for a switch that does not require knowing it -- nothing in app code
+# sets this, no .env reload or env restore can clear it, and it is checked before
+# anything mutable.
+_WRITES_HARD_DISABLED = False
+
+
+def disable_db_writes_for_process() -> None:
+    """Irreversibly disable DB writes for this interpreter.
+
+    Called by tests/__init__. Deliberately one-way: a toggle would reintroduce
+    exactly the window this closes.
+    """
+
+    global _WRITES_HARD_DISABLED
+
+    _WRITES_HARD_DISABLED = True
+
+
 def db_writes_enabled() -> bool:
+    if _WRITES_HARD_DISABLED:
+
+        return False
+
     value = os.getenv("DB_WRITE_ENABLED", "false")
 
     return str(value).strip().lower() in [
