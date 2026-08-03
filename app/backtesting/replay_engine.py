@@ -250,6 +250,21 @@ def _open_trade(symbol, moment, scan_id, df_5m, df_15m, analysis_15m, config):
 
         ticker = config.contract_selector(symbol, direction, moment)
 
+        # A configured selector that resolves nothing means there was no
+        # contract to buy, so there is no trade. Falling through would open a
+        # position on the underlying and manage it to an exit, which produces
+        # an R for something that could never have been placed -- and, worse,
+        # spends the max_open_positions slot, suppressing tradeable signals
+        # behind an untradeable one. On the first forward day, 12 of 16 signals
+        # resolved to no contract, so this is most of the run rather than an
+        # edge case.
+        #
+        # Only when a selector is configured. Parity runs leave it None and
+        # pin the contract live bought, and must keep opening on that basis.
+        if not ticker:
+
+            return None
+
     if ticker:
 
         quote = quote_at(ticker, moment)
