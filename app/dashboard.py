@@ -83,7 +83,7 @@ from app.storage.auto_paper_decision_store import (
     update_recent_auto_paper_log
 )
 from app.runtime import get_runtime_scheduler, measure_runtime
-from app.storage.daily_paths import daily_path, get_daily_dir
+from app.storage.daily_paths import daily_path, get_daily_dir, telemetry_path
 from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
 from app.ui.components import kpi_card
 
@@ -168,7 +168,7 @@ LIVE_SCANNER_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.xlsx"
 LIVE_SCANNER_CSV_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.csv"
 LIVE_DASHBOARD_STATE_FILE = ROOT_DIR / "data" / "live" / "dashboard_state.json"
 TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "trade_state.json"
-TELEMETRY_FILE = ROOT_DIR / "telemetry" / "trade_telemetry.csv"
+TELEMETRY_FILE = telemetry_path("trade_telemetry.csv")
 PAPER_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "paper_trade_state.json"
 SUGGESTED_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "suggested_trade_state.json"
 AI_SUMMARY_CACHE_FILE = ROOT_DIR / settings.ai_summary_cache_file
@@ -2861,6 +2861,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
     # Streamlit's import of the dashboard independent of the runtime package.
     from app.runtime.paper_automation_support import (
         _decision_rr,
+        _effective_gate_floors,
         write_auto_paper_decision,
     )
 
@@ -2885,8 +2886,13 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "scan_timestamp": scan_timestamp,
         **classify_decision_time(decision_time),
         "gate_mode": "auto_paper",
-        "min_rr_used": controls.get("min_rr"),
-        "min_setup_used": controls.get("min_setup"),
+        # Shared with the scan-path recorder: the scanner gate's regime-escalated
+        # floor when the row carries one, and the auto-paper control only when it
+        # does not. Recording the control as "the floor used" made every
+        # SETUP_BELOW_THRESHOLD row read as a contradiction.
+        **_effective_gate_floors(row, controls),
+        "auto_paper_min_rr": controls.get("min_rr"),
+        "auto_paper_min_setup": controls.get("min_setup"),
         "symbol": symbol,
         "decision": decision,
         "reason": reason,

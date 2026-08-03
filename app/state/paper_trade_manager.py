@@ -1203,6 +1203,26 @@ def close_paper_trade(
     trade["r_multiple"] = result["r_multiple"]
     trade["outcome"] = result["outcome"]
 
+    # A trade cannot close above its own high-water mark.
+    #
+    # `mfe_r` is ratcheted in `update_paper_trade`, which runs on holding scans
+    # only -- the scan that closes the trade goes through this function instead,
+    # so the final and usually highest excursion was never folded in. ORCL on
+    # 2026-08-03 recorded `mfe_r = 1.43` and realised **+2.41R**; SMCI recorded
+    # 1.39 against a 2.07R peak its own `highest_price` had captured correctly.
+    #
+    # That is not only a reporting error. `_trend_capture_pct` divides realised R
+    # by MFE, so it reported 168% capture on ORCL, and the profit-lock watch in
+    # POST_CHANGE_WATCHLIST 1.1 compares an exit against the peak it was meant to
+    # defend -- both reasoning about a peak recorded lower than the outcome.
+    #
+    # Ratcheted rather than assigned, so a genuine giveback still shows: SMCI's
+    # locked exit keeps its 2.07R peak against a +1.00R close.
+    realised_r = _safe_float(result["r_multiple"])
+
+    if realised_r is not None:
+        trade["mfe_r"] = max(_safe_float(trade.get("mfe_r")) or 0.0, realised_r)
+
     # Underlying P&L above is not what the account earns: the position is an
     # option. Record the exit premium and both the mid-to-mid and the realistic
     # ask-to-bid return, so the spread cost is visible instead of silent.

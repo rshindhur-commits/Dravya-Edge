@@ -179,5 +179,78 @@ class OwnershipStandbyTests(unittest.TestCase):
         run_scanner.assert_called_once()
 
 
+class RestartReportingTests(unittest.TestCase):
+    """A worker that is killed leaves no trace once its successor publishes.
+
+    The heartbeat is keyed on instance_id, so the new process overwrites the old
+    row and resets `scans` to zero. A clean SIGTERM writes STOPPED on the way out
+    and explains itself; an OOM kill writes nothing at all.
+    """
+
+    def _report(self, previous):
+        repository = patch(
+            "app.db.scan_engine_heartbeat_repository.ScanEngineHeartbeatRepository"
+        )
+
+        with repository as factory, \
+             patch("app.runtime.scan_loop._notify_operator") as notify, \
+             patch("app.runtime.scan_loop._publish_heartbeat") as heartbeat:
+
+            factory.return_value.fetch_instance.return_value = previous
+            result = scan_loop._report_restart()
+
+        return result, notify, heartbeat
+
+    def test_an_unclean_restart_is_announced(self):
+
+        previous = {
+            "status": "SCANNING", "hostname": "srv-old", "scans": 41,
+            "failures": 0, "last_scan_at": "2026-08-03 20:19:35+00:00",
+            "last_error": None, "age_seconds": 5040.0,
+        }
+
+        result, notify, heartbeat = self._report(previous)
+
+        self.assertEqual(result, previous)
+        notify.assert_called_once()
+        self.assertIn("restarted", notify.call_args.args[1].lower())
+        # 5040s is 84 minutes.
+        self.assertIn("84 minutes ago", notify.call_args.args[1])
+
+        # And recorded on the row, so it survives an undelivered alert.
+        status, kwargs = heartbeat.call_args.args[0], heartbeat.call_args.kwargs
+        self.assertEqual(status, "STARTING")
+        self.assertEqual(kwargs["payload"]["restarted_from"]["scans"], 41)
+
+    def test_a_clean_shutdown_is_not_an_incident(self):
+
+        result, notify, _ = self._report({
+            "status": "STOPPED", "hostname": "srv-old", "scans": 41,
+            "last_error": "stopped: terminated by signal 15", "age_seconds": 60.0,
+        })
+
+        self.assertIsNone(result)
+        notify.assert_not_called()
+
+    def test_a_first_ever_start_is_not_a_restart(self):
+
+        result, notify, _ = self._report(None)
+
+        self.assertIsNone(result)
+        notify.assert_not_called()
+
+    def test_an_unreadable_row_makes_no_claim(self):
+        """"Could not ask" must never be reported as "restarted"."""
+
+        with patch(
+            "app.db.scan_engine_heartbeat_repository.ScanEngineHeartbeatRepository",
+            side_effect=RuntimeError("no database"),
+        ), patch("app.runtime.scan_loop._notify_operator") as notify:
+
+            self.assertIsNone(scan_loop._report_restart())
+
+        notify.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

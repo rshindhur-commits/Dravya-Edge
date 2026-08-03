@@ -58,22 +58,56 @@ against the peak — the peak was never available to take.
 four `PROFIT_LOCK_*` settings are env-tunable, so this can be retuned or
 disabled without a deploy.
 
-### 1.2 Stop-viability enforcement has still never fired
+### 1.2 ~~Stop-viability enforcement has still never fired~~ — IT FIRES
 
-**Why.** Ten historical blocks all fell on CALLs, which was the reason to watch
-for direction tilt. In the first live session it produced **zero** blocks —
-`execution_eligibility` never reached it, because RR rejects first. It remains
-completely unvalidated in production.
+**Answered on 2026-08-03: 11 blocks in one session**, all on SMCI, at multiples of
+0.49×, 0.56×, 0.82×, 0.83×, 0.83× and 0.87×. The gate is reachable, it is
+enforcing, and "RR always rejects first" was true only of 07-31's flow.
 
-**Watch.** Count of `STOP_INSIDE_OPTION_SPREAD` per session, and the direction
-split of opened trades.
+**It did not stop the loss it looks like it should have.** SMCI opened at 12:28 ET
+with `stop_spread_multiple = 1.69` — clear of the 1.0 bar with room — and closed
+at −1.0R. The entry spread was 2.65%; the **exit** spread was 4.55%, and realised
+`option_spread_cost_pct` came in at 3.51% against a gross loss of 2.46%. **Friction
+was 59% of that loss and none of it was visible at entry.** No entry-time multiple
+could have caught it, and a threshold high enough to block 1.69× would be fitted to
+a single trade.
 
-**Trigger.** Still zero after a week of sessions with entries means the gate is
-unreachable in practice and the calibration exercise was moot.
+**All six opened trades, by multiple:** 5.34 (−0.74R), 2.11 (−0.33R), 5.32
+(+0.60R), 3.59 (+2.41R), 1.69 (−1.00R), 2.48 (+1.00R). The only entry below 2.0
+lost. One observation, not a threshold. Note this supersedes the "CRWD cleared at
+1.37×" figure this section previously carried — the ledger records 2.11.
 
-**One data point exists.** CRWD cleared at **1.37×** — inside the 1.05–1.43 band
-that a 1.5 multiple would reject — and lost. NVDA #1 cleared at 5.02× and also
-lost. Keep counting that band; see 3.2.
+**Watch.** `stop_round_trip_spread_pct` at entry against realised
+`option_spread_cost_pct` at exit. Recordable for the first time as of the 08-03
+change set; before it the ledger kept the multiple and discarded every input.
+
+**Trigger.** Realised cost exceeding the entry spread by more than ~1.5× on a third
+of trades means the gate is watching the wrong end of the trade, and the answer is
+an exit-spread guard, not a higher entry multiple.
+
+### 1.2a Position caps are not the constraint — stop reaching for them
+
+**Measured across every session on record.** Max *concurrent* open positions by
+day: 07-09 1, 07-10 1, 07-17 2, 07-20 1, 07-29 1, 07-30 **3**, 07-31 1, 08-03 1.
+Trades run sequentially, not in parallel — on 08-03 ORCL closed at 16:28:33 and
+SMCI opened at 16:28:33, the same second, so peak exposure was **one** position
+against a cap of four.
+
+`MAX_ACTIVE_PAPER_TRADES_REACHED`, `DIRECTION_ALREADY_ACTIVE` and
+`DAILY_AUTO_PAPER_LIMIT_REACHED` have produced **5 blocks in total, ever**, and
+none on 08-03.
+
+**Why this is worth writing down.** Aggregate-exposure arithmetic (4 positions x
+the cost cap) looks alarming and has never once described reality. Lowering the
+concurrency caps as a risk control costs nothing on a normal day and costs a trade
+on exactly the days worth capturing — 07-30 was the only session that ever reached
+3. Per-*trade* cost is the exposure dial that actually moves; concurrency is not.
+
+**Where the trades actually go, 08-03:** `NO_ENTRY_TRIGGER` 388,
+`NO_DIRECTIONAL_EDGE` 132, `RISK_REJECTED` 103, `OPTION_REJECTED` 98, `LOW_RR` 72.
+
+**Revisit when** max concurrent reaches the cap on three sessions in a fortnight.
+Until then the caps are documentation, not constraints.
 
 ### 1.3 Direction tilt
 
@@ -512,6 +546,64 @@ with which symbols the feed lags.
 | `eb56f75` | MFE ratchets instead of overwriting; profit lock on low-confidence soft exits; `upsert_paper_trade` refuses to regress a `CLOSED` row; `option_entry_ask` frozen at open |
 
 Tests 305 → **426**.
+
+### 2026-08-03, after the session
+
+Four changes, none of which alters an open position.
+
+| Area | Change |
+| --- | --- |
+| Spread-to-stop gate | `spread_cost_exceeds_risk` delegates to `evaluate_stop_viability` instead of repeating its arithmetic. The rule existed **twice**, with reciprocal environment variables (`MIN_STOP_SPREAD_MULTIPLE` vs `AUTO_PAPER_MAX_SPREAD_TO_RISK`) and different premium fallbacks, so raising one left the other at 1.0. Survivable only because the auto-paper copy sits downstream of a row the scanner already downgraded — set `STOP_VIABILITY_ENFORCE=false` and the looser copy becomes the only one running. The legacy variable is still honoured as its reciprocal. **No threshold moved.** |
+| Decision ledger | `min_setup_used` records the floor that actually applied (`ENTRY_GATE_MIN_SETUP`, regime-escalated) rather than the auto-paper control. On 08-03 it logged 62 beside `SETUP_BELOW_THRESHOLD` blocks at setup 62, 70 and 79 — three rows that read as contradictions. The control is kept as `auto_paper_min_setup`. Contract economics — delta, premium, bid/ask, ticker, the stop-viability inputs — now reach the payload; **not one of 869 rows on 08-03 carried any of them**, which is why the 11 spread blocks cannot be recalibrated. |
+| Rule emitter | `Option Quality` and `Quote Freshness` are emitted only once a contract has been priced, matching what `Option Spread` always did. A candidate that dies at Momentum never gets one, so both scored 0.0 against their floors: **2,913 fabricated failures against 77 real evaluations on 08-03**, none of them blocking, which is how Option Quality came to head the rule tables while costing nothing. |
+| Worker restarts | The heartbeat is keyed on `instance_id`, so a restarting worker overwrites its predecessor and resets `scans` to 0. A SIGTERM writes `STOPPED` and explains itself; an OOM kill writes nothing. Startup now reads the previous row first and, when it was still claiming to be alive, alerts the operator and carries `restarted_from` into its own payload. |
+| Leverage in ranking | `Option Premium % of Notional` becomes a scoring component, funded out of the existing contract budget (option quality 0.15 + liquidity 0.10) so the weights still sum to 1.0 and `RANK_LEVERAGE_WEIGHT=0` restores the old scores exactly. |
+| Profile budgets | `MAX_ACTIVE_INTRADAY_TRADES` / `MAX_ACTIVE_MULTIDAY_TRADES` and `MAX_DAILY_INTRADAY_ENTRIES` / `MAX_DAILY_MULTIDAY_ENTRIES`. **All four default to the shared caps, so this is inert until set.** |
+
+Tests 426 → **841**.
+
+#### Leverage weighting — what it is and what to watch
+
+R is computed entirely on the underlying, so it cannot see what the contract costs
+to control it. 2026-08-03: ORCL and SMCI both went the right way; ORCL booked
++2.41R and **+26.4% of premium**, SMCI booked +1.0R and **+5.1%**. ORCL's contract
+cost 2.6% of notional, SMCI's 9.5%.
+
+Measured over 77 archived candidates carrying both a premium and an entry price:
+
+| | min | p10 | p25 | median | p75 | p90 | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Premium as % of notional | 1.21 | 1.59 | 1.68 | 3.41 | 9.51 | 10.64 | 10.85 |
+
+By symbol, with implied elasticity (delta × spot / premium):
+
+```
+AAPL 1.43 (23.4x)  TSLA 1.52 (23.7x)  AMZN 1.67 (20.8x)  NVDA 2.18 (24.3x)
+ORCL 2.63 (13.1x)  XOM  2.68 (15.8x)  NFLX 3.41 (15.5x)  SMCI 9.51 (5.7x)
+```
+
+Scored on premium/notional rather than elasticity because the contract ranker bands
+delta to 0.25–0.75 and penalises distance from 0.55 at 100 points per unit, so the
+two orderings coincide. **Widen that band and this must become elasticity**, or it
+starts rewarding far-OTM lottery tickets.
+
+**Replayed over 4,654 archived rows across 179 scans: 419 rows (9%) change rank.**
+SMCI is the only symbol materially affected — mean +1.20 ranks, and it loses rank 1
+in three scans by an average of 5.7 places. Every other symbol moves by under a
+third of a rank on average.
+
+**Watch.** `Option Premium % of Notional` on opened trades against realised
+`option_pnl_pct`. **Trigger.** Median premium ratio on opened trades not falling
+below ~5% within two weeks means the component is not reaching the decision — see
+the open item below.
+
+**Open, and deliberately not done.** This changes `Candidate Rank`, which gates
+entry only through `AUTO_PAPER_MAX_CANDIDATE_RANK`. It does **not** change
+`Top Candidate` (`BULLISH_TOP_1..3`), which is ordered by `Expected Value Score`
+= setup × RR in `_add_expected_value_rank` and is premium-blind. Both SMCI entries
+on 08-03 came in as `BULLISH_TOP_1`, so neither would have been blocked by this
+change. Folding leverage into the expected-value ordering would alter which trades
+are taken on every scan and is its own decision.
 
 ### Manual data corrections
 

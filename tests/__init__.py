@@ -30,6 +30,10 @@ _SANDBOX = tempfile.mkdtemp(prefix="dravya-tests-")
 
 os.environ.setdefault("DRAVYA_DATA_DIR", os.path.join(_SANDBOX, "data"))
 os.environ.setdefault("DRAVYA_STATE_DIR", os.path.join(_SANDBOX, "state"))
+# telemetry/ resolved as a bare relative path and so was never covered by the two
+# roots above: any test reaching close_paper_trade appended real rows to the
+# tracked telemetry/trade_telemetry.csv.
+os.environ.setdefault("DRAVYA_TELEMETRY_DIR", os.path.join(_SANDBOX, "telemetry"))
 
 
 def _disable_db_writes():

@@ -749,6 +749,41 @@ def build_entry_gate_diagnostics(
     }
 
 
+# Every one of these is copied off the selected contract. The scanner writes the
+# whole block as None when no `option_recommendation` was produced, so "all absent"
+# is exactly "contract selection never reached this candidate".
+_CONTRACT_FIELDS = (
+    ("Option Mid Price", "option_mid_price"),
+    ("Option Ask", "option_ask"),
+    ("Option Bid", "option_bid"),
+    ("Option Spread %", "option_spread_pct", "spread_pct"),
+    ("Option Quote Freshness", "option_quote_freshness", "quote_freshness"),
+    ("Option Ticker", "option_ticker"),
+)
+
+
+def _contract_was_priced(row):
+    """Is anything at all known about a contract for this candidate?
+
+    Not "is the contract good" -- that is the rule's own job. This only separates
+    an evaluated contract from an absent one, so a candidate that died before
+    selection stops being recorded as an option failure it never had the chance to
+    have.
+    """
+
+    for field in _CONTRACT_FIELDS:
+
+        value = _row_get(row, *field, default=None)
+
+        if value is None:
+            continue
+
+        if str(value).strip().lower() not in {"", "nan", "none"}:
+            return True
+
+    return False
+
+
 def build_entry_gate_rule_evaluations(row, config: EntryGateConfig, scan_id: str, mode: str = "paper"):
     """The entry validator's native structured audit output."""
     from app.gates.rule_evaluation import RuleEvaluation
@@ -763,10 +798,23 @@ def build_entry_gate_rule_evaluations(row, config: EntryGateConfig, scan_id: str
     evaluations = [
         item("Setup", "Entry", diagnostics["setup"], diagnostics["min_setup"], diagnostics["setup"] >= diagnostics["min_setup"], 80),
         item("RR", "Risk", diagnostics["rr"], diagnostics["min_rr"], diagnostics["rr"] >= diagnostics["min_rr"], 90),
-        item("Option Quality", "Option", diagnostics["option_quality"], diagnostics["min_option_quality"], diagnostics["option_quality"] >= diagnostics["min_option_quality"], 80),
-        item("Quote Freshness", "Realtime", diagnostics["quote_freshness"], "LIVE_QUOTE", diagnostics["quote_freshness"] == "LIVE_QUOTE", 80),
         item("Affordability", "Affordability", diagnostics["affordable"], True, not _bool_false(diagnostics["affordable"]), 70),
     ]
+
+    # The contract rules are only emitted once a contract exists.
+    #
+    # A candidate that dies at Momentum or Setup never gets one priced, so
+    # option_quality defaults to 0.0 and quote_freshness to None -- and recording
+    # those as failures reports a rule that was never evaluated. On 2026-08-03 that
+    # was 2,913 fabricated Option Quality failures against 77 real evaluations, all
+    # of them non-blocking, which is how "Option Quality" came to head the rule
+    # tables every day while costing nothing. `Option Spread` has always been
+    # conditional here; this extends the same test to its two neighbours.
+    if _contract_was_priced(row):
+        evaluations.append(item("Option Quality", "Option", diagnostics["option_quality"], diagnostics["min_option_quality"], diagnostics["option_quality"] >= diagnostics["min_option_quality"], 80))
+        evaluations.append(item("Quote Freshness", "Realtime", diagnostics["quote_freshness"], "LIVE_QUOTE", diagnostics["quote_freshness"] == "LIVE_QUOTE", 80))
+
     if diagnostics["spread"] is not None:
         evaluations.append(item("Option Spread", "Option", diagnostics["spread"], diagnostics["max_spread"], diagnostics["spread"] <= diagnostics["max_spread"], 70))
+
     return evaluations

@@ -165,7 +165,17 @@ def build_expectancy_table(df, group_columns):
     return result[ordered_columns + available_groups]
 
 
-def load_telemetry(telemetry_path="telemetry/trade_telemetry.csv"):
+def _default_telemetry_path():
+    """Resolved through the storage root, so tests cannot read the live file."""
+
+    from app.storage.daily_paths import telemetry_path
+
+    return str(telemetry_path("trade_telemetry.csv"))
+
+
+def load_telemetry(telemetry_path=None):
+
+    telemetry_path = telemetry_path or _default_telemetry_path()
 
     if not os.path.exists(telemetry_path):
 
@@ -174,8 +184,9 @@ def load_telemetry(telemetry_path="telemetry/trade_telemetry.csv"):
     return pd.read_csv(telemetry_path)
 
 def generate_expectancy_report(
-    telemetry_path="telemetry/trade_telemetry.csv"
+    telemetry_path=None
 ):
+    telemetry_path = telemetry_path or _default_telemetry_path()
     try:
 
         if os.path.exists(

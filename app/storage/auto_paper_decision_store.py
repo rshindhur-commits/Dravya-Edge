@@ -24,8 +24,12 @@ AUTO_PAPER_DECISION_FIELDS = [
     "minutes_from_open",
     "minutes_to_close",
     "gate_mode",
+    # The floor the candidate was judged against, which is the scanner gate's
+    # regime-escalated one and not usually the auto-paper control beside it.
     "min_rr_used",
     "min_setup_used",
+    "auto_paper_min_rr",
+    "auto_paper_min_setup",
     "symbol",
     "decision",
     "reason",
@@ -81,6 +85,27 @@ AUTO_PAPER_DECISION_FIELDS = [
     "stop_spread_multiple",
     "stop_viability_would_block",
     "stop_viability_enforced",
+    # The stop-viability inputs. Without these the multiple cannot be recalibrated:
+    # 2026-08-03 recorded eleven blocks at 0.49x-0.87x and no way to recover the
+    # spread, delta or premium any of them was computed from.
+    "stop_move_pct_of_premium",
+    "stop_round_trip_spread_pct",
+    "stop_required_spread_multiple",
+    # Contract economics at decision time. option_quality_score, option_spread_pct,
+    # option_quote_freshness and expiration_bucket are listed further up; these are
+    # the rest of what it costs to trade the contract.
+    "option_delta",
+    "option_mid_price",
+    "option_bid",
+    "option_ask",
+    "option_ticker",
+    "option_contract_cost",
+    "candidate_entry_price",
+    "candidate_stop_price",
+    "candidate_target_price",
+    "candidate_direction",
+    "candidate_rank",
+    "holding_profile",
     "iv_rv_ratio",
     "iv_richness",
     "iv_richness_would_block",

@@ -192,5 +192,108 @@ class RowGateTests(unittest.TestCase):
             self.assertEqual(result["STOP_VIABILITY_ENFORCED"], enforcing)
 
 
+class AutoPaperDelegationTests(unittest.TestCase):
+    """`spread_cost_exceeds_risk` is the same rule, not a second copy of it.
+
+    Two implementations existed with reciprocal environment variables --
+    MIN_STOP_SPREAD_MULTIPLE here, AUTO_PAPER_MAX_SPREAD_TO_RISK there -- so
+    tightening one left the other at its own default. These pin them together.
+    """
+
+    def _row(self, spread_pct=8.0, **overrides):
+        row = {
+            "Candidate Entry Price": 122.06,
+            "Candidate Stop Price": 121.90,
+            "Option Mid Price": 2.00,
+            "Option Delta": 0.50,
+            "Option Spread %": spread_pct,
+        }
+        row.update(overrides)
+        return row
+
+    def test_a_stop_inside_the_spread_is_blocked(self):
+        from app.runtime.paper_automation_support import spread_cost_exceeds_risk
+
+        blocked, reason = spread_cost_exceeds_risk(self._row())
+
+        self.assertTrue(blocked)
+        self.assertIn("SPREAD_EXCEEDS_RISK", reason)
+        # The multiple and the requirement both appear, so the ledger records how
+        # far short the trade fell rather than only that it did.
+        self.assertIn("need", reason)
+
+    def test_a_viable_stop_is_allowed(self):
+        from app.runtime.paper_automation_support import spread_cost_exceeds_risk
+
+        blocked, reason = spread_cost_exceeds_risk(self._row(spread_pct=1.0))
+
+        self.assertFalse(blocked)
+        self.assertIsNone(reason)
+
+    def test_the_shared_multiple_reaches_this_path(self):
+        """The defect: raising MIN_STOP_SPREAD_MULTIPLE left this copy at 1.0."""
+
+        from app.runtime import paper_automation_support
+
+        # 4.0% move to stop against a 2.65% spread -- 1.51x, the SMCI shape.
+        row = self._row(spread_pct=2.65, **{
+            "Candidate Entry Price": 28.62,
+            "Candidate Stop Price": 28.40,
+            "Option Mid Price": 2.645,
+            "Option Delta": 0.524,
+        })
+
+        with patch("app.risk.stop_viability.min_stop_spread_multiple", return_value=1.0):
+            self.assertFalse(paper_automation_support.spread_cost_exceeds_risk(row)[0])
+
+        with patch("app.risk.stop_viability.min_stop_spread_multiple", return_value=2.0):
+            self.assertTrue(paper_automation_support.spread_cost_exceeds_risk(row)[0])
+
+    def test_missing_option_data_never_blocks(self):
+        from app.runtime.paper_automation_support import spread_cost_exceeds_risk
+
+        for field in ("Option Delta", "Option Mid Price", "Option Spread %"):
+            row = self._row()
+            row[field] = None
+
+            self.assertFalse(spread_cost_exceeds_risk(row)[0], field)
+
+    def test_a_stop_at_entry_is_left_to_the_risk_manager(self):
+        """Zero risk is a real failure, but not a spread failure."""
+
+        from app.runtime.paper_automation_support import spread_cost_exceeds_risk
+
+        row = self._row(**{"Candidate Stop Price": 122.06})
+
+        self.assertFalse(spread_cost_exceeds_risk(row)[0])
+
+    def test_the_legacy_variable_is_honoured_as_its_reciprocal(self):
+        """AUTO_PAPER_MAX_SPREAD_TO_RISK=0.5 means the same as a 2.0 multiple."""
+
+        from app.runtime.paper_automation_support import (
+            _legacy_spread_to_risk_multiple,
+            spread_cost_exceeds_risk,
+        )
+
+        with patch.dict("os.environ", {"AUTO_PAPER_MAX_SPREAD_TO_RISK": "0.5"}):
+            self.assertAlmostEqual(_legacy_spread_to_risk_multiple(), 2.0)
+
+            # 4.0% move against a 2.65% spread is 1.51x: fine at 1.0, short at 2.0.
+            row = self._row(spread_pct=2.65, **{
+                "Candidate Entry Price": 28.62,
+                "Candidate Stop Price": 28.40,
+                "Option Mid Price": 2.645,
+                "Option Delta": 0.524,
+            })
+
+            self.assertTrue(spread_cost_exceeds_risk(row)[0])
+
+    def test_an_unset_legacy_variable_defers_to_the_shared_default(self):
+        from app.runtime.paper_automation_support import _legacy_spread_to_risk_multiple
+
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(_legacy_spread_to_risk_multiple())
+
+
 if __name__ == "__main__":
     unittest.main()

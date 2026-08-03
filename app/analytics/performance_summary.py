@@ -1,6 +1,8 @@
 import pandas as pd
 import os
 
+from app.storage.daily_paths import telemetry_path as telemetry_file
+
 
 def _print_value_counts(df, column, title):
 
@@ -43,9 +45,8 @@ def summarize_telemetry():
 
     try:
 
-        telemetry_path = (
-            "telemetry/"
-            "trade_telemetry.csv"
+        telemetry_path = str(
+            telemetry_file("trade_telemetry.csv")
         )
 
         if not os.path.exists(

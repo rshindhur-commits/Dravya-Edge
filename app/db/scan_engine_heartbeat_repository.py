@@ -94,6 +94,29 @@ class ScanEngineHeartbeatRepository(BestEffortRepository):
             {"within_seconds": int(within_seconds)},
         )
 
+    def fetch_instance(self, instance_id):
+        """The row this engine is about to overwrite, or None.
+
+        The table is keyed on instance_id, so a restarting worker replaces its own
+        predecessor's row and the fact that a restart happened leaves no trace.
+        Read it first and the predecessor's last state is recoverable -- which is
+        the difference between "Render restarted the worker" and a silent gap.
+        """
+
+        rows = self._fetch(
+            """
+            SELECT instance_id, owner, hostname, status, session,
+                   last_scan_id, last_scan_at, scans, failures, last_error,
+                   updated_at,
+                   EXTRACT(EPOCH FROM (NOW() - updated_at)) AS age_seconds
+            FROM scan_engine_heartbeat
+            WHERE instance_id = :instance_id
+            """,
+            {"instance_id": str(instance_id)},
+        )
+
+        return rows[0] if rows else None
+
     def fetch_all(self):
         return self._fetch(
             """

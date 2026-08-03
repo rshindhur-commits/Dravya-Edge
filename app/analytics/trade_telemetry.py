@@ -4,7 +4,7 @@ from datetime import datetime
 import uuid
 import csv
 
-from app.storage.daily_paths import daily_path
+from app.storage.daily_paths import daily_path, telemetry_path
 from app.storage.session_manager import (
     get_or_create_session_manifest,
     get_scan_id,
@@ -44,15 +44,7 @@ def save_trade_telemetry(trade_data):
 
     try:
 
-        os.makedirs(
-            "telemetry",
-            exist_ok=True
-        )
-
-        file_path = (
-            "telemetry/"
-            "trade_telemetry.csv"
-        )
+        file_path = telemetry_path("trade_telemetry.csv")
 
         trading_day = trade_data.get(
             "trading_day",
