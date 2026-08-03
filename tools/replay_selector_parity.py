@@ -1,10 +1,40 @@
 """Measure how often the replay's contract selector picks what live picked.
 
-The number to move for step 1b. Currently 4/9; the five misses are all expiry
-choice, because live does not select from the ranked list at all --
-``recommend_live_option_bundle`` returns primary/active/affordable/short_dte/
-longer_dte and ``app/main.py`` picks among them with
-``_select_liquid_option_from_bundle``, by liquidity.
+The number for step 1b. The replay now reproduces the selection live actually
+performs: ``recommend_live_option_bundle`` returns primary/active/affordable/
+short_dte/longer_dte, and ``_select_liquid_option_from_bundle`` in
+``app/main.py`` walks those slots and then the ranked list, taking the first
+contract that passes ``evaluate_option_liquidity``. The `from` column reports
+which slot won, so a miss can be attributed to ranking or to liquidity rather
+than guessed at.
+
+Parity stayed at 4/9 across that change, which localises the remaining gap
+rather than closing it. What the misses are *not*: live's pick is present and
+priced in the replay's chain every time, so the prefilter is not dropping it,
+and the reconstructed delta agrees with live's own recorded value to ~0.01 on
+these same contracts, so the Greeks are not moving it either.
+
+What is left is that the replay's *ranked order* disagrees with live's. Live's
+pick ranks #8 on the NVDA trades, #36 on CRWD and #51 on ORCL 142304 -- and on
+NVDA it is liquid and affordable where it sits, so nothing rejected it; a
+contract the replay simply scores higher was taken first. Two things are known
+to contribute and neither is the selector:
+
+* ``option_max_spread_pct`` was tightened from 10 to 6 in 9d7ef0c at
+  2026-07-30 19:24, *between* the fixture's two days. ORCL 142304 (8.00%
+  spread) and CRWD (10.07%) were bought by a live that allowed 10, and today's
+  gate rejects both. Restoring the cap would not by itself turn them into
+  hits, given where they rank, but any comparison against them is measuring
+  two configurations, not two implementations.
+* Live ranks whatever ``fetch_options_chain`` returned -- a 250-contract
+  snapshot -- while this ranks 72 near-the-money strikes inside the DTE
+  window. Different chain, different ranked order, even with an identical
+  ranker. This has not been confirmed as the cause and is the first thing to
+  test next: the ORCL and CRWD gaps are far too large (#51, #36) to come from
+  scoring noise.
+
+So the fixture cannot currently reach 9/9, and chasing the number by tuning
+the selector would be fitting to a target measured under different settings.
 
 Run before and after any change to ``app/backtesting/contract_selector.py``:
 
@@ -72,11 +102,11 @@ def main():
 
     if args.min_dte is not None:
 
-        config.preferred_min_dte = args.min_dte
+        config.min_dte = args.min_dte
 
     if args.max_dte is not None:
 
-        config.preferred_max_dte = args.max_dte
+        config.max_dte = args.max_dte
 
     with open(FIXTURE) as handle:
 
@@ -84,11 +114,12 @@ def main():
 
     print(
         f"{'sym':6}{'scan':8}{'dir':5}{'live':24}{'replay':24}"
-        f"{'ok':>4}{'chain':>6}{'score':>8}"
+        f"{'ok':>4}{'chain':>6}{'score':>8}  {'from':<12}{'tried':>6}"
     )
 
     matched = 0
     expiry_only = 0
+    slots = {}
 
     for trade in trades:
 
@@ -112,12 +143,21 @@ def main():
 
                 expiry_only += 1
 
+        # Which bundle slot the contract came from, and how many candidates the
+        # liquidity walk rejected before it. A pick from `active` on the first
+        # try means the ranker agreed with live outright; anything deeper means
+        # liquidity, not ranking, decided the trade.
+        selected_from = diagnostics.get("selected_from") or "-"
+        tried = len(diagnostics.get("liquidity_attempts") or [])
+        slots[selected_from] = slots.get(selected_from, 0) + 1
+
         print(
             f"{trade['symbol']:6}{trade['scan_id'][-6:]:8}{trade['direction']:5}"
             f"{live_ticker:24}{str(ticker):24}"
             f"{('YES' if hit else 'no'):>4}"
             f"{diagnostics.get('chain_size', 0):>6}"
             f"{(diagnostics.get('ranking_score') or 0):8.1f}"
+            f"  {selected_from:<12}{tried:>6}"
         )
 
     print(f"\ncontract parity: {matched}/{len(trades)}")
@@ -127,8 +167,20 @@ def main():
         print(f"  of the misses, {expiry_only} differ only in expiry")
 
     print(
-        "\nreference: 2/9 before the prefilter widened to 72, 4/9 after. "
-        "The open work is reproducing _select_liquid_option_from_bundle."
+        "  picked from: "
+        + ", ".join(
+            f"{slot} x{count}"
+            for slot, count in sorted(
+                slots.items(), key=lambda item: -item[1]
+            )
+        )
+    )
+
+    print(
+        "\nreference: 2/9 with a 24-contract prefilter, 4/9 at 72, and 4/9 "
+        "again once the bundle walk replaced the rank-and-affordability pick. "
+        "The remaining five misses are not selection logic -- see the module "
+        "docstring."
     )
 
 

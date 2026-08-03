@@ -8,9 +8,12 @@ input-shape requirements that silently emptied the chain when first got wrong.
 Hermetic: the live Greeks are inlined rather than read from the database.
 """
 
+import inspect
+
 import pytest
 
-from app.backtesting.contract_selector import _expiration_bucket
+from app.options import contract_ranker
+from app.options.option_metrics import classify_expiration_bucket
 from app.backtesting.historical_greeks import (
     compute_greeks,
     greeks_for_contract,
@@ -133,9 +136,22 @@ def test_implied_volatility_round_trips_through_the_pricer():
 
 
 def test_expiration_buckets_match_the_labels_the_ranker_switches_on():
+    """The replay must label expiries the way the code reading them expects.
 
-    assert _expiration_bucket(0) == "0DTE"
-    assert _expiration_bucket(1) == "1DTE"
-    assert _expiration_bucket(7) == "WEEKLY"
-    assert _expiration_bucket(21) == "SHORT_TERM"
-    assert _expiration_bucket(30) == "LONG_TERM"
+    This previously asserted WEEKLY/SHORT_TERM/LONG_TERM, which no live code
+    emits and ``rank_option_contracts`` therefore matches none of -- so a 14-30
+    DTE contract silently lost the +12 it is due and a 7-13 DTE one kept the -8
+    it is due, and the replay picked the near expiry live had passed over. The
+    assertion is now against the labels the ranker actually branches on rather
+    than against a second opinion about what they should be.
+    """
+
+    ranker_source = inspect.getsource(contract_ranker.rank_option_contracts)
+
+    for dte in range(0, 46):
+
+        bucket = classify_expiration_bucket(dte)
+
+        assert f'"{bucket}"' in ranker_source, (
+            f"dte={dte} is labelled {bucket}, which the ranker never tests for"
+        )
