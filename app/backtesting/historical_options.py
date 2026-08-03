@@ -72,12 +72,35 @@ def _to_utc(moment):
     return stamp.tz_convert("UTC")
 
 
-def list_contracts_as_of(underlying, as_of, contract_type=None, limit=250):
+def list_contracts_as_of(
+    underlying,
+    as_of,
+    contract_type=None,
+    limit=250,
+    strike_min=None,
+    strike_max=None,
+    expiry_min=None,
+    expiry_max=None,
+    timeout=60,
+):
     """Contracts listed for ``underlying`` as they stood on ``as_of``.
 
     ``as_of`` is what keeps strike selection honest: querying today's chain for
     a trade in the past silently drops contracts that have since expired --
     which for short-DTE selection is most of the ones that mattered.
+
+    The strike and expiry bounds are pushed into the request rather than
+    applied to the response. Unbounded the endpoint paginates through thousands
+    of rows per scan and times out; bounded, it is a single page. The caller
+    knows the window it wants, so there is no reason to transfer the rest.
+
+    **Do not add ``expired=true`` here.** It reads like the right flag for
+    querying a historical chain and it is not: combined with ``as_of`` it
+    returns zero results, and unbounded it also stops honouring
+    ``underlying_ticker`` -- a request for NVDA came back with NAX contracts
+    expiring in 2010. ``as_of`` alone already returns the chain as it stood on
+    that date, including contracts that have since expired, which is exactly
+    what a replay needs.
     """
 
     day = pd.Timestamp(as_of).date().isoformat()
@@ -87,12 +110,27 @@ def list_contracts_as_of(underlying, as_of, contract_type=None, limit=250):
         "underlying_ticker": underlying,
         "as_of": day,
         "limit": limit,
-        "expired": "true",
     }
 
     if contract_type:
 
         params["contract_type"] = contract_type.lower()
+
+    if strike_min is not None:
+
+        params["strike_price.gte"] = strike_min
+
+    if strike_max is not None:
+
+        params["strike_price.lte"] = strike_max
+
+    if expiry_min is not None:
+
+        params["expiration_date.gte"] = pd.Timestamp(expiry_min).date().isoformat()
+
+    if expiry_max is not None:
+
+        params["expiration_date.lte"] = pd.Timestamp(expiry_max).date().isoformat()
 
     url = f"{POLYGON_BASE_URL}/v3/reference/options/contracts"
 
@@ -101,7 +139,7 @@ def list_contracts_as_of(underlying, as_of, contract_type=None, limit=250):
 
     while next_url:
 
-        response = requests.get(next_url, params=params, timeout=30)
+        response = requests.get(next_url, params=params, timeout=timeout)
 
         if response.status_code != 200:
 
