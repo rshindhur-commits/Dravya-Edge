@@ -73,9 +73,11 @@ def test_uppercase_contract_type_empties_the_chain():
 def test_zero_open_interest_empties_the_chain():
     """``oi < 1`` is a hard reject.
 
-    Open interest has no point-in-time history, so the selector sets 1 -- the
-    minimum that clears this gate while scoring nothing in either OI band, so
-    it reorders no contract. Zero would drop the whole chain.
+    Open interest has no point-in-time history, so the selector substitutes
+    ``ASSUMED_OPEN_INTEREST``. This gate is only the first of the OI rules it
+    has to clear -- the liquidity gate wants 500 and the quality scorer docks
+    20 below it -- which is why that constant is the configured minimum rather
+    than the 1 that satisfies this one. Zero would drop the whole chain.
     """
 
     assert rank_option_contracts(
