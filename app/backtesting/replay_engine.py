@@ -44,8 +44,11 @@ from app.backtesting.historical_options import (
     quote_at,
 )
 from app.exit.exit_engine import evaluate_exit
+from app.gates.setup_quality import compute_setup_percent
 from app.indicators.technical_indicators import compute_indicators
+from app.options.option_metrics import classify_expiration_bucket
 from app.risk.risk_manager import calculate_risk
+from app.state.holding_policy import derive_holding_profile, holding_policy
 from app.strategies.entry_engine import detect_entry
 from app.strategies.momentum_strategy import analyze_setup
 from app.utils.timeframe_resampler import resample_timeframe
@@ -55,6 +58,31 @@ from app.utils.timeframe_resampler import resample_timeframe
 # system would never have taken.
 ENTRY_WINDOW_START = "09:45"
 ENTRY_WINDOW_END = "15:30"
+
+# When an INTRADAY position is force-closed. Live closes near the bell rather
+# than at it, and the replay needs a bar to fill against, so this is the last
+# moment a 5m close is taken as the exit mark.
+EOD_EXIT_TIME = "15:55"
+
+# ``timeframe_bias`` from app/main.py, which is the Streamlit entrypoint and
+# cannot be imported here. Reproduced rather than approximated because it feeds
+# the alignment term, and alignment is 25 of the 100 points in Setup % --
+# without it the ceiling is 75 against a MULTIDAY threshold of 76, so a wrong
+# copy here does not misclassify a few trades, it silently disables MULTIDAY
+# altogether. tests/test_backtest_multiday.py asserts this still matches.
+_BIAS_BY_SIGNAL = {
+    "HIGH CONVICTION BULLISH": 2,
+    "BULLISH": 1,
+    "NEUTRAL": 0,
+    "HIGH CONVICTION BEARISH": -2,
+    "WEAK/BEARISH": -1,
+    "BEARISH": -1,
+}
+
+
+def _timeframe_bias(analysis):
+
+    return _BIAS_BY_SIGNAL.get(str((analysis or {}).get("signal") or ""), 0)
 
 
 @dataclass
@@ -66,6 +94,8 @@ class ReplayConfig:
     entry_window_end: str = ENTRY_WINDOW_END
     max_spread_pct: float = DEFAULT_MAX_SPREAD_PCT
     max_open_positions: int = 1
+    # When INTRADAY positions are force-closed. See EOD_EXIT_TIME.
+    eod_exit_time: str = EOD_EXIT_TIME
     # Price fills at the quoted bid/ask rather than the mid. Mid-pricing is the
     # single most flattering assumption an options backtest can make; it is
     # available only so a run can quantify how much of the result it is worth.
@@ -103,6 +133,12 @@ class ReplayTrade:
     bars_in_trade: int = 0
     mfe_r: float = 0.0
     mae_r: float = 0.0
+    holding_profile: str = "INTRADAY"
+    # False when an input to the profile decision was unavailable. Every missing
+    # input forces INTRADAY, so without this a dead MULTIDAY path is invisible.
+    holding_profile_inputs_complete: bool = False
+    # Sessions this position has been carried into beyond the one it opened in.
+    sessions_held: int = 0
     state: dict = field(default_factory=dict)
 
     @property
@@ -192,7 +228,89 @@ def build_frames(raw_5m, moment, symbol, config):
     )
 
 
-def _open_trade(symbol, moment, scan_id, df_5m, df_15m, analysis_15m, config):
+def _normalise_selection(selected):
+    """Accept a bare ticker or ``(ticker, contract)`` from the selector.
+
+    The contract is wanted for the holding profile -- option quality and the
+    expiration bucket are two of the four MULTIDAY conditions -- but a selector
+    that only knows a ticker stays valid.
+    """
+
+    if not selected:
+
+        return None, None
+
+    if isinstance(selected, (tuple, list)):
+
+        return (selected[0] or None), (selected[1] if len(selected) > 1 else None)
+
+    return selected, None
+
+
+def _holding_profile(entry_setup, risk_setup, contract, analyses):
+    """INTRADAY or MULTIDAY, by live's rule, on live's inputs.
+
+    Returns ``(profile, inputs_complete)``. The flag matters more than it looks:
+    every unavailable input pushes Setup % *down*, so a missing one does not
+    misclassify at random, it forces INTRADAY -- which is indistinguishable from
+    a correct answer and would make the whole MULTIDAY path look implemented
+    while being dead. Callers record it rather than assume.
+    """
+
+    analysis_5m, analysis_15m, analysis_1h = analyses
+    inputs_complete = all(a is not None for a in analyses) and contract is not None
+
+    # main.py: bias_5m * 1 + bias_15m * 3 + bias_1h * 2, plus conviction/4.
+    alignment = (
+        _timeframe_bias(analysis_5m)
+        + _timeframe_bias(analysis_15m) * 3
+        + _timeframe_bias(analysis_1h) * 2
+        + float((analysis_15m or {}).get("score") or 0) / 4
+    )
+
+    # main.py's setup_valid, minus the terms _open_trade has already enforced to
+    # get this far: a valid entry_type, trade_allowed, and all three prices
+    # present. RR is the one it does not gate on, so it is checked here.
+    risk_reward = float(risk_setup.get("risk_reward") or 0)
+    setup_valid = (
+        risk_reward >= 1.5
+        and str((analysis_15m or {}).get("signal") or "NEUTRAL") != "NEUTRAL"
+    )
+
+    setup_percent = compute_setup_percent(
+        (analysis_15m or {}).get("score"),
+        alignment=alignment,
+        entry=entry_setup.get("entry_type"),
+        setup_valid=setup_valid,
+        action_status="ENTER" if setup_valid else "WAIT",
+    )
+
+    contract = contract or {}
+
+    profile = derive_holding_profile(
+        {
+            "Setup %": setup_percent,
+            "Candidate RR": risk_reward,
+            "Expiration Bucket": contract.get("expiration_bucket")
+            or classify_expiration_bucket(contract.get("dte")),
+            "Option Quality Score": contract.get("option_quality_score"),
+        }
+    )
+
+    return str(getattr(profile, "value", profile)), inputs_complete
+
+
+def _open_trade(
+    symbol,
+    moment,
+    scan_id,
+    df_5m,
+    df_15m,
+    analysis_15m,
+    config,
+    analysis_5m=None,
+    analysis_1h=None,
+):
     """Run the live entry path; return a ReplayTrade or None."""
 
     if df_15m is None or df_15m.empty or df_5m is None or df_5m.empty:
@@ -245,10 +363,13 @@ def _open_trade(symbol, moment, scan_id, df_5m, df_15m, analysis_15m, config):
     )
 
     ticker = None
+    contract = None
 
     if config.contract_selector:
 
-        ticker = config.contract_selector(symbol, direction, moment)
+        ticker, contract = _normalise_selection(
+            config.contract_selector(symbol, direction, moment)
+        )
 
         # A configured selector that resolves nothing means there was no
         # contract to buy, so there is no trade. Falling through would open a
@@ -292,10 +413,20 @@ def _open_trade(symbol, moment, scan_id, df_5m, df_15m, analysis_15m, config):
         "lowest_price": entry_price,
         "bars_in_trade": 0,
         "partial_profit_taken": False,
-        "holding_profile": "INTRADAY",
         "mfe_r": 0.0,
         "mae_r": 0.0,
     }
+
+    profile, inputs_complete = _holding_profile(
+        entry_setup,
+        risk_setup,
+        contract,
+        (analysis_5m, analysis_15m, analysis_1h),
+    )
+
+    trade.holding_profile = profile
+    trade.state["holding_profile"] = profile
+    trade.holding_profile_inputs_complete = inputs_complete
 
     return trade
 
@@ -414,7 +545,14 @@ def _close_trade(trade, moment, exit_price, reason, rule, config):
         )
 
 
-def replay_day(symbols, trading_day, scan_times, config=None, raw_frames=None):
+def replay_day(
+    symbols,
+    trading_day,
+    scan_times,
+    config=None,
+    raw_frames=None,
+    carried_trades=None,
+):
     """Replay ``trading_day`` scan by scan.
 
     ``scan_times`` should be the real ET scan clock -- ``scanner_runs`` or a
@@ -424,6 +562,10 @@ def replay_day(symbols, trading_day, scan_times, config=None, raw_frames=None):
     ``raw_frames`` optionally supplies pre-loaded 5m frames keyed by symbol,
     which is what makes a multi-day run affordable: the frames are otherwise
     re-read from cache once per scan per symbol.
+
+    ``carried_trades`` are MULTIDAY positions still open from the previous
+    session, keyed by symbol. They are managed from this day's first scan and
+    block a new entry in that symbol exactly as a same-day position does.
     """
 
     config = config or ReplayConfig()
@@ -435,7 +577,12 @@ def replay_day(symbols, trading_day, scan_times, config=None, raw_frames=None):
         for symbol in symbols
     }
 
-    open_trades = {}
+    open_trades = dict(carried_trades or {})
+
+    for trade in open_trades.values():
+
+        trade.sessions_held += 1
+
     closed = []
 
     for moment in scan_times:
@@ -450,7 +597,7 @@ def replay_day(symbols, trading_day, scan_times, config=None, raw_frames=None):
 
                 continue
 
-            df_5m, df_15m, _, _, analysis_15m, _ = build_frames(
+            df_5m, df_15m, _, analysis_5m, analysis_15m, analysis_1h = build_frames(
                 raw, moment, symbol, config
             )
 
@@ -482,16 +629,130 @@ def replay_day(symbols, trading_day, scan_times, config=None, raw_frames=None):
                 continue
 
             trade = _open_trade(
-                symbol, moment, scan_id, df_5m, df_15m, analysis_15m, config
+                symbol,
+                moment,
+                scan_id,
+                df_5m,
+                df_15m,
+                analysis_15m,
+                config,
+                analysis_5m=analysis_5m,
+                analysis_1h=analysis_1h,
             )
 
             if trade:
 
                 open_trades[symbol] = trade
 
+    forced = _force_eod_exits(open_trades, trading_day, frames, config)
+    closed.extend(forced)
+
     return {
         "closed": closed,
         "open": list(open_trades.values()),
+        "carried": list(open_trades.values()),
+        "forced_eod": forced,
         "trading_day": str(trading_day),
         "scans": len(scan_times),
+    }
+
+
+def _force_eod_exits(open_trades, trading_day, frames, config):
+    """Close INTRADAY positions at the bell; leave MULTIDAY ones to carry.
+
+    Live's INTRADAY policy sets ``force_eod_exit=True``, and until now the
+    replay simply handed back whatever was still open at the last scan. That
+    understates cost in the one direction that matters: an intraday loser was
+    left unresolved rather than closed, so it contributed no R and no premium.
+    """
+
+    if not open_trades:
+
+        return []
+
+    moment = pd.Timestamp(
+        f"{pd.Timestamp(trading_day).date()} {config.eod_exit_time}"
+    ).tz_localize("America/New_York")
+
+    forced = []
+
+    for symbol, trade in list(open_trades.items()):
+
+        if not holding_policy(trade.holding_profile).force_eod_exit:
+
+            continue
+
+        raw = frames.get(symbol)
+        df_5m = build_frames(raw, moment, symbol, config)[0] if raw is not None else None
+
+        if df_5m is None or df_5m.empty:
+
+            # No bar to fill against. Left open and reported rather than closed
+            # at an invented price -- a made-up EOD fill is indistinguishable
+            # from a real one once it is in the totals.
+            continue
+
+        _close_trade(
+            trade,
+            moment,
+            float(df_5m["Close"].iloc[-1]),
+            "EOD_CLOSE",
+            "FORCE_EOD_EXIT",
+            config,
+        )
+
+        forced.append(trade)
+        open_trades.pop(symbol)
+
+    return forced
+
+
+def replay_days(symbols, trading_days, scan_times_for, config=None, on_day=None):
+    """Replay consecutive sessions, carrying MULTIDAY positions across them.
+
+    ``scan_times_for(trading_day)`` supplies that day's scan clock.
+    ``on_day(day, result)`` is called after each session, for progress.
+
+    Frames are loaded per day rather than once, because each session needs its
+    own lookback window; a carried position is re-managed against the new day's
+    frames from its first scan, which is what live's
+    ``restore_open_multiday_positions`` does at session start.
+    """
+
+    config = config or ReplayConfig()
+
+    carried = {}
+    results = []
+
+    for trading_day in trading_days:
+
+        frames = {
+            symbol: load_replay_frames(
+                symbol, trading_day, lookback_days=config.lookback_days
+            )
+            for symbol in symbols
+        }
+
+        result = replay_day(
+            symbols,
+            trading_day,
+            scan_times_for(trading_day),
+            config=config,
+            raw_frames=frames,
+            carried_trades=carried,
+        )
+
+        carried = {trade.symbol: trade for trade in result["carried"]}
+        results.append(result)
+
+        if on_day:
+
+            on_day(trading_day, result)
+
+    return {
+        "days": results,
+        "closed": [trade for result in results for trade in result["closed"]],
+        # Still open after the final session. Reported separately because they
+        # have no exit and belong in no P&L total.
+        "open": list(carried.values()),
     }

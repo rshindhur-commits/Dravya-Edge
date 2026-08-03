@@ -597,8 +597,14 @@ def make_selector(spot_lookup, config=None):
 
             return None
 
-        ticker, _, _ = select_contract(symbol, direction, moment, spot, config)
+        ticker, contract, _ = select_contract(
+            symbol, direction, moment, spot, config
+        )
 
-        return ticker
+        # The contract travels with the ticker because the holding profile is
+        # decided from it: option quality and the expiration bucket are two of
+        # the four conditions live requires for MULTIDAY, and neither can be
+        # recovered from an OCC symbol alone.
+        return ticker, contract
 
     return _select
