@@ -193,6 +193,17 @@ def _env_float(name, default):
         return default
 
 
+def _env_bool(name, default=False):
+
+    raw = os.getenv(name)
+
+    if raw is None:
+
+        return default
+
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _is_short_entry(entry_type):
 
     entry_type = str(entry_type or "").upper()
@@ -661,7 +672,33 @@ def evaluate_exit(
         exit_signal = True
         exit_reason = primary_exit["reason"]
 
-    if not exit_signal and rr_progress >= 1:
+    # The breakeven move has been gated on a full 1R since it was written, and
+    # over the 21-day economics run that made it very nearly inert: it fired on
+    # 38 of 291 trades and saved 0.2R. The trades that need it never get near
+    # 1R. Of the 145 that travelled at all, 108 peaked below 1R -- 68 of them
+    # peaked between 0.1R and 0.5R and gave every bit of it back, closing at
+    # -0.01R on average, and 15 of those ran on to worse than -0.25R.
+    #
+    # Simulated against that book, a 0.25R trigger recovers about 10R and takes
+    # it from +2.1R to +12.2R. That simulation assumes no trade is cut at
+    # breakeven that would have recovered, which is exactly the cost the replay
+    # has to price, so the default stays at 1.0 and the knob is what moves.
+    breakeven_trigger_r = _env_float("EXIT_BREAKEVEN_TRIGGER_R", 1.0)
+
+    # Whether "got there" means the peak or only the current bar's close. A
+    # trade can touch the trigger intrabar and close back under it; on peak the
+    # stop still moves. Default is the close, which is what has always run.
+    breakeven_progress = (
+        max(rr_progress, mfe_r)
+        if _env_bool("EXIT_BREAKEVEN_ON_PEAK", False)
+        else rr_progress
+    )
+
+    if (
+        not exit_signal
+        and breakeven_trigger_r > 0
+        and breakeven_progress >= breakeven_trigger_r
+    ):
 
         if is_short:
 
