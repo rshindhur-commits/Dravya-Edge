@@ -14,24 +14,42 @@ priced in the replay's chain every time, so the prefilter is not dropping it,
 and the reconstructed delta agrees with live's own recorded value to ~0.01 on
 these same contracts, so the Greeks are not moving it either.
 
-What is left is that the replay's *ranked order* disagrees with live's. Live's
-pick ranks #8 on the NVDA trades, #36 on CRWD and #51 on ORCL 142304 -- and on
-NVDA it is liquid and affordable where it sits, so nothing rejected it; a
-contract the replay simply scores higher was taken first. Two things are known
-to contribute and neither is the selector:
+**Measured 2026-08-03. Affordability is the term, not ranked order.** Three
+candidate causes were tested and the first two are eliminated:
 
-* ``option_max_spread_pct`` was tightened from 10 to 6 in 9d7ef0c at
-  2026-07-30 19:24, *between* the fixture's two days. ORCL 142304 (8.00%
-  spread) and CRWD (10.07%) were bought by a live that allowed 10, and today's
-  gate rejects both. Restoring the cap would not by itself turn them into
-  hits, given where they rank, but any comparison against them is measuring
-  two configurations, not two implementations.
-* Live ranks whatever ``fetch_options_chain`` returned -- a 250-contract
-  snapshot -- while this ranks 72 near-the-money strikes inside the DTE
-  window. Different chain, different ranked order, even with an identical
-  ranker. This has not been confirmed as the cause and is the first thing to
-  test next: the ORCL and CRWD gaps are far too large (#51, #36) to come from
-  scoring noise.
+* **Chain width -- not the cause.** ``--max-priced 250`` grows the priced chain
+  from 72 to 109-121 contracts and every pick, score and rank comes out
+  byte-identical. Mechanically that had to be so: ``rank_option_contracts``
+  scores each contract on absolute terms -- volume and OI bands, strike
+  distance, delta target, DTE bucket -- with nothing chain-relative, so adding
+  contracts cannot reorder two that were already priced. This was previously
+  recorded here as "the first thing to test next"; it is now answered.
+* **The spread cap -- not the cause.** ``option_max_spread_pct`` was tightened
+  from 10 to 6 in 9d7ef0c at 2026-07-30 19:24, *between* the fixture's two
+  days, so ORCL 142304 (8.00%) and CRWD (10.07%) were bought by a live that
+  allowed 10. Restoring it with ``OPTION_MAX_SPREAD_PCT=10`` leaves parity at
+  4/9. It changes only how CRWD is reached -- ``ranked #34`` becomes
+  ``affordable`` -- so the fixture still straddles two configurations and any
+  claim about those two trades must say so, but it is not what costs the hits.
+* **Affordability -- the dominant term.** ``--no-affordability`` takes parity to
+  **0/9** and changes every pick, which is the point: the unconstrained ranker
+  moves *towards* live, not away. It picks 260814 and 260821 where the
+  constrained run picks 260807, so seven of the nine then agree with live on
+  expiry and only the strike differs. NVDA 142304 goes to 260814P00195000
+  against live's 260814P00190000 -- same expiry, adjacent strike.
+
+So the replay's ranked order does not disagree with live's about expiry. Under
+the account's cost cap the ranked-best contract is unaffordable, the bundle walk
+falls past ``active`` to ``affordable``, and what it lands on is shorter-dated
+and further out of the money. That is why every miss reads as an expiry miss.
+
+**What to test next**, in order: whether live's own bundle walk rejected its
+``active`` slot the same way on these trades -- ``evaluate_option_liquidity``
+rejects on ``OPTION_TOO_EXPENSIVE`` under ``OPTION_AFFORDABILITY_MODE=HARD``,
+and if live took ``active`` where the replay cannot, the gap is the affordability
+inputs (capital, ``OPTION_MAX_CONTRACT_COST``) and not selection at all. The
+fixture's live trades carry the contract cost they paid, so this is answerable
+from the fixture without another Polygon run.
 
 So the fixture cannot currently reach 9/9, and chasing the number by tuning
 the selector would be fitting to a target measured under different settings.

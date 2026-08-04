@@ -34,6 +34,11 @@ _REJECTION_EVIDENCE_FIELDS = (
 )
 
 
+# What a caller recording an attempt should carry off the verdict. Same fields
+# plus the threshold, so the audit trail and the verdict cannot drift apart.
+ATTEMPT_EVIDENCE_FIELDS = _REJECTION_EVIDENCE_FIELDS + ("required_value",)
+
+
 def _rejection_evidence(option_data):
 
     option_data = option_data or {}

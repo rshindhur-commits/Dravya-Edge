@@ -79,6 +79,7 @@ from app.indicators.technical_indicators import (
 )
 
 from app.options.options_filter import (
+    ATTEMPT_EVIDENCE_FIELDS,
     evaluate_option_liquidity
 )
 
@@ -789,7 +790,7 @@ def _append_option_liquidity_audit(df_results, trading_day, scan_id):
 
             for attempt_index, attempt in enumerate(attempts, start=1):
 
-                rows.append({
+                audit_row = {
                     "trading_day": trading_day,
                     "scan_id": scan_id,
                     "observed_at": now_et().isoformat(),
@@ -806,7 +807,16 @@ def _append_option_liquidity_audit(df_results, trading_day, scan_id):
                     "action_status": row.get("Action Status"),
                     "option_quote_status": row.get("Option Quote Status"),
                     "option_rejection_reason": row.get("Option Rejection Reason")
-                })
+                }
+
+                # The contract behind the verdict. Without these the file can
+                # count rejections but cannot say whether a threshold is set too
+                # high or the selector is reaching for the wrong strike.
+                for field in ATTEMPT_EVIDENCE_FIELDS:
+
+                    audit_row[f"attempt_{field}"] = attempt.get(field)
+
+                rows.append(audit_row)
 
         if not rows:
 
@@ -815,11 +825,25 @@ def _append_option_liquidity_audit(df_results, trading_day, scan_id):
         audit = pd.DataFrame(rows)
         path = daily_path(trading_day, "option_liquidity_attempts.csv")
         path.parent.mkdir(parents=True, exist_ok=True)
-        write_header = not path.exists() or path.stat().st_size == 0
+        existing = None
+
+        if path.exists() and path.stat().st_size > 0:
+
+            existing = pd.read_csv(path)
+
+        # Appending rows with a wider schema under a header written before the
+        # columns existed silently shifts every field. A deploy that adds a
+        # column lands mid-session, so the widened frame is rewritten whole
+        # rather than appended to a header that predates it.
+        if existing is not None and list(existing.columns) != list(audit.columns):
+
+            audit = pd.concat([existing, audit], ignore_index=True)
+            existing = None
+
         audit.to_csv(
             path,
-            mode="a",
-            header=write_header,
+            mode="a" if existing is not None else "w",
+            header=existing is None,
             index=False
         )
 
@@ -3247,6 +3271,20 @@ def _select_liquid_option_from_bundle(option_bundle, intended_option_direction):
             "spread_pct": liquidity.get("spread_pct"),
             "accepted": False
         }
+
+        # `evaluate_option_liquidity` attaches the contract and the threshold it
+        # was measured against to every rejection. Copying a fixed seven keys
+        # discarded that again, which is why the 2026-08-03 archive can say a
+        # contract was refused for open interest but not what its open interest
+        # was -- 18,026 attempts recorded, not one of them answerable.
+        for field in ATTEMPT_EVIDENCE_FIELDS:
+
+            value = liquidity.get(field)
+
+            if value is not None:
+
+                attempt.setdefault(field, value)
+
         attempts.append(attempt)
 
         if liquidity.get("liquid"):

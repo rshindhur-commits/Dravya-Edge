@@ -22,6 +22,7 @@ def _contract(**overrides):
 
     contract = {
         "ticker": "O:MSFT260821C00490000",
+        "type": "call",
         "strike": 490.0,
         "expiration": "2026-08-21",
         "dte": 18,
@@ -149,6 +150,79 @@ class RejectionEvidenceTests(unittest.TestCase):
         self.assertFalse(result["liquid"])
         self.assertNotIn("ticker", result)
         self.assertNotIn("iv", result)
+
+
+class AttemptEvidenceTests(unittest.TestCase):
+    """The verdict carried the evidence; the attempt record threw it away.
+
+    `_select_liquid_option_from_bundle` built each attempt from a fixed seven
+    keys, so 18,026 attempts were logged on 2026-08-03 and not one of them
+    recorded an open interest, a cost or a delta -- the fields that decide
+    whether a threshold is wrong or the selector is reaching.
+    """
+
+    def _select(self, bundle):
+
+        from app.main import _select_liquid_option_from_bundle
+
+        with patch("app.options.options_filter.add_affordability_metrics",
+                   side_effect=lambda data, config=None: data), \
+             patch("app.options.options_filter.get_affordability_config",
+                   return_value={"mode": "OFF"}), \
+             patch("app.main.get_affordability_config",
+                   return_value={"mode": "OFF"}), \
+             patch("app.main.add_affordability_metrics",
+                   side_effect=lambda data, config=None: data), \
+             patch("app.main.refresh_contract_quote",
+                   side_effect=lambda data: data), \
+             patch("app.options.options_filter.settings") as settings:
+
+            settings.option_require_bid_ask = False
+            settings.option_require_fresh_quote = False
+            settings.option_min_open_interest = 500
+            settings.option_min_volume = 100
+            settings.option_max_spread_pct = 6.0
+            settings.option_min_quality_score = 65
+
+            return _select_liquid_option_from_bundle(bundle, "CALL")
+
+    def test_a_rejected_attempt_records_the_contract_behind_it(self):
+
+        contract, liquidity, attempts = self._select(
+            {"active": _contract(open_interest=120)}
+        )
+
+        self.assertIsNone(contract)
+        self.assertEqual(len(attempts), 1)
+
+        attempt = attempts[0]
+        self.assertEqual(attempt["code"], "LOW_OPEN_INTEREST")
+        self.assertEqual(attempt["open_interest"], 120)
+        self.assertEqual(attempt["required_value"], 500)
+        self.assertEqual(attempt["delta"], 0.52)
+        self.assertEqual(attempt["dte"], 18)
+
+    def test_the_attempts_own_fields_are_not_overwritten_by_evidence(self):
+        """`ticker` and `spread_pct` are set from the candidate, not the quote."""
+
+        _contract_out, _liquidity, attempts = self._select(
+            {"active": _contract(open_interest=120)}
+        )
+
+        self.assertEqual(attempts[0]["ticker"], "O:MSFT260821C00490000")
+        self.assertEqual(attempts[0]["source"], "active")
+        self.assertIs(attempts[0]["accepted"], False)
+
+    def test_an_accepted_attempt_carries_no_rejection_evidence(self):
+        """A passing verdict keeps its shape, so the audit stays readable."""
+
+        contract, _liquidity, attempts = self._select({"active": _contract()})
+
+        self.assertIsNotNone(contract)
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(attempts[0]["accepted"])
+        self.assertNotIn("required_value", attempts[0])
+        self.assertNotIn("open_interest", attempts[0])
 
 
 if __name__ == "__main__":
