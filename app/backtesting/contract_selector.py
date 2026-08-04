@@ -33,6 +33,7 @@ a run can report how often the question came up.
 """
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -203,104 +204,171 @@ def _candidate_tickers(underlying, moment, direction, spot, config):
     return candidates[: config.max_priced_contracts]
 
 
+def _price_candidate(underlying, moment, spot, config, candidate):
+    """One contract's bars, quote and Greeks. Returns ``(contract, skip_reason)``.
+
+    Extracted so the chain can be priced concurrently. Pure with respect to the
+    chain: it reads no shared state and writes none, so the caller reassembles
+    the results in candidate order and gets exactly what the sequential loop
+    produced.
+    """
+
+    _, dte, ticker, spec = candidate
+
+    bars = option_bars(ticker, moment)
+    mark = price_at(bars, moment)
+
+    if mark is None or mark <= 0:
+
+        return None, "no_price"
+
+    quote = quote_at(ticker, moment)
+
+    if quote is None and config.require_quote:
+
+        return None, "no_quote"
+
+    greeks = greeks_for_contract(
+        ticker, quote["mid"] if quote else mark, spot, moment
+    )
+
+    if greeks is None:
+
+        return None, "no_greeks"
+
+    # Session volume to date, not the last bar's. The ranker gates at
+    # `volume < 5` and scores in bands of 250 and 1000, so a single 5m
+    # bar's count rejects contracts that have traded thousands since the
+    # open.
+    volume = _session_volume(bars, moment)
+
+    contract = {
+        "ticker": ticker,
+        "symbol": underlying,
+        "strike": spec["strike"],
+        # Lowercase: the ranker's direction filter compares against
+        # "call"/"put" literals, so an uppercase type silently rejects
+        # the entire chain.
+        "type": spec["contract_type"].lower(),
+        "expiration_date": spec["expiry"].isoformat(),
+        "dte": dte,
+        # Live's own classifier, not a local copy. A previous local version
+        # returned WEEKLY/SHORT_TERM/LONG_TERM, which are not labels any
+        # live code emits, so the ranker's bucket block matched none of
+        # them and silently withheld the +12 a 14-30 DTE contract earns and
+        # the -8 a 7-13 DTE one is docked -- a 20 point swing on the term
+        # that decides expiry, which is exactly where parity was failing.
+        "expiration_bucket": classify_expiration_bucket(dte),
+        "mid_price": quote["mid"] if quote else mark,
+        "bid": quote["bid"] if quote else None,
+        "ask": quote["ask"] if quote else None,
+        "spread_pct": quote["spread_pct"] if quote else None,
+        "delta": greeks["delta"],
+        "gamma": greeks["gamma"],
+        "theta": greeks["theta"],
+        "iv": greeks["iv"] * 100.0,
+        "volume": volume,
+        "open_interest": ASSUMED_OPEN_INTEREST,
+        # The historical NBBO is by construction the quote in force at the
+        # decision moment, so live's freshness gate is satisfied rather
+        # than faked. Nothing here reproduces a genuinely stale live feed;
+        # `no_quote` counts the contracts that had no quote at all.
+        "quote_freshness": "LIVE_QUOTE",
+        "quote_status": "OK",
+        "quote_timeframe": "REALTIME",
+    }
+
+    # Live scores quality inside the chain fetch, and both the ranker
+    # (score += quality/10) and the liquidity gate (>= 65) read it. Leaving
+    # it at 0, as this did, put every contract 6.5 points low into ranking
+    # and then failed all of them at the gate.
+    contract.update(
+        score_option_quality(
+            contract,
+            min_volume=settings.option_min_volume,
+            min_open_interest=settings.option_min_open_interest,
+            max_spread_pct=settings.option_max_spread_pct,
+            allow_0dte=settings.option_allow_0dte,
+            allow_1dte=settings.option_allow_1dte,
+            min_dte=settings.option_min_dte,
+            preferred_min_dte=settings.option_preferred_min_dte,
+            preferred_max_dte=settings.option_preferred_max_dte,
+            max_dte=settings.option_max_dte,
+        )
+    )
+
+    return contract, None
+
+
+def chain_workers():
+    """How many contracts to price at once. 1 restores sequential pricing.
+
+    Every candidate needs its own NBBO and they are fetched one at a time, so a
+    72-contract chain is 72 round trips of roughly 0.8s spent almost entirely
+    waiting. That, not indicator recomputation, is what a replay day is made of:
+    `build_frames` measured at 273s of a ~35 minute day, about 13%.
+
+    Bounded well under `POLYGON_RATE_LIMIT_PER_MINUTE` (1,200/min = 20/s), so
+    the pool never becomes the thing that trips the rate limiter -- 8 in flight
+    at ~1.25 requests/second each is around 10/s at the very worst.
+    """
+
+    try:
+        workers = int(os.getenv("BACKTEST_CHAIN_WORKERS", "8"))
+
+    except (TypeError, ValueError):
+        return 8
+
+    return max(1, min(32, workers))
+
+
 def build_historical_chain(underlying, moment, direction, spot, config=None):
-    """Price and enrich the prefiltered chain into ranker input."""
+    """Price and enrich the prefiltered chain into ranker input.
+
+    Priced concurrently, but assembled strictly in candidate order: the pool is
+    an I/O optimisation and must not be observable in the result. `executor.map`
+    preserves input order, so the chain and the skip counts come out exactly as
+    the sequential version produced them, which is what makes the parity
+    fixtures a valid check on this change.
+    """
 
     config = config or SelectionConfig()
+
+    candidates = list(
+        _candidate_tickers(underlying, moment, direction, spot, config)
+    )
 
     chain = []
     skipped = {"no_price": 0, "no_quote": 0, "no_greeks": 0}
 
-    for _, dte, ticker, spec in _candidate_tickers(
-        underlying, moment, direction, spot, config
-    ):
+    if not candidates:
 
-        bars = option_bars(ticker, moment)
-        mark = price_at(bars, moment)
+        return chain, skipped
 
-        if mark is None or mark <= 0:
+    workers = min(chain_workers(), len(candidates))
 
-            skipped["no_price"] += 1
-            continue
+    def price(candidate):
+        return _price_candidate(underlying, moment, spot, config, candidate)
 
-        quote = quote_at(ticker, moment)
+    if workers <= 1:
 
-        if quote is None and config.require_quote:
+        results = [price(candidate) for candidate in candidates]
 
-            skipped["no_quote"] += 1
-            continue
+    else:
 
-        greeks = greeks_for_contract(
-            ticker, quote["mid"] if quote else mark, spot, moment
-        )
+        with ThreadPoolExecutor(max_workers=workers) as pool:
 
-        if greeks is None:
+            results = list(pool.map(price, candidates))
 
-            skipped["no_greeks"] += 1
-            continue
+    for contract, skip_reason in results:
 
-        # Session volume to date, not the last bar's. The ranker gates at
-        # `volume < 5` and scores in bands of 250 and 1000, so a single 5m
-        # bar's count rejects contracts that have traded thousands since the
-        # open.
-        volume = _session_volume(bars, moment)
+        if skip_reason:
 
-        contract = {
-            "ticker": ticker,
-            "symbol": underlying,
-            "strike": spec["strike"],
-            # Lowercase: the ranker's direction filter compares against
-            # "call"/"put" literals, so an uppercase type silently rejects
-            # the entire chain.
-            "type": spec["contract_type"].lower(),
-            "expiration_date": spec["expiry"].isoformat(),
-            "dte": dte,
-            # Live's own classifier, not a local copy. A previous local version
-            # returned WEEKLY/SHORT_TERM/LONG_TERM, which are not labels any
-            # live code emits, so the ranker's bucket block matched none of
-            # them and silently withheld the +12 a 14-30 DTE contract earns and
-            # the -8 a 7-13 DTE one is docked -- a 20 point swing on the term
-            # that decides expiry, which is exactly where parity was failing.
-            "expiration_bucket": classify_expiration_bucket(dte),
-            "mid_price": quote["mid"] if quote else mark,
-            "bid": quote["bid"] if quote else None,
-            "ask": quote["ask"] if quote else None,
-            "spread_pct": quote["spread_pct"] if quote else None,
-            "delta": greeks["delta"],
-            "gamma": greeks["gamma"],
-            "theta": greeks["theta"],
-            "iv": greeks["iv"] * 100.0,
-            "volume": volume,
-            "open_interest": ASSUMED_OPEN_INTEREST,
-            # The historical NBBO is by construction the quote in force at the
-            # decision moment, so live's freshness gate is satisfied rather
-            # than faked. Nothing here reproduces a genuinely stale live feed;
-            # `no_quote` counts the contracts that had no quote at all.
-            "quote_freshness": "LIVE_QUOTE",
-            "quote_status": "OK",
-            "quote_timeframe": "REALTIME",
-        }
+            skipped[skip_reason] += 1
 
-        # Live scores quality inside the chain fetch, and both the ranker
-        # (score += quality/10) and the liquidity gate (>= 65) read it. Leaving
-        # it at 0, as this did, put every contract 6.5 points low into ranking
-        # and then failed all of them at the gate.
-        contract.update(
-            score_option_quality(
-                contract,
-                min_volume=settings.option_min_volume,
-                min_open_interest=settings.option_min_open_interest,
-                max_spread_pct=settings.option_max_spread_pct,
-                allow_0dte=settings.option_allow_0dte,
-                allow_1dte=settings.option_allow_1dte,
-                min_dte=settings.option_min_dte,
-                preferred_min_dte=settings.option_preferred_min_dte,
-                preferred_max_dte=settings.option_preferred_max_dte,
-                max_dte=settings.option_max_dte,
-            )
-        )
+        else:
 
-        chain.append(contract)
+            chain.append(contract)
 
     return chain, skipped
 
