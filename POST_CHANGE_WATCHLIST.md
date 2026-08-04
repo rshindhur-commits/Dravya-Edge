@@ -242,7 +242,7 @@ R is measured against entry risk at close, not the moved stop.
 **Watch.** `r_multiple IS NULL` on closed trades. **Trigger.** Any null on a
 trade that reached +1R.
 
-### 2.3 Regime block firing
+### 2.3 Regime block firing — TRIGGER MET, and it is the reason for the trade count
 
 Evaluates 100% of candidates instead of 27.8%.
 
@@ -252,6 +252,44 @@ old behaviour under real intraday volatility.
 
 **Trigger.** Settling above ~70% means the trend read is not separating from the
 volatility read in live conditions.
+
+**2026-08-03: 75%.** `HIGH_VOLATILITY` was the reference regime for **2,258 of
+2,990** evaluations. The trigger above is met, and this is now the single largest
+constraint on trade count — larger than every gate this file otherwise tracks.
+
+`apply_regime_entry_thresholds` raises `min_setup` to `MIN_SETUP_ELEVATED` (81) and
+`min_rr` to 2.0 on `HIGH_VOLATILITY`. What that did to the Setup gate:
+
+| Effective floor | Evaluations | Passed | Median setup |
+| --- | --- | --- | --- |
+| 62 (regime UNKNOWN, premarket) | 729 | 0 | 8 |
+| **81 (HIGH_VOLATILITY)** | **1,902** | **6** | 49 |
+| 83 (weak breadth) | 104 | 0 | 0 |
+| 85 (RANGE_BOUND) | 255 | 1 | 24 |
+
+**7 of 2,990 candidate-scans cleared Setup — 0.23%.** The full funnel that day:
+
+```
+2,990 evaluated -> 1,762 pass Momentum (58.9%) -> 7 pass Setup (0.23%)
+               -> 4 reach an actionable Action Status -> 3 trades
+```
+
+Every gate downstream is measuring almost nothing. RR passed 34% but blocked only
+3; Option Quality and Quote Freshness never blocked at all; the position caps never
+fired. **Nothing changed on 2026-08-03 moved the trade count, and nothing in the
+option or risk layer can, while Setup passes 7 rows in a session.**
+
+**What to do about it is not obvious and should not be guessed at.** Lowering
+`MIN_SETUP_ELEVATED` trades directly against the reason it exists, and 81 was
+chosen on the same scale that makes 62 the floor for being a setup at all. The
+prior question is whether `HIGH_VOLATILITY` at 75% is a true read of the tape or
+the volatility-first regime bucket mislabelling a normal session — which is the
+same doubt 3.1 records about the ATR buckets, still unresolved.
+
+**Watch.** Daily `HIGH_VOLATILITY` share and the Setup pass rate against the
+*effective* floor. **Trigger for action.** Two more sessions above 70% with a
+Setup pass rate under 1% makes the regime read, not the setup bar, the thing to
+fix.
 
 ### 2.4 Setup % on the new scale — the projection was never comparable
 
