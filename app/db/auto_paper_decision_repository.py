@@ -120,7 +120,17 @@ class AutoPaperDecisionRepository(BestEffortRepository):
             "trading_day": entry.get("trading_day"),
             "session_id": entry.get("session_id"),
             "scan_id": entry.get("scan_id"),
-            "scan_timestamp": entry.get("scan_timestamp") or entry.get("timestamp"),
+            # UTC first. `scan_timestamp` is ET wall-clock with no offset, so
+            # writing it to a timestamptz column stamps it +00 and puts every row
+            # four hours early -- which is what the whole ledger held until this
+            # was added. The naive values remain as fallbacks for callers that
+            # predate `scan_timestamp_utc`, so those rows stay merely wrong rather
+            # than becoming NULL.
+            "scan_timestamp": (
+                entry.get("scan_timestamp_utc")
+                or entry.get("scan_timestamp")
+                or entry.get("timestamp")
+            ),
             "market_session": entry.get("market_session"),
             "is_auto_entry_window": _boolean(entry.get("is_auto_entry_window")),
             "is_after_close": _boolean(entry.get("is_after_close")),

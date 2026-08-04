@@ -2897,6 +2897,10 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "session_id": get_session_id(trading_day),
         "scan_id": get_scan_id(trading_day, decision_time),
         "scan_timestamp": scan_timestamp,
+        # See the scan-path recorder: the naive value is ET and reads as UTC once
+        # it reaches a timestamptz column. These carry the unambiguous times.
+        "scan_timestamp_et": decision_time.isoformat(),
+        "scan_timestamp_utc": decision_time.astimezone(timezone.utc).isoformat(),
         **classify_decision_time(decision_time),
         "gate_mode": "auto_paper",
         # Shared with the scan-path recorder: the scanner gate's regime-escalated

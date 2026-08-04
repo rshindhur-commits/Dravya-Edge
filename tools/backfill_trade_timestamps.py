@@ -119,6 +119,76 @@ def plan_corrections(rows):
     return corrections, unfixable
 
 
+# The ledger's own version of the same bug, with a different shape.
+#
+# `auto_paper_decision.scan_timestamp` is ET wall-clock in a timestamptz and is
+# *uniformly* so -- all 1,275 rows sit exactly 4.00h behind their own `created_at`,
+# which is Postgres `now()` and always right. Uniform is survivable; the danger is
+# fixing the write path without this, which makes the column mixed and therefore
+# worse, exactly as paper_trades.opened_at was.
+#
+# Corrected against `created_at` rather than by a hardcoded offset, so it handles
+# EST as well as EDT and is a no-op once clean.
+LEDGER_MAX_WRITE_LAG_SECONDS = 900
+
+
+def plan_ledger_corrections(rows):
+    """Rows whose scan_timestamp trails created_at by whole hours.
+
+    A decision row is written within seconds of the scan it describes, so a gap of
+    hours is the mislabelling and anything under LEDGER_MAX_WRITE_LAG_SECONDS is
+    ordinary queue lag that must be left alone.
+    """
+
+    corrections = []
+
+    for row in rows:
+        stored = _as_utc(row.get("scan_timestamp"))
+        witness = _as_utc(row.get("created_at"))
+
+        if stored is None or witness is None:
+            continue
+
+        lag = (witness - stored).total_seconds()
+
+        if lag <= LEDGER_MAX_WRITE_LAG_SECONDS:
+            continue
+
+        # Snap to the whole hour the offset actually is, so the sub-second write
+        # lag is preserved rather than being folded into the correction.
+        hours = round(lag / 3600)
+
+        if hours <= 0:
+            continue
+
+        corrected = stored + timedelta(hours=hours)
+
+        corrections.append({
+            "id": row.get("id"),
+            "changes": {
+                "scan_timestamp": {
+                    "from": stored.isoformat(),
+                    "to": corrected.isoformat(),
+                    "shift_hours": float(hours),
+                }
+            },
+        })
+
+    return corrections
+
+
+def _report(corrections, label):
+    print(f"\n{len(corrections)} {label} row(s) disagree with their witness")
+
+    for correction in corrections[:10]:
+        for column, change in correction["changes"].items():
+            print(f"  id {correction['id']}: {column} {change['from']} -> "
+                  f"{change['to']} ({change['shift_hours']:+}h)")
+
+    if len(corrections) > 10:
+        print(f"  ... and {len(corrections) - 10} more")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -127,6 +197,8 @@ def main():
                         help="perform the update (default is a dry run)")
     parser.add_argument("--backup", default=str(ROOT / "logs" / "backfilled_timestamps.json"),
                         help="where to write the pre-update backup")
+    parser.add_argument("--table", choices=["paper_trades", "auto_paper_decision", "all"],
+                        default="all", help="which table to correct")
     args = parser.parse_args()
 
     url = os.getenv("DATABASE_DIRECT_URL", "").strip() or os.getenv("DATABASE_URL", "").strip()
@@ -136,32 +208,46 @@ def main():
 
     engine = create_engine(url, pool_pre_ping=True)
 
-    with engine.connect() as connection:
-        rows = [
-            dict(row) for row in connection.execute(text(
-                "SELECT id, opened_at, closed_at, payload FROM paper_trades ORDER BY id"
-            )).mappings()
-        ]
+    planned = {}
 
-    corrections, unfixable = plan_corrections(rows)
+    if args.table in {"paper_trades", "all"}:
 
-    print(f"{len(rows)} paper trades on record")
-    print(f"{len(corrections)} row(s) disagree with their own payload\n")
+        with engine.connect() as connection:
+            rows = [
+                dict(row) for row in connection.execute(text(
+                    "SELECT id, opened_at, closed_at, payload FROM paper_trades ORDER BY id"
+                )).mappings()
+            ]
 
-    for correction in corrections:
-        parts = ", ".join(
-            f"{column} {change['from']} -> {change['to']} ({change['shift_hours']:+}h)"
-            for column, change in correction["changes"].items()
-        )
-        print(f"  id {correction['id']}: {parts}")
+        corrections, unfixable = plan_corrections(rows)
+        planned["paper_trades"] = corrections
 
-    if unfixable:
-        print(f"\n{len(unfixable)} row(s) carry no payload UTC to correct from and were "
-              "left alone:")
-        for row in unfixable:
-            print(f"  id {row['id']}: {', '.join(row['columns'])}")
+        print(f"{len(rows)} paper trades on record")
+        _report(corrections, "paper_trades")
 
-    if not corrections:
+        if unfixable:
+            print(f"\n{len(unfixable)} row(s) carry no payload UTC to correct from and "
+                  "were left alone:")
+            for row in unfixable:
+                print(f"  id {row['id']}: {', '.join(row['columns'])}")
+
+    if args.table in {"auto_paper_decision", "all"}:
+
+        with engine.connect() as connection:
+            rows = [
+                dict(row) for row in connection.execute(text(
+                    "SELECT id, scan_timestamp, created_at FROM auto_paper_decision "
+                    "ORDER BY id"
+                )).mappings()
+            ]
+
+        corrections = plan_ledger_corrections(rows)
+        planned["auto_paper_decision"] = corrections
+
+        print(f"\n{len(rows)} decision rows on record")
+        _report(corrections, "auto_paper_decision")
+
+    if not any(planned.values()):
         print("\nNothing to correct.")
         return
 
@@ -171,22 +257,26 @@ def main():
 
     path = Path(args.backup)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(corrections, indent=2), encoding="utf-8")
-    print(f"\nbacked up {len(corrections)} row(s) to {path}")
+    path.write_text(json.dumps(planned, indent=2), encoding="utf-8")
+    print(f"\nbacked up {sum(len(v) for v in planned.values())} row(s) to {path}")
 
     updated = 0
 
     with engine.begin() as connection:
-        for correction in corrections:
-            for column, change in correction["changes"].items():
-                connection.execute(
-                    text(
-                        f"UPDATE paper_trades SET {column} = CAST(:value AS timestamptz) "
-                        "WHERE id = :id"
-                    ),
-                    {"value": change["to"], "id": correction["id"]},
-                )
-            updated += 1
+        for table, corrections in planned.items():
+            for correction in corrections:
+                for column, change in correction["changes"].items():
+                    connection.execute(
+                        text(
+                            f'UPDATE "{table}" SET {column} = '
+                            "CAST(:value AS timestamptz) WHERE id = :id"
+                        ),
+                        {"value": change["to"], "id": correction["id"]},
+                    )
+                updated += 1
+
+            if corrections:
+                print(f"  updated {len(corrections)} in {table}")
 
     print(f"TOTAL ROWS UPDATED: {updated}")
 

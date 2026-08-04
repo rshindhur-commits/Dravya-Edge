@@ -15,7 +15,12 @@ AUTO_PAPER_DECISION_FIELDS = [
     "trading_day",
     "session_id",
     "scan_id",
+    # `scan_timestamp` is ET wall-clock with no offset, kept that way because the
+    # CSV is read as ET. The two beside it are unambiguous, and the DB column is
+    # written from the UTC one.
     "scan_timestamp",
+    "scan_timestamp_et",
+    "scan_timestamp_utc",
     "market_session",
     "decision_time_bucket",
     "is_regular_market",

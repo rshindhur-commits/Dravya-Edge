@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -773,6 +773,14 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "session_id": get_session_id(trading_day),
         "scan_id": scan_id,
         "scan_timestamp": scan_timestamp,
+        # `scan_timestamp` is ET wall-clock formatted without an offset. Written
+        # straight into a `timestamptz` it is read as UTC, so every row in the
+        # ledger sat exactly 4.00h early -- all 1,275 of them, uniformly. The
+        # naive string stays as it is because the CSV and the recent-decisions
+        # JSON display it as ET on purpose; these two carry the unambiguous
+        # values, and the repository writes the UTC one to the column.
+        "scan_timestamp_et": decision_time.isoformat(),
+        "scan_timestamp_utc": decision_time.astimezone(timezone.utc).isoformat(),
         **classify_decision_time(decision_time),
         "gate_mode": "auto_paper",
         # The floor that actually applied, not the auto-paper control that is

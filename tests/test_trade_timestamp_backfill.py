@@ -11,7 +11,7 @@ correct value in its own payload.
 
 import unittest
 
-from tools.backfill_trade_timestamps import plan_corrections
+from tools.backfill_trade_timestamps import plan_corrections, plan_ledger_corrections
 
 
 class PlanCorrectionsTests(unittest.TestCase):
@@ -107,6 +107,85 @@ class PlanCorrectionsTests(unittest.TestCase):
         }])
 
         self.assertEqual(len(corrections), 1)
+
+
+class LedgerCorrectionTests(unittest.TestCase):
+    """`auto_paper_decision.scan_timestamp` is ET in a timestamptz, uniformly.
+
+    All 1,275 rows sit exactly 4.00h behind their own `created_at`, which is
+    Postgres `now()` and always right. Uniform is survivable; fixing the write
+    path without this makes the column *mixed*, which is the worse state
+    paper_trades.opened_at was in.
+    """
+
+    def test_a_four_hour_gap_is_corrected_against_created_at(self):
+
+        corrections = plan_ledger_corrections([{
+            "id": 963,
+            "scan_timestamp": "2026-08-03T12:28:33+00:00",
+            "created_at": "2026-08-03T16:28:34.037800+00:00",
+        }])
+
+        change = corrections[0]["changes"]["scan_timestamp"]
+        self.assertEqual(change["to"], "2026-08-03T16:28:33+00:00")
+        self.assertEqual(change["shift_hours"], 4.0)
+
+    def test_ordinary_write_lag_is_left_alone(self):
+        """Rows are written seconds after the scan; that is not the bug."""
+
+        corrections = plan_ledger_corrections([{
+            "id": 1,
+            "scan_timestamp": "2026-08-03T16:28:33+00:00",
+            "created_at": "2026-08-03T16:28:37+00:00",
+        }])
+
+        self.assertEqual(corrections, [])
+
+    def test_a_queued_write_minutes_later_is_still_not_the_bug(self):
+
+        corrections = plan_ledger_corrections([{
+            "id": 2,
+            "scan_timestamp": "2026-08-03T16:28:33+00:00",
+            "created_at": "2026-08-03T16:36:33+00:00",
+        }])
+
+        self.assertEqual(corrections, [])
+
+    def test_the_offset_is_taken_from_the_data_not_assumed(self):
+        """Five hours in winter, four in summer."""
+
+        corrections = plan_ledger_corrections([{
+            "id": 3,
+            "scan_timestamp": "2026-01-15T10:00:00+00:00",
+            "created_at": "2026-01-15T15:00:02+00:00",
+        }])
+
+        self.assertEqual(corrections[0]["changes"]["scan_timestamp"]["shift_hours"], 5.0)
+
+    def test_running_it_twice_is_a_no_op(self):
+        """Corrected rows sit seconds from created_at and stop qualifying."""
+
+        row = {
+            "id": 963,
+            "scan_timestamp": "2026-08-03T12:28:33+00:00",
+            "created_at": "2026-08-03T16:28:34.037800+00:00",
+        }
+
+        corrected = plan_ledger_corrections([row])[0]["changes"]["scan_timestamp"]["to"]
+        row["scan_timestamp"] = corrected
+
+        self.assertEqual(plan_ledger_corrections([row]), [])
+
+    def test_a_row_written_before_its_scan_is_never_touched(self):
+        """Negative lag is a different bug and must not be silently shifted."""
+
+        corrections = plan_ledger_corrections([{
+            "id": 4,
+            "scan_timestamp": "2026-08-03T16:28:33+00:00",
+            "created_at": "2026-08-03T12:28:33+00:00",
+        }])
+
+        self.assertEqual(corrections, [])
 
 
 if __name__ == "__main__":
