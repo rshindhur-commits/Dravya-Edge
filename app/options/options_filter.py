@@ -4,7 +4,88 @@ from app.options.affordability_config import get_affordability_config
 from app.options.option_affordability import add_affordability_metrics
 
 
+# What the rejected contract actually was.
+#
+# Every verdict below said why a contract was refused and none said *which*
+# contract or against what number. On 2026-08-03 MSFT produced 29 rejections
+# reading "Low open interest" and "Wide bid/ask spread" with the ticker, the
+# open interest and the threshold all absent, so the only question that matters
+# -- is 500 too high, or is the selector reaching for an illiquid strike? --
+# could not be answered from the record at all.
+#
+# Merged in one place rather than added to a dozen return sites, so a verdict
+# added later cannot forget to carry it.
+_REJECTION_EVIDENCE_FIELDS = (
+    "ticker",
+    "strike",
+    "expiration",
+    "dte",
+    "open_interest",
+    "volume",
+    "bid",
+    "ask",
+    "mid_price",
+    "delta",
+    "iv",
+    "contract_cost",
+    "quote_status",
+    "quote_freshness",
+    "expiration_bucket",
+)
+
+
+def _rejection_evidence(option_data):
+
+    option_data = option_data or {}
+    evidence = {}
+
+    for field in _REJECTION_EVIDENCE_FIELDS:
+
+        value = option_data.get(field)
+
+        if value is not None and str(value).strip() not in {"", "nan", "None"}:
+
+            evidence[field] = value
+
+    return evidence
+
+
+def _required_value(code):
+    """The threshold this code was measured against, where there is one."""
+
+    return {
+        "LOW_OPEN_INTEREST": settings.option_min_open_interest,
+        "LOW_VOLUME": settings.option_min_volume,
+        "WIDE_SPREAD": settings.option_max_spread_pct,
+        "LOW_OPTION_QUALITY": settings.option_min_quality_score,
+    }.get(str(code or "").upper())
+
+
 def evaluate_option_liquidity(option_data):
+    """Liquidity verdict, with the contract and threshold behind it attached."""
+
+    result = _evaluate_option_liquidity(option_data)
+
+    if result.get("liquid"):
+
+        return result
+
+    # Evidence never overwrites a verdict's own fields: `spread_pct` is rounded
+    # deliberately by some branches, and the raw quote value must not replace it.
+    for field, value in _rejection_evidence(option_data).items():
+
+        result.setdefault(field, value)
+
+    required = _required_value(result.get("code"))
+
+    if required is not None:
+
+        result.setdefault("required_value", required)
+
+    return result
+
+
+def _evaluate_option_liquidity(option_data):
 
     """
     Basic liquidity filter for options contracts

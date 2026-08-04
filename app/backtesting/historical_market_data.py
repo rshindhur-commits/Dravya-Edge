@@ -37,6 +37,7 @@ edge.
 
 import os
 import time
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -85,6 +86,48 @@ def _is_retryable(status_code):
     return status_code in _RETRYABLE_STATUSES or status_code >= 500
 
 
+# One pooled, keep-alive session per thread.
+#
+# `requests.get` opens a fresh TCP connection and repeats the TLS handshake on
+# every call. At replay volume that is the dominant per-request cost: a single
+# selection prices up to 72 contracts, each needing its own NBBO, and a day makes
+# ~31 selections. Reusing the connection removes a full round trip per request
+# and is what makes concurrent fetching worth doing rather than just parallel
+# handshakes.
+#
+# Thread-local rather than shared. `requests.Session` is not documented as
+# thread-safe, and the replay now prices a chain from a pool; a session per
+# thread keeps the pooling without relying on urllib3's internals for
+# correctness.
+_SESSIONS = threading.local()
+
+# Sized to the pool that uses it, so concurrent requests do not queue on a
+# connection or trigger urllib3's "connection pool is full" discard-and-reopen,
+# which would give back exactly the handshake this exists to avoid.
+_CONNECTION_POOL_SIZE = 32
+
+
+def _session():
+
+    session = getattr(_SESSIONS, "session", None)
+
+    if session is None:
+
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=_CONNECTION_POOL_SIZE,
+            pool_maxsize=_CONNECTION_POOL_SIZE,
+            # Retries stay in request_with_retry, which knows which statuses are
+            # answers and which are the absence of one.
+            max_retries=0,
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _SESSIONS.session = session
+
+    return session
+
+
 def request_with_retry(url, params, timeout=30, max_retries=4, context=""):
     """GET with backoff over rate limits, gateway faults and transport faults.
 
@@ -108,7 +151,7 @@ def request_with_retry(url, params, timeout=30, max_retries=4, context=""):
 
         try:
 
-            response = requests.get(url, params=params, timeout=timeout)
+            response = _session().get(url, params=params, timeout=timeout)
 
         except (
             requests.exceptions.ConnectionError,

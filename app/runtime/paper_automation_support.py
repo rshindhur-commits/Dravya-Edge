@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -16,6 +16,7 @@ from app.gates import (
     symbol_trade_count_today,
 )
 from app.gates.setup_quality import MIN_SETUP_BASE
+from app.risk.stop_viability import evaluate_stop_viability
 from app.strategies.setup_registry import KNOWN_SETUPS
 from app.state.holding_policy import holding_policy
 from app.storage.auto_paper_decision_store import (
@@ -87,6 +88,78 @@ def max_active_per_direction():
     return env_int("MAX_ACTIVE_PER_DIRECTION", 2)
 
 
+# The two profiles compete for the same book, and only one of them gives its slot
+# back at the close.
+#
+# An INTRADAY position is flattened at 15:55 whatever happens, so its slot is
+# borrowed for hours. A MULTIDAY position sets force_eod_exit=False and holds
+# until the exit engine closes it, which on 2026-07-30 meant positions still open
+# days later. Under one shared MAX_ACTIVE_PAPER_TRADES the slow profile therefore
+# crowds out the fast one: two multiday carries against a cap of 4 leave tomorrow
+# morning with two slots for a full session of intraday setups, and the operator
+# sees "MAX_ACTIVE_PAPER_TRADES_REACHED" without seeing that the trades holding
+# the book were opened last week.
+#
+# Both default to the shared cap, so an unset environment behaves exactly as it
+# does now and this becomes a limit only once someone sets it.
+def max_active_for_profile(profile):
+    """Concurrent open positions allowed within one holding profile."""
+
+    if str(profile or "").upper() == "MULTIDAY":
+        return env_int("MAX_ACTIVE_MULTIDAY_TRADES", max_active_paper_trades())
+
+    return env_int("MAX_ACTIVE_INTRADAY_TRADES", max_active_paper_trades())
+
+
+def max_daily_for_profile(profile, controls=None):
+    """New entries allowed per day within one holding profile.
+
+    Separate from the concurrency cap because they answer different questions: how
+    much of the book one profile may hold at once, and how much churn it may
+    generate in a session.
+    """
+
+    fallback = (controls or {}).get("max_daily")
+
+    if fallback is None:
+        fallback = load_auto_paper_controls()["max_daily"]
+
+    if str(profile or "").upper() == "MULTIDAY":
+        return env_int("MAX_DAILY_MULTIDAY_ENTRIES", fallback)
+
+    return env_int("MAX_DAILY_INTRADAY_ENTRIES", fallback)
+
+
+def candidate_holding_profile(row):
+    """INTRADAY or MULTIDAY for a scanner row, without raising.
+
+    `_add_holding_profiles` already stamps every row, so this is normally just
+    reading the column back. It re-derives when the column is missing -- the
+    dashboard's manual path and the older archived frames both reach here without
+    one -- and falls back to INTRADAY, which is the profile that gives its slot
+    back and so is the safe assumption when the answer is unknown.
+    """
+
+    from app.state.holding_policy import derive_holding_profile
+
+    try:
+        return derive_holding_profile(
+            row if isinstance(row, dict) else dict(row)
+        ).value
+
+    except Exception:
+        return "INTRADAY"
+
+
+def _active_profile_count(open_trades, profile):
+    profile = str(profile or "").upper()
+
+    return len([
+        trade for trade in open_trades
+        if str(trade.get("holding_profile") or "INTRADAY").upper() == profile
+    ])
+
+
 def load_auto_paper_controls():
     """Auto-paper settings, read from the environment and nowhere else.
 
@@ -110,7 +183,19 @@ def load_auto_paper_controls():
         "auto_paper_enabled": _env_bool("AUTO_PAPER_ENABLED", True),
         # Named the same limit as the affordability config and disagreed with it
         # for as long as both existed; MAX_DAILY_ENTRIES is now the only spelling.
-        "max_daily": env_int("MAX_DAILY_ENTRIES", 3),
+        #
+        # Default raised 3 -> 5 on 2026-08-03. This is the only position cap with
+        # a track record of costing trades: every one of the five
+        # DAILY_AUTO_PAPER_LIMIT_REACHED blocks in the ledger is 07-31, all AMZN,
+        # on a day that opened **three** trades -- because production runs the code
+        # default and `.env`'s 5 never reaches Render or Streamlit Cloud. Exactly
+        # the failure mode `enforce_stop_viability` documents, on the one limit
+        # where it was actually binding.
+        #
+        # 5 is also what the codebase already assumed: AUTO_PAPER_MAX_CANDIDATE_RANK
+        # was raised to 5 specifically to "match MAX_DAILY_ENTRIES". The default was
+        # the odd one out.
+        "max_daily": env_int("MAX_DAILY_ENTRIES", 5),
         "min_setup": _env_float("AUTO_PAPER_MIN_SETUP", MIN_SETUP_BASE),
         "min_rr": _env_float("AUTO_PAPER_MIN_RR", DEFAULT_AUTO_PAPER_MIN_RR),
         "direction": _env_str("AUTO_PAPER_DIRECTION", "Both"),
@@ -560,6 +645,109 @@ def write_auto_paper_decision(entry, trading_day):
         print(f"[AUTO PAPER LOG WARNING] decision DB mirror failed: {exc}")
 
 
+def _effective_gate_floors(row, controls):
+    """The thresholds the candidate was actually judged against.
+
+    `controls` holds the auto-paper floor (`AUTO_PAPER_MIN_SETUP`, 62). That is not
+    the number that rejects anything. The scanner's gate runs first at
+    `SCANNER_GATE_MIN_SETUP` (70) and `apply_regime_entry_thresholds` escalates it
+    further -- to 83 on weak breadth, 85 in RANGE_BOUND -- and a row that fails
+    there is downgraded before auto-paper sees it.
+
+    So the ledger recorded `min_setup_used = 62` beside `SETUP_BELOW_THRESHOLD`
+    blocks at setup 62, 70 and 79 on 2026-08-03: three rows that read as
+    contradictions, and a column that cannot answer "how far short was it" for any
+    of them. `_add_entry_gate_diagnostics` already put the real floor on the row as
+    ENTRY_GATE_MIN_SETUP; nothing read it.
+
+    Falls back to the controls when the row carries no gate diagnostics -- SYSTEM
+    rows and the dashboard's manual path never run the scanner gate, and for those
+    the auto-paper floor genuinely is the one that applied.
+    """
+
+    floors = {
+        "min_rr_used": (controls or {}).get("min_rr"),
+        "min_setup_used": (controls or {}).get("min_setup"),
+    }
+
+    if row is None:
+        return floors
+
+    for key, column in (
+        ("min_rr_used", "ENTRY_GATE_MIN_RR"),
+        ("min_setup_used", "ENTRY_GATE_MIN_SETUP"),
+    ):
+        value = _safe_float(row.get(column), None)
+
+        if value is not None:
+            floors[key] = value
+
+    return floors
+
+
+# What the contract cost to trade, at the moment the decision was taken.
+#
+# Every one of the 869 decisions on 2026-08-03 recorded `stop_spread_multiple`
+# and not one recorded the spread, delta or premium that produced it -- so the 11
+# STOP_INSIDE_OPTION_SPREAD blocks that day say a stop covered 0.56x of a spread
+# without saying what the spread was. The multiple alone cannot be recalibrated:
+# moving the threshold needs the distribution of its inputs.
+#
+# The dashboard's recorder has always written some of these. This is the scan
+# path -- the one that takes almost every decision -- catching up.
+_DECISION_OPTION_COLUMNS = {
+    "option_quality_score": "Option Quality Score",
+    "option_spread_pct": "Option Spread %",
+    "option_delta": "Option Delta",
+    "option_mid_price": "Option Mid Price",
+    "option_bid": "Option Bid",
+    "option_ask": "Option Ask",
+    "option_ticker": "Option Ticker",
+    "option_contract_cost": "Option Contract Cost",
+    "option_quote_freshness": "Option Quote Freshness",
+    "option_rejection_reason": "Option Rejection Reason",
+    # Which contract was refused and against what threshold. The reason alone
+    # ("Low open interest") cannot say whether the floor is too high or the
+    # selector picked a bad strike.
+    "option_rejection_evidence": "Option Rejection Evidence",
+    "expiration_bucket": "Expiration Bucket",
+    "candidate_entry_price": "Candidate Entry Price",
+    "candidate_stop_price": "Candidate Stop Price",
+    "candidate_target_price": "Candidate Target Price",
+    "candidate_direction": "Candidate Direction",
+    "candidate_rank": "Candidate Rank",
+    "holding_profile": "Holding Profile",
+    # The stop-viability inputs, so the block reason is reproducible from the row.
+    "stop_move_pct_of_premium": "STOP_MOVE_PCT_OF_PREMIUM",
+    "stop_round_trip_spread_pct": "STOP_ROUND_TRIP_SPREAD_PCT",
+    "stop_required_spread_multiple": "STOP_REQUIRED_SPREAD_MULTIPLE",
+}
+
+
+def _decision_option_details(row):
+    """Contract economics for the decision ledger, or {} when there is no row."""
+
+    if row is None:
+        return {}
+
+    details = {}
+
+    for key, column in _DECISION_OPTION_COLUMNS.items():
+        value = row.get(column)
+
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            continue
+
+        text = str(value).strip()
+
+        if text in {"", "nan", "None"}:
+            continue
+
+        details[key] = value
+
+    return details
+
+
 def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, controls=None):
     controls = controls or {}
     decision_time = _current_et()
@@ -585,10 +773,24 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "session_id": get_session_id(trading_day),
         "scan_id": scan_id,
         "scan_timestamp": scan_timestamp,
+        # `scan_timestamp` is ET wall-clock formatted without an offset. Written
+        # straight into a `timestamptz` it is read as UTC, so every row in the
+        # ledger sat exactly 4.00h early -- all 1,275 of them, uniformly. The
+        # naive string stays as it is because the CSV and the recent-decisions
+        # JSON display it as ET on purpose; these two carry the unambiguous
+        # values, and the repository writes the UTC one to the column.
+        "scan_timestamp_et": decision_time.isoformat(),
+        "scan_timestamp_utc": decision_time.astimezone(timezone.utc).isoformat(),
         **classify_decision_time(decision_time),
         "gate_mode": "auto_paper",
-        "min_rr_used": controls.get("min_rr"),
-        "min_setup_used": controls.get("min_setup"),
+        # The floor that actually applied, not the auto-paper control that is
+        # usually below it. See _effective_gate_floors.
+        **_effective_gate_floors(row, controls),
+        # What the auto-paper control was set to, kept alongside so raising
+        # AUTO_PAPER_MIN_SETUP can still be seen to have had no effect while the
+        # scanner floor sits above it.
+        "auto_paper_min_rr": controls.get("min_rr"),
+        "auto_paper_min_setup": controls.get("min_setup"),
         "symbol": symbol,
         "decision": decision,
         "reason": reason,
@@ -631,6 +833,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "daily_realised_vol": row.get("Daily Realised Vol %") if row is not None else None,
         "realised_vol_source": row.get("IV_RV_SOURCE") if row is not None else None,
         "stop_viability_enforced": row.get("STOP_VIABILITY_ENFORCED") if row is not None else None,
+        **_decision_option_details(row),
         **_gate_counterfactuals(row, controls),
     }
     write_auto_paper_decision(entry, trading_day)
@@ -640,8 +843,15 @@ def _closed_paper_trades(paper_trades):
     return [trade for trade in (paper_trades or {}).values() if trade.get("status") == "CLOSED"]
 
 
-def _auto_paper_trade_count_today(paper_trades):
+def _auto_paper_trade_count_today(paper_trades, profile=None):
+    """Auto-paper entries opened today, optionally within one holding profile.
+
+    `profile=None` keeps the original whole-book count, which is what the shared
+    MAX_DAILY_ENTRIES cap still uses.
+    """
+
     today = _current_et().date()
+    profile = str(profile).upper() if profile else None
     count = 0
     for trade in paper_trades.values():
         opened_at = trade.get("opened_at")
@@ -651,9 +861,38 @@ def _auto_paper_trade_count_today(paper_trades):
             opened_date = datetime.strptime(opened_at, "%Y-%m-%d %H:%M:%S").date()
         except Exception:
             continue
-        if opened_date == today and str(trade.get("notes", "")).startswith("Auto paper"):
-            count += 1
+        if opened_date != today or not str(trade.get("notes", "")).startswith("Auto paper"):
+            continue
+        if profile and str(trade.get("holding_profile") or "INTRADAY").upper() != profile:
+            continue
+        count += 1
     return count
+
+
+def _legacy_spread_to_risk_multiple():
+    """`AUTO_PAPER_MAX_SPREAD_TO_RISK` expressed as a stop-spread multiple.
+
+    The two spellings of this rule were inverses of each other. This path asked
+    "how large may the spread be as a fraction of the risk move" (0.5 = strict);
+    `MIN_STOP_SPREAD_MULTIPLE` asks "how many times the spread must the risk move
+    cover" (2.0 = the same strictness). Returns None when the legacy variable is
+    unset, which is the normal case -- it is honoured only so that a deployment
+    which had set it does not silently loosen on this deploy.
+    """
+
+    import os
+
+    raw = os.getenv("AUTO_PAPER_MAX_SPREAD_TO_RISK")
+
+    if raw is None or str(raw).strip() == "":
+        return None
+
+    try:
+        tolerance = float(raw)
+    except (TypeError, ValueError):
+        return None
+
+    return None if tolerance <= 0 else 1.0 / tolerance
 
 
 def spread_cost_exceeds_risk(row):
@@ -670,37 +909,48 @@ def spread_cost_exceeds_risk(row):
     and lost money. R cannot see this, because R is computed entirely on the
     underlying and never looks at what the contract costs to trade.
 
+    **Delegates to `evaluate_stop_viability` rather than repeating the arithmetic.**
+    This function and that module implemented the same rule twice, with two
+    separate environment variables holding reciprocal values and two different
+    premium fallbacks (`Option Midpoint` here, `Option Ask` there). Raising
+    `MIN_STOP_SPREAD_MULTIPLE` therefore tightened the scanner's copy and left this
+    one at 1.0 -- survivable only because this check sits downstream of a row the
+    scanner has already downgraded to AVOID, so the looser copy could never be
+    reached while both were enabled. Set `STOP_VIABILITY_ENFORCE=false` and it
+    becomes the only copy that runs, at a threshold nobody chose.
+
     Returns False when delta, premium or spread are missing rather than blocking on
     absent data: a gate that fires on a missing field silently stops trading
-    altogether, which is a worse failure than the one it prevents.
+    altogether, which is a worse failure than the one it prevents. That is
+    `evaluate_stop_viability`'s `viable is None`, which this maps back to False.
     """
 
-    entry = _safe_float(row.get("Candidate Entry Price"), None)
-    stop = _safe_float(row.get("Candidate Stop Price"), None)
-    delta = _safe_float(row.get("Option Delta"), None)
-    premium = _safe_float(row.get("Option Mid Price"), None) or _safe_float(row.get("Option Midpoint"), None)
-    spread_pct = _safe_float(row.get("Option Spread %"), None)
+    verdict = evaluate_stop_viability(
+        row.get("Candidate Entry Price"),
+        row.get("Candidate Stop Price"),
+        row.get("Option Mid Price")
+        or row.get("Option Midpoint")
+        or row.get("Option Ask"),
+        row.get("Option Delta"),
+        row.get("Option Spread %"),
+        min_multiple=_legacy_spread_to_risk_multiple(),
+    )
 
-    if None in (entry, stop, delta, premium, spread_pct):
+    if verdict.get("viable") is not False:
         return False, None
 
-    if premium <= 0 or spread_pct <= 0:
+    # STOP_AT_ENTRY is a zero-risk stop, which this rule has never spoken about --
+    # it is the risk manager's to reject, and reporting it as a spread problem
+    # would misattribute the block in the decision ledger.
+    if verdict.get("reason") == "STOP_AT_ENTRY":
         return False, None
 
-    risk_move_pct = abs(entry - stop) * abs(delta) / premium * 100
-
-    if risk_move_pct <= 0:
-        return False, None
-
-    tolerance = _env_float("AUTO_PAPER_MAX_SPREAD_TO_RISK", 1.0)
-
-    if spread_pct > risk_move_pct * tolerance:
-        return True, (
-            f"SPREAD_EXCEEDS_RISK: spread {spread_pct:.1f}% vs "
-            f"{risk_move_pct:.1f}% option move to stop"
-        )
-
-    return False, None
+    return True, (
+        f"SPREAD_EXCEEDS_RISK: spread {verdict['round_trip_spread_pct']:.1f}% vs "
+        f"{verdict['move_pct_of_premium']:.1f}% option move to stop "
+        f"({verdict['spread_multiple']:.2f}x, need "
+        f"{verdict['required_multiple']:.2f}x)"
+    )
 
 
 def _auto_paper_entry_reason(row, controls, paper_trades):
@@ -775,8 +1025,24 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         trade for trade in open_trades if trade.get("direction") == direction
     ]) >= max_active_per_direction():
         return False, "DIRECTION_ALREADY_ACTIVE"
+
+    # Per-profile budgets, applied under the shared caps rather than instead of
+    # them. Both default to the shared cap, so this is inert until set: an
+    # overnight carry cannot quietly consume tomorrow's intraday capacity once
+    # MAX_ACTIVE_MULTIDAY_TRADES names its own ceiling.
+    profile = candidate_holding_profile(row)
+
+    if _active_profile_count(open_trades, profile) >= max_active_for_profile(profile):
+        return False, f"MAX_ACTIVE_{profile}_TRADES_REACHED"
+
     if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
         return False, "DAILY_AUTO_PAPER_LIMIT_REACHED"
+
+    if (
+        _auto_paper_trade_count_today(paper_trades, profile)
+        >= max_daily_for_profile(profile, controls)
+    ):
+        return False, f"DAILY_{profile}_LIMIT_REACHED"
     if review_validation_candidate:
         return True, "REVIEW_TV_CHART_VALIDATION_ELIGIBLE"
     return True, gate_reason

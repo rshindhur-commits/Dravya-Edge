@@ -16,6 +16,7 @@ soft exit.
 """
 
 import inspect
+from unittest.mock import patch
 
 from app.exit.exit_engine import resolve_profit_lock
 from app.state import paper_trade_manager
@@ -48,6 +49,48 @@ def test_mfe_keeps_the_peak_not_the_latest_reading():
         "mfe_r/mae_r must ratchet; overwriting loses the peak that profit "
         "protection and grace-zone eligibility both read"
     )
+
+
+def test_mfe_comes_from_the_live_engine_not_the_v2_shadow():
+    """Two engines emit mfe_r against independent risk denominators.
+
+    `execution_metrics` is `shadow_exit_v2`, handed the *moved* stop, so its R
+    denominator shifts every time the stop trails. SMCI on 2026-08-03 recorded
+    mfe_r 1.39 while its own highest_price of 28.91 against the 0.14 entry risk
+    was a 2.07R peak. The trade's realised r_multiple is measured against entry
+    risk, so its MFE has to be as well or the pair is not comparable.
+    """
+
+    trade = {}
+
+    paper_trade_manager._ratchet_excursions(
+        trade,
+        {"mfe_r": 2.07, "mae_r": 0.4},          # live engine, entry-frozen risk
+        {"mfe_r": 1.39, "mae_r": 0.9},          # V2 shadow, moved-stop risk
+    )
+
+    assert trade["mfe_r"] == 2.07
+    assert trade["mae_r"] == 0.4
+
+
+def test_the_shadow_is_still_used_when_no_live_reading_exists():
+    """Callers that pass no exit_state keep the behaviour they had."""
+
+    trade = {}
+
+    paper_trade_manager._ratchet_excursions(trade, None, {"mfe_r": 1.39})
+
+    assert trade["mfe_r"] == 1.39
+
+
+def test_excursions_ratchet_across_scans_whichever_source_spoke():
+
+    trade = {}
+
+    paper_trade_manager._ratchet_excursions(trade, {"mfe_r": 2.07}, None)
+    paper_trade_manager._ratchet_excursions(trade, {"mfe_r": 0.5}, None)
+
+    assert trade["mfe_r"] == 2.07, "a retrace must not erase the peak"
 
 
 def test_profit_lock_holds_the_nvda_trade_and_ratchets_the_stop():
@@ -134,3 +177,84 @@ def test_entry_side_option_ask_is_frozen_at_open():
 
     assert '"option_entry_ask": option_ask' in source
     assert 'trade.get("option_entry_ask")' in source
+
+
+def _close(trade, close_price):
+    """Drive the real close path against an in-memory trade book."""
+
+    key = trade["trade_key"]
+    state = {key: dict(trade)}
+    saved = {}
+
+    with patch.object(paper_trade_manager, "load_paper_trades", return_value=state), \
+         patch.object(paper_trade_manager, "save_paper_trades",
+                      side_effect=lambda s: saved.update(s)), \
+         patch.object(paper_trade_manager, "_queue_paper_trade_upsert"), \
+         patch.object(paper_trade_manager, "_append_trend_capture_for_closed_trade",
+                      return_value=None), \
+         patch.object(paper_trade_manager, "record_trade_event", create=True), \
+         patch.object(paper_trade_manager, "dispatch_exit_alert", create=True):
+
+        return paper_trade_manager.close_paper_trade(
+            trade["symbol"], close_price=close_price,
+            exit_reason="Profit target reached (long)", notify_exit=False,
+        )
+
+
+def _orcl(**overrides):
+    """ORCL on 2026-08-03: entry 137.38, risk 1.01, closed 139.81 for +2.41R.
+
+    Its recorded `mfe_r` was 1.43 -- a peak *below* the outcome, which cannot
+    happen. `update_paper_trade` ratchets MFE but only runs on holding scans; the
+    scan that closes a trade takes a different path and never folded in the final,
+    highest excursion.
+    """
+
+    trade = {
+        "trade_key": "ORCL|O:ORCL260814C00145000|2026-08-03 11:58:12",
+        "symbol": "ORCL",
+        "direction": "CALL",
+        "status": "OPEN",
+        "entry_price": 137.38,
+        "stop_loss": 138.33,
+        "initial_stop_loss": 136.37,
+        "take_profit": 139.81,
+        "opened_at": "2026-08-03 11:58:12",
+        "opened_at_et": "2026-08-03T11:58:12-04:00",
+        "mfe_r": 1.43,
+    }
+    trade.update(overrides)
+    return trade
+
+
+def test_mfe_is_ratcheted_against_the_realised_outcome_at_close():
+    """A trade cannot close above its own high-water mark."""
+
+    closed = _close(_orcl(), close_price=139.81)
+
+    assert closed["r_multiple"] == 2.41
+    assert closed["mfe_r"] >= closed["r_multiple"], (
+        "MFE below realised R makes trend capture exceed 100% and leaves the "
+        "profit-lock watch comparing an exit against a peak lower than itself"
+    )
+    assert closed["mfe_r"] == 2.41
+
+
+def test_a_genuine_giveback_keeps_its_peak():
+    """Ratcheted, not assigned: SMCI locked at 28.76 after a 2.07R peak."""
+
+    closed = _close(
+        _orcl(mfe_r=2.07, take_profit=999.0), close_price=137.38 + 1.01,
+    )
+
+    assert closed["r_multiple"] == 1.0
+    assert closed["mfe_r"] == 2.07, "the peak must survive a smaller outcome"
+
+
+def test_an_unknown_r_leaves_mfe_alone():
+    """No close price means no R, and no basis to ratchet against."""
+
+    closed = _close(_orcl(), close_price=None)
+
+    assert closed["r_multiple"] is None
+    assert closed["mfe_r"] == 1.43

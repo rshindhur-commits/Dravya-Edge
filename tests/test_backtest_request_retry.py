@@ -8,6 +8,7 @@ to retry a 502 aborts a run that had hours of work behind it.
 """
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.backtesting.historical_market_data import (
@@ -41,9 +42,15 @@ def _run(responses):
 
         return reply
 
-    # Patched so the test does not actually sleep through the backoff.
+    # Patched at the session, not at `requests.get`: requests now go through a
+    # pooled keep-alive `Session` per thread, so the module-level function is no
+    # longer the seam. What is asserted below is unchanged -- which statuses are
+    # answers and which are retried -- only the transport moved.
+    session = SimpleNamespace(get=_get)
+
+    # `time.sleep` patched so the test does not sit through the backoff.
     with patch(
-        "app.backtesting.historical_market_data.requests.get", _get
+        "app.backtesting.historical_market_data._session", return_value=session
     ), patch("app.backtesting.historical_market_data.time.sleep"):
 
         return request_with_retry("http://x", {}, context="ctx"), len(calls)

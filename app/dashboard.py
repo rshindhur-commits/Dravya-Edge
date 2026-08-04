@@ -83,7 +83,13 @@ from app.storage.auto_paper_decision_store import (
     update_recent_auto_paper_log
 )
 from app.runtime import get_runtime_scheduler, measure_runtime
-from app.storage.daily_paths import daily_path, get_daily_dir
+from app.storage.daily_paths import (
+    daily_path,
+    get_daily_dir,
+    live_path,
+    state_path,
+    telemetry_path,
+)
 from app.storage.session_manager import get_scan_id, get_session_id, get_trading_day
 from app.ui.components import kpi_card
 
@@ -163,18 +169,25 @@ def render_app_header():
     )
 
 
+# Resolved through the storage roots, not from ROOT_DIR.
+#
+# These were eleven independent restatements of paths that daily_paths already
+# owns, and being built from ROOT_DIR meant they ignored DRAVYA_DATA_DIR and
+# DRAVYA_STATE_DIR entirely -- so the test sandbox did not cover a single one of
+# them. That is the same gap that let the suite append real rows to
+# telemetry/trade_telemetry.csv, and the same one the database sandbox was added
+# for. Today they are only read here, so nothing had leaked through them yet.
 SCANNER_FILE = ROOT_DIR / "scanner_output.xlsx"
-LIVE_SCANNER_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.xlsx"
-LIVE_SCANNER_CSV_FILE = ROOT_DIR / "data" / "live" / "scanner_output_latest.csv"
-LIVE_DASHBOARD_STATE_FILE = ROOT_DIR / "data" / "live" / "dashboard_state.json"
-TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "trade_state.json"
-TELEMETRY_FILE = ROOT_DIR / "telemetry" / "trade_telemetry.csv"
-PAPER_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "paper_trade_state.json"
-SUGGESTED_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "suggested_trade_state.json"
+LIVE_SCANNER_FILE = live_path("scanner_output_latest.xlsx")
+LIVE_SCANNER_CSV_FILE = live_path("scanner_output_latest.csv")
+LIVE_DASHBOARD_STATE_FILE = live_path("dashboard_state.json")
+TRADE_STATE_FILE = state_path("trade_state.json")
+TELEMETRY_FILE = telemetry_path("trade_telemetry.csv")
+PAPER_TRADE_STATE_FILE = state_path("paper_trade_state.json")
 AI_SUMMARY_CACHE_FILE = ROOT_DIR / settings.ai_summary_cache_file
-AUTO_PAPER_DECISION_LOG_FILE = ROOT_DIR / "app" / "state" / "auto_paper_decision_log.json"
-SUGGESTED_TRADE_STATE_FILE = ROOT_DIR / "app" / "state" / "suggested_trade_state.json"
-TELEGRAM_DISPATCH_AUDIT_FILE = ROOT_DIR / "data" / "live" / "telegram_dispatch_audit.jsonl"
+AUTO_PAPER_DECISION_LOG_FILE = state_path("auto_paper_decision_log.json")
+SUGGESTED_TRADE_STATE_FILE = state_path("suggested_trade_state.json")
+TELEGRAM_DISPATCH_AUDIT_FILE = live_path("telegram_dispatch_audit.jsonl")
 
 REFRESH_INTERVALS = {
     "1 min": 1,
@@ -2861,6 +2874,7 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
     # Streamlit's import of the dashboard independent of the runtime package.
     from app.runtime.paper_automation_support import (
         _decision_rr,
+        _effective_gate_floors,
         write_auto_paper_decision,
     )
 
@@ -2883,10 +2897,19 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "session_id": get_session_id(trading_day),
         "scan_id": get_scan_id(trading_day, decision_time),
         "scan_timestamp": scan_timestamp,
+        # See the scan-path recorder: the naive value is ET and reads as UTC once
+        # it reaches a timestamptz column. These carry the unambiguous times.
+        "scan_timestamp_et": decision_time.isoformat(),
+        "scan_timestamp_utc": decision_time.astimezone(timezone.utc).isoformat(),
         **classify_decision_time(decision_time),
         "gate_mode": "auto_paper",
-        "min_rr_used": controls.get("min_rr"),
-        "min_setup_used": controls.get("min_setup"),
+        # Shared with the scan-path recorder: the scanner gate's regime-escalated
+        # floor when the row carries one, and the auto-paper control only when it
+        # does not. Recording the control as "the floor used" made every
+        # SETUP_BELOW_THRESHOLD row read as a contradiction.
+        **_effective_gate_floors(row, controls),
+        "auto_paper_min_rr": controls.get("min_rr"),
+        "auto_paper_min_setup": controls.get("min_setup"),
         "symbol": symbol,
         "decision": decision,
         "reason": reason,

@@ -5643,6 +5643,7 @@ def _run_scanner_impl():
             affordable_option = None
             option_liquidity = None
             option_rejection_reason = None
+            option_rejection_evidence = None
             option_quote_status = None
             option_spread_pct = None
             option_mid_price = None
@@ -5781,6 +5782,19 @@ def _run_scanner_impl():
                         or "NO_CONTRACT"
                     )
                     option_spread_pct = last_attempt.get("spread_pct")
+                    # Which contract was refused, and against what number.
+                    # Without this a rejection reads "Low open interest" with no
+                    # ticker, no OI and no threshold -- MSFT produced 29 of those
+                    # on 2026-08-03 and none of them says whether 500 is too high
+                    # or the selector is reaching for an illiquid strike.
+                    option_rejection_evidence = json.dumps(
+                        {
+                            key: value
+                            for key, value in last_attempt.items()
+                            if key not in {"liquid", "reason"}
+                        },
+                        default=str,
+                    )
                     option_direction_match = (
                         False
                         if option_quote_status == "DIRECTION_MISMATCH"
@@ -6942,6 +6956,8 @@ def _run_scanner_impl():
                 "Option Quote Status": option_quote_status,
 
                 "Option Rejection Reason": option_rejection_reason,
+
+                "Option Rejection Evidence": option_rejection_evidence,
 
                 "Option Liquidity Passed": (
                     option_liquidity.get("liquid")

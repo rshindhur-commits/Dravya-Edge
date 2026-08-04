@@ -21,7 +21,7 @@ from app.storage.session_manager import (
     get_session_id,
     get_trading_day
 )
-from app.config.settings import get_int_env
+from app.config.settings import get_float_env, get_int_env
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -310,26 +310,34 @@ def update_paper_trade(
             "option_quote_age_minutes": "quote_age_minutes",
         }.items():
             trade[field] = option_data.get(option_field)
+
+        _track_spread_widening(trade)
+
     if option_pl:
         trade["option_pl_pct"] = option_pl.get("option_pl_pct")
         trade["option_pl_dollars"] = option_pl.get("option_pl_dollars")
-    if execution_metrics:
-        # Excursions are the extreme over the life of the trade, not the latest
-        # scan's reading. This overwrote, so a trade that ran to +1.66R and
-        # retraced recorded mfe_r 0.0 -- which is exactly what NVDA did on
-        # 2026-07-31 while three "Partial profit threshold reached" signals
-        # fired and it closed at +0.60R.
-        #
-        # That is not only a reporting loss. MFE gates grace-zone eligibility
-        # ("in profit or MFE >= 1R") and profit protection, so both were
-        # reasoning about a number that reset every scan and could never see
-        # the peak they exist to defend. `state_trade_manager` already does
-        # this correctly; the two are now consistent.
-        for field in ("mfe_r", "mae_r"):
-            value = _safe_float(execution_metrics.get(field))
-            if value is not None:
-                trade[field] = max(_safe_float(trade.get(field)) or 0.0, value)
+    # Excursions are the extreme over the life of the trade, not the latest
+    # scan's reading. This overwrote, so a trade that ran to +1.66R and
+    # retraced recorded mfe_r 0.0 -- which is exactly what NVDA did on
+    # 2026-07-31 while three "Partial profit threshold reached" signals
+    # fired and it closed at +0.60R.
+    #
+    # That is not only a reporting loss. MFE gates grace-zone eligibility
+    # ("in profit or MFE >= 1R") and profit protection, so both were
+    # reasoning about a number that reset every scan and could never see
+    # the peak they exist to defend. `state_trade_manager` already does
+    # this correctly; the two are now consistent.
+    #
+    # **Sourced from the live engine, not the V2 shadow.** `execution_metrics`
+    # is `shadow_exit_v2`, a separate engine handed `active_trade["stop_loss"]`
+    # -- the *moved* stop -- so its R denominator shifts every time the stop
+    # trails, which is the exact failure `resolve_risk_per_share` documents. On
+    # 2026-08-03 SMCI recorded mfe_r 1.39 while its own `highest_price` of 28.91
+    # against the entry risk of 0.14 was a 2.07R peak. `evaluate_exit` has
+    # exposed its own mfe_r for precisely this reason and nothing read it.
+    _ratchet_excursions(trade, exit_state, execution_metrics)
 
+    if execution_metrics:
         if execution_metrics.get("trend_health_score") is not None:
             trade["trend_health_score"] = execution_metrics.get("trend_health_score")
         if execution_metrics.get("trend_health_status") is not None:
@@ -606,6 +614,94 @@ def _append_trend_capture_for_closed_trade(trade):
 
         print(f"[TREND CAPTURE WARNING] {exc}")
         return None
+
+
+def _ratchet_excursions(trade, exit_state, execution_metrics):
+    """Keep the peak, and take it from the engine that owns the trade's R.
+
+    The live exit engine and the V2 shadow both emit `mfe_r` against independent
+    risk denominators. The trade's realised `r_multiple` is measured against the
+    risk frozen at entry, so its MFE has to be too or the two are not comparable
+    -- and every consumer (trend capture, grace-zone eligibility, profit
+    protection) compares exactly those two.
+
+    Falls back to `execution_metrics` for callers that pass no exit_state, so the
+    shadow's number is still better than nothing where nothing else exists.
+    """
+
+    for source in (exit_state, execution_metrics):
+
+        if not source:
+            continue
+
+        for field in ("mfe_r", "mae_r"):
+
+            value = _safe_float(source.get(field))
+
+            if value is not None:
+                trade[field] = max(_safe_float(trade.get(field)) or 0.0, value)
+
+        # The live engine is authoritative where it spoke at all; only fields it
+        # left unset fall through to the shadow.
+        if source is exit_state and _safe_float(source.get("mfe_r")) is not None:
+            return
+
+
+def spread_widening_exit_ratio():
+    """How far the spread may widen before that alone is an exit. 0 disables.
+
+    **Ships disabled, deliberately.** The observation is real and it is on every
+    trade -- 2026-08-03 went 2.70%->3.16%, 2.65%->4.55% and 1.12%->2.81%, with
+    realised round-trip cost above the entry spread in all three -- but three
+    trades is not a threshold, and the correct *response* is genuinely unclear:
+    exiting into a widened spread pays that spread to escape it. Closing early
+    may cost less than closing later, or may just realise the cost sooner.
+
+    So this records what it would have done and does not do it, the same way
+    stop viability shipped observe-only until the archive answered its rejection
+    rate. `spread_widening_would_exit` is the counter to read in a week.
+    """
+
+    return get_float_env("EXIT_MAX_SPREAD_WIDENING_RATIO", 0.0)
+
+
+def _track_spread_widening(trade):
+    """Peak spread and how far it has widened since entry.
+
+    The live spread is refreshed on every scan and the entry spread is frozen at
+    open, so the comparison was always available and nothing made it. It is the
+    mechanism behind 2026-08-03's SMCI loss: entry spread 2.65%, exit spread
+    4.55%, realised cost 3.51% against a gross loss of 2.46% -- friction was 59%
+    of the loss and none of it was visible at entry, so no entry-time gate could
+    have caught it.
+    """
+
+    live = _safe_float(trade.get("option_spread_pct"))
+    entry = _safe_float(trade.get("option_entry_spread_pct"))
+
+    if live is None or live <= 0:
+        return
+
+    trade["option_spread_pct_peak"] = max(
+        _safe_float(trade.get("option_spread_pct_peak")) or 0.0, live
+    )
+
+    if entry is None or entry <= 0:
+        return
+
+    ratio = live / entry
+    trade["option_spread_widening_ratio"] = round(ratio, 3)
+    trade["option_spread_peak_widening_ratio"] = round(
+        trade["option_spread_pct_peak"] / entry, 3
+    )
+
+    limit = spread_widening_exit_ratio()
+
+    if limit > 0 and ratio >= limit and not trade.get("spread_widening_would_exit"):
+        # Latched, not recomputed: the question is whether it ever crossed, and a
+        # spread that widens and comes back still cost something on the way.
+        trade["spread_widening_would_exit"] = True
+        trade["spread_widening_would_exit_at_r"] = trade.get("rr_progress")
 
 
 def _option_trade_result(trade):
@@ -1202,6 +1298,26 @@ def close_paper_trade(
     trade["pnl_pct"] = result["pnl_pct"]
     trade["r_multiple"] = result["r_multiple"]
     trade["outcome"] = result["outcome"]
+
+    # A trade cannot close above its own high-water mark.
+    #
+    # `mfe_r` is ratcheted in `update_paper_trade`, which runs on holding scans
+    # only -- the scan that closes the trade goes through this function instead,
+    # so the final and usually highest excursion was never folded in. ORCL on
+    # 2026-08-03 recorded `mfe_r = 1.43` and realised **+2.41R**; SMCI recorded
+    # 1.39 against a 2.07R peak its own `highest_price` had captured correctly.
+    #
+    # That is not only a reporting error. `_trend_capture_pct` divides realised R
+    # by MFE, so it reported 168% capture on ORCL, and the profit-lock watch in
+    # POST_CHANGE_WATCHLIST 1.1 compares an exit against the peak it was meant to
+    # defend -- both reasoning about a peak recorded lower than the outcome.
+    #
+    # Ratcheted rather than assigned, so a genuine giveback still shows: SMCI's
+    # locked exit keeps its 2.07R peak against a +1.00R close.
+    realised_r = _safe_float(result["r_multiple"])
+
+    if realised_r is not None:
+        trade["mfe_r"] = max(_safe_float(trade.get("mfe_r")) or 0.0, realised_r)
 
     # Underlying P&L above is not what the account earns: the position is an
     # option. Record the exit premium and both the mid-to-mid and the realistic

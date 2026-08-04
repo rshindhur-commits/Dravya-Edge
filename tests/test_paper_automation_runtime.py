@@ -56,6 +56,19 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
         self.assertTrue(controls["eod_close_enabled"])
         self.assertEqual(controls["direction"], "Both")
 
+    def test_the_daily_entry_default_matches_the_documented_intent(self):
+        """The code default is what production runs; .env never reaches it.
+
+        Every DAILY_AUTO_PAPER_LIMIT_REACHED block in the ledger is 2026-07-31,
+        all AMZN, on a day that opened three trades -- because the running value
+        was the code default of 3 while `.env` said 5. It is the only position cap
+        that has ever cost a trade, and AUTO_PAPER_MAX_CANDIDATE_RANK was already
+        raised to 5 specifically to match it.
+        """
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(load_auto_paper_controls()["max_daily"], 5)
+
     def test_auto_paper_entries_logs_disabled_candidates(self):
 
         df = pd.DataFrame([
@@ -410,6 +423,265 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
         self.assertEqual(entry["scanner_blocked_by"], "ENTER_PAPER")
         self.assertEqual(entry["action_reason"], "Risk and option checks passed")
         self.assertEqual(entry["scan_id"], "2026-07-28_100000")
+
+
+class ProfileBudgetTests(unittest.TestCase):
+    """An overnight carry must not spend tomorrow's intraday capacity.
+
+    INTRADAY positions are flattened at 15:55 and give their slot back; MULTIDAY
+    positions set force_eod_exit=False and hold for days. Under one shared
+    MAX_ACTIVE_PAPER_TRADES the slow profile crowds out the fast one, and the
+    operator sees only MAX_ACTIVE_PAPER_TRADES_REACHED.
+    """
+
+    def _candidate(self, symbol="NVDA", profile="INTRADAY"):
+        return pd.Series({
+            "Symbol": symbol,
+            "Action Status": "ENTER_PAPER",
+            "Realtime Ready": True,
+            "Top Candidate": "BULLISH_TOP_1",
+            "Candidate Direction": "CALL",
+            "Candidate Entry Price": 100.0,
+            "Candidate Stop Price": 98.0,
+            "Candidate Target Price": 106.0,
+            "Candidate RR": 3.0,
+            "Setup %": 90.0,
+            "Option Quality Score": 95.0,
+            "Option Quote Freshness": "LIVE_QUOTE",
+            "Option Spread %": 2.0,
+            "Option Bid": 2.60,
+            "Option Ask": 2.70,
+            "Option Mid Price": 2.65,
+            "Option Delta": 0.55,
+            "Affordable": True,
+            "Holding Profile": profile,
+        })
+
+    def _open_trade(self, symbol, profile):
+        return {
+            "status": "OPEN", "symbol": symbol, "direction": "CALL",
+            "holding_profile": profile, "notes": "Auto paper entry",
+            "opened_at": "2026-08-03 10:00:00",
+        }
+
+    def _decide(self, row, paper_trades, env):
+        base = {
+            "AUTO_PAPER_ENABLED": "true", "MAX_ACTIVE_PAPER_TRADES": "9",
+            "MAX_ACTIVE_PER_DIRECTION": "9", "MAX_DAILY_ENTRIES": "9",
+            "MAX_TRADES_PER_SYMBOL_PER_DAY": "9",
+            "AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES": "0",
+        }
+        base.update(env)
+
+        with patch.dict(os.environ, base, clear=False), patch(
+            "app.runtime.paper_automation_support._current_et"
+        ) as current_et:
+            current_et.return_value = pd.Timestamp("2026-08-03 11:00:00").to_pydatetime()
+
+            return _auto_paper_entry_reason(
+                row, load_auto_paper_controls(), paper_trades
+            )
+
+    def test_multiday_carries_do_not_block_an_intraday_entry(self):
+        """The defect: two overnight carries filling a shared book."""
+
+        held = {
+            "AMD": self._open_trade("AMD", "MULTIDAY"),
+            "SMCI": self._open_trade("SMCI", "MULTIDAY"),
+        }
+
+        allowed, reason = self._decide(
+            self._candidate(profile="INTRADAY"), held,
+            {"MAX_ACTIVE_MULTIDAY_TRADES": "2", "MAX_ACTIVE_INTRADAY_TRADES": "2"},
+        )
+
+        self.assertTrue(allowed, reason)
+
+    def test_the_multiday_budget_stops_a_third_carry(self):
+
+        held = {
+            "AMD": self._open_trade("AMD", "MULTIDAY"),
+            "SMCI": self._open_trade("SMCI", "MULTIDAY"),
+        }
+
+        allowed, reason = self._decide(
+            self._candidate(profile="MULTIDAY"), held,
+            {"MAX_ACTIVE_MULTIDAY_TRADES": "2"},
+        )
+
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "MAX_ACTIVE_MULTIDAY_TRADES_REACHED")
+
+    def test_the_intraday_budget_is_counted_separately(self):
+
+        held = {
+            "AMD": self._open_trade("AMD", "INTRADAY"),
+            "SMCI": self._open_trade("SMCI", "MULTIDAY"),
+        }
+
+        allowed, reason = self._decide(
+            self._candidate(profile="INTRADAY"), held,
+            {"MAX_ACTIVE_INTRADAY_TRADES": "1"},
+        )
+
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "MAX_ACTIVE_INTRADAY_TRADES_REACHED")
+
+    def test_the_daily_budget_splits_by_profile(self):
+
+        closed = {
+            "AMD": {
+                "status": "CLOSED", "symbol": "AMD", "direction": "CALL",
+                "holding_profile": "MULTIDAY", "notes": "Auto paper entry",
+                "opened_at": "2026-08-03 10:00:00",
+            },
+        }
+
+        blocked, reason = self._decide(
+            self._candidate(profile="MULTIDAY"), closed,
+            {"MAX_DAILY_MULTIDAY_ENTRIES": "1"},
+        )
+        self.assertFalse(blocked)
+        self.assertEqual(reason, "DAILY_MULTIDAY_LIMIT_REACHED")
+
+        # The intraday budget is untouched by the multiday entry.
+        allowed, reason = self._decide(
+            self._candidate(profile="INTRADAY"), closed,
+            {"MAX_DAILY_MULTIDAY_ENTRIES": "1", "MAX_DAILY_INTRADAY_ENTRIES": "1"},
+        )
+        self.assertTrue(allowed, reason)
+
+    def test_unset_budgets_fall_back_to_the_shared_caps(self):
+        """Inert until someone sets it: behaviour must not change on deploy."""
+
+        held = {
+            "AMD": self._open_trade("AMD", "MULTIDAY"),
+            "SMCI": self._open_trade("SMCI", "MULTIDAY"),
+        }
+
+        for name in ("MAX_ACTIVE_MULTIDAY_TRADES", "MAX_ACTIVE_INTRADAY_TRADES",
+                     "MAX_DAILY_MULTIDAY_ENTRIES", "MAX_DAILY_INTRADAY_ENTRIES"):
+            os.environ.pop(name, None)
+
+        allowed, reason = self._decide(
+            self._candidate(profile="MULTIDAY"), held,
+            {"MAX_ACTIVE_PAPER_TRADES": "3"},
+        )
+
+        self.assertTrue(allowed, reason)
+
+    def test_an_unlabelled_position_counts_as_intraday(self):
+        """The profile that gives its slot back is the safe unknown."""
+
+        from app.runtime.paper_automation_support import _active_profile_count
+
+        untagged = [{"status": "OPEN", "holding_profile": None}]
+
+        self.assertEqual(_active_profile_count(untagged, "INTRADAY"), 1)
+        self.assertEqual(_active_profile_count(untagged, "MULTIDAY"), 0)
+
+
+class DecisionLedgerContentTests(unittest.TestCase):
+    """What the ledger has to carry to be usable for tuning.
+
+    Two defects, both measured against 2026-08-03's 869 rows: `min_setup_used`
+    recorded the auto-paper control (62) rather than the scanner floor that
+    actually rejected the candidate (70, or 83/85 after regime escalation), and
+    not one row carried the spread, delta or premium behind its
+    `stop_spread_multiple`.
+    """
+
+    def _record(self, row, controls=None):
+        with patch(
+            "app.runtime.paper_automation_support.append_daily_auto_paper_decision"
+        ) as append_daily, patch(
+            "app.runtime.paper_automation_support.update_recent_auto_paper_log"
+        ), patch(
+            "app.runtime.paper_automation_support._persist_auto_paper_decision"
+        ), patch(
+            "app.runtime.paper_automation_support._current_et"
+        ) as current_et:
+            current_et.return_value = pd.Timestamp("2026-08-03 12:28:33").to_pydatetime()
+            _record_auto_paper_decision(
+                "SMCI", "SKIPPED", "Stop is inside the spread", row,
+                controls=controls or {"min_rr": 1.8, "min_setup": 62.0},
+            )
+
+        return append_daily.call_args.args[0]
+
+    def test_the_floor_recorded_is_the_one_that_applied(self):
+
+        entry = self._record(pd.Series({
+            "Symbol": "SMCI",
+            "Action Status": "REVIEW_TV_CHART",
+            "Setup %": 70.0,
+            "ENTRY_GATE_MIN_SETUP": 83.0,
+            "ENTRY_GATE_MIN_RR": 2.0,
+        }))
+
+        # The regime-escalated scanner floor, not the 62 the control carries --
+        # which is what made "setup 70, blocked, floor 62" rows unreadable.
+        self.assertEqual(entry["min_setup_used"], 83.0)
+        self.assertEqual(entry["min_rr_used"], 2.0)
+
+        # The control is still recorded, so a change to it that had no effect is
+        # still visible as one that had no effect.
+        self.assertEqual(entry["auto_paper_min_setup"], 62.0)
+        self.assertEqual(entry["auto_paper_min_rr"], 1.8)
+
+    def test_a_row_without_gate_diagnostics_falls_back_to_the_control(self):
+        """SYSTEM rows and manual entries never run the scanner gate."""
+
+        entry = self._record(pd.Series({"Symbol": "SMCI", "Action Status": "WAIT"}))
+
+        self.assertEqual(entry["min_setup_used"], 62.0)
+        self.assertEqual(entry["min_rr_used"], 1.8)
+
+    def test_the_stop_viability_inputs_are_recorded(self):
+        """A multiple with no inputs cannot be recalibrated."""
+
+        entry = self._record(pd.Series({
+            "Symbol": "SMCI",
+            "Action Status": "AVOID",
+            "Blocked By": "STOP_INSIDE_OPTION_SPREAD",
+            "STOP_SPREAD_MULTIPLE": 0.56,
+            "STOP_MOVE_PCT_OF_PREMIUM": 2.67,
+            "STOP_ROUND_TRIP_SPREAD_PCT": 4.76,
+            "STOP_REQUIRED_SPREAD_MULTIPLE": 1.0,
+            "Option Delta": 0.524,
+            "Option Mid Price": 2.645,
+            "Option Spread %": 4.76,
+            "Option Quality Score": 85,
+            "Candidate Entry Price": 28.62,
+            "Candidate Stop Price": 28.40,
+        }))
+
+        self.assertEqual(entry["stop_move_pct_of_premium"], 2.67)
+        self.assertEqual(entry["stop_round_trip_spread_pct"], 4.76)
+        self.assertEqual(entry["stop_required_spread_multiple"], 1.0)
+        self.assertEqual(entry["option_delta"], 0.524)
+        self.assertEqual(entry["option_mid_price"], 2.645)
+        self.assertEqual(entry["option_quality_score"], 85)
+        self.assertEqual(entry["candidate_entry_price"], 28.62)
+        self.assertEqual(entry["candidate_stop_price"], 28.40)
+
+    def test_absent_option_fields_are_omitted_not_blanked(self):
+        """A candidate that died before contract selection has no option data.
+
+        Writing None for each would be indistinguishable from a contract that
+        priced at nothing, which is the same conflation the rule emitter had.
+        """
+
+        entry = self._record(pd.Series({
+            "Symbol": "SMCI",
+            "Action Status": "WAIT",
+            "Option Delta": None,
+            "Option Spread %": float("nan"),
+            "Option Ticker": "",
+        }))
+
+        for field in ("option_delta", "option_spread_pct", "option_ticker"):
+            self.assertNotIn(field, entry)
 
 
 if __name__ == "__main__":

@@ -169,6 +169,79 @@ def _report_database_state():
     return status
 
 
+# Statuses a process only writes on its way out. Anything else in the predecessor's
+# row means it was still claiming to be alive when it died.
+_CLEAN_EXIT_STATUSES = frozenset({"STOPPED"})
+
+
+def _report_restart():
+    """Say, once at startup, that this process is replacing a live predecessor.
+
+    The heartbeat is keyed on instance_id, so starting up overwrites the previous
+    worker's row and resets `scans` to zero. A clean SIGTERM shutdown writes
+    STOPPED first and is therefore self-explanatory; an OOM kill, a crash or a
+    hardware pull writes nothing, and the only evidence left after the new process
+    publishes is a counter that quietly went backwards. On 2026-08-03 the worker
+    restarted mid-session and the only trace was `scans = 0` at 21:42 against a
+    last scan at 20:19.
+
+    Reads the predecessor before the first heartbeat overwrites it. Best-effort
+    throughout: an unreadable row means no claim is made, because "could not ask"
+    must not be reported as "restarted".
+    """
+
+    try:
+        from app.db.scan_engine_heartbeat_repository import ScanEngineHeartbeatRepository
+
+        previous = ScanEngineHeartbeatRepository().fetch_instance("worker")
+
+    except Exception as exc:
+        print(f"[SCAN LOOP WARNING] restart check failed: {exc}")
+        return None
+
+    if not previous:
+        return None
+
+    status = str(previous.get("status") or "").upper()
+
+    if status in _CLEAN_EXIT_STATUSES:
+        print(f"[SCAN LOOP] previous worker exited cleanly ({previous.get('last_error')}).")
+        return None
+
+    age = previous.get("age_seconds")
+    age_text = f"{float(age) / 60:.0f} minutes ago" if age is not None else "at an unknown time"
+    detail = (
+        f"Scan worker restarted. The previous process was last seen {age_text} "
+        f"in status {status or 'UNKNOWN'} after {previous.get('scans') or 0} scan(s) "
+        f"on host {previous.get('hostname') or 'unknown'}, and never recorded a "
+        f"shutdown -- so it was killed rather than stopped. Scan counters restart "
+        f"from zero."
+    )
+
+    print(f"[SCAN LOOP] {detail}")
+
+    # Carried into this process's own heartbeat as well as pushed, so the restart
+    # survives in the row even if the alert does not get out.
+    _publish_heartbeat(
+        "STARTING",
+        last_error=detail,
+        payload={
+            "restarted_from": {
+                "status": previous.get("status"),
+                "hostname": previous.get("hostname"),
+                "scans": previous.get("scans"),
+                "failures": previous.get("failures"),
+                "last_scan_at": str(previous.get("last_scan_at")),
+                "last_error": previous.get("last_error"),
+                "age_seconds": age,
+            }
+        },
+    )
+    _notify_operator("scan_worker_restart", detail)
+
+    return previous
+
+
 def _notify_operator(key, message, healthy=False):
     """Monitoring must never be able to stop a scan."""
 
@@ -222,6 +295,10 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
                f"{name}={seconds}s" for name, seconds in SESSION_INTERVALS.items()))
     )
     _report_database_state()
+    # After the database check so an unreachable database is reported as itself
+    # rather than as a failed restart lookup, and before the loop's first
+    # heartbeat, which is what overwrites the evidence.
+    _report_restart()
 
     while not _stopping:
 

@@ -14,10 +14,17 @@ delta, and inside the account's cost profile. Those are reported per trade and
 summarised, because a forward run that quietly selects 4-DTE lottery tickets
 would otherwise show up only as a bad P&L months later.
 
-Cost is why this takes a day range rather than a year. Roughly 150 requests
-per entry: every candidate contract needs a bar and an NBBO, and quotes are not
+Cost is why this takes a day range rather than a year. Roughly 150 requests per
+entry: every candidate contract needs a bar and an NBBO, and quotes are not
 cached. Underlying bars are, so re-running a day already fetched is cheap; the
 option quotes are re-fetched every time.
+
+**A day across the 26-symbol watchlist is about 3.5 minutes**, measured on
+2026-07-29 at the default 8 chain workers -- so a 20-day economics run is a bit
+over an hour rather than the ten hours the sequential version implied. Two
+earlier changes account for it: skipping frames a scan cannot use, and pricing
+the chain concurrently over a pooled connection. `BACKTEST_CHAIN_WORKERS=1`
+restores sequential pricing and takes roughly four times as long.
 
     python tools/replay_forward.py --days 2026-07-29
     python tools/replay_forward.py --days 2026-07-27,2026-07-28 --symbols NVDA,ORCL
@@ -253,8 +260,8 @@ def main():
         "--out",
         default=None,
         help="write trades and selection attempts here as JSON; a run costs "
-        "roughly half an hour a day, so it should not have to be repeated to "
-        "ask a second question of it",
+        "roughly 3.5 minutes a day across the watchlist, so a month is an hour "
+        "and it should not have to be repeated to ask a second question of it",
     )
     args = parser.parse_args()
 
