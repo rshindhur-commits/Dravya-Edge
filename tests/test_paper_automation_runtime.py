@@ -56,6 +56,19 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
         self.assertTrue(controls["eod_close_enabled"])
         self.assertEqual(controls["direction"], "Both")
 
+    def test_the_daily_entry_default_matches_the_documented_intent(self):
+        """The code default is what production runs; .env never reaches it.
+
+        Every DAILY_AUTO_PAPER_LIMIT_REACHED block in the ledger is 2026-07-31,
+        all AMZN, on a day that opened three trades -- because the running value
+        was the code default of 3 while `.env` said 5. It is the only position cap
+        that has ever cost a trade, and AUTO_PAPER_MAX_CANDIDATE_RANK was already
+        raised to 5 specifically to match it.
+        """
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(load_auto_paper_controls()["max_daily"], 5)
+
     def test_auto_paper_entries_logs_disabled_candidates(self):
 
         df = pd.DataFrame([

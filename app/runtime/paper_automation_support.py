@@ -122,7 +122,7 @@ def max_daily_for_profile(profile, controls=None):
     fallback = (controls or {}).get("max_daily")
 
     if fallback is None:
-        fallback = env_int("MAX_DAILY_ENTRIES", 3)
+        fallback = load_auto_paper_controls()["max_daily"]
 
     if str(profile or "").upper() == "MULTIDAY":
         return env_int("MAX_DAILY_MULTIDAY_ENTRIES", fallback)
@@ -183,7 +183,19 @@ def load_auto_paper_controls():
         "auto_paper_enabled": _env_bool("AUTO_PAPER_ENABLED", True),
         # Named the same limit as the affordability config and disagreed with it
         # for as long as both existed; MAX_DAILY_ENTRIES is now the only spelling.
-        "max_daily": env_int("MAX_DAILY_ENTRIES", 3),
+        #
+        # Default raised 3 -> 5 on 2026-08-03. This is the only position cap with
+        # a track record of costing trades: every one of the five
+        # DAILY_AUTO_PAPER_LIMIT_REACHED blocks in the ledger is 07-31, all AMZN,
+        # on a day that opened **three** trades -- because production runs the code
+        # default and `.env`'s 5 never reaches Render or Streamlit Cloud. Exactly
+        # the failure mode `enforce_stop_viability` documents, on the one limit
+        # where it was actually binding.
+        #
+        # 5 is also what the codebase already assumed: AUTO_PAPER_MAX_CANDIDATE_RANK
+        # was raised to 5 specifically to "match MAX_DAILY_ENTRIES". The default was
+        # the odd one out.
+        "max_daily": env_int("MAX_DAILY_ENTRIES", 5),
         "min_setup": _env_float("AUTO_PAPER_MIN_SETUP", MIN_SETUP_BASE),
         "min_rr": _env_float("AUTO_PAPER_MIN_RR", DEFAULT_AUTO_PAPER_MIN_RR),
         "direction": _env_str("AUTO_PAPER_DIRECTION", "Both"),

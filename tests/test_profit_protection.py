@@ -51,6 +51,48 @@ def test_mfe_keeps_the_peak_not_the_latest_reading():
     )
 
 
+def test_mfe_comes_from_the_live_engine_not_the_v2_shadow():
+    """Two engines emit mfe_r against independent risk denominators.
+
+    `execution_metrics` is `shadow_exit_v2`, handed the *moved* stop, so its R
+    denominator shifts every time the stop trails. SMCI on 2026-08-03 recorded
+    mfe_r 1.39 while its own highest_price of 28.91 against the 0.14 entry risk
+    was a 2.07R peak. The trade's realised r_multiple is measured against entry
+    risk, so its MFE has to be as well or the pair is not comparable.
+    """
+
+    trade = {}
+
+    paper_trade_manager._ratchet_excursions(
+        trade,
+        {"mfe_r": 2.07, "mae_r": 0.4},          # live engine, entry-frozen risk
+        {"mfe_r": 1.39, "mae_r": 0.9},          # V2 shadow, moved-stop risk
+    )
+
+    assert trade["mfe_r"] == 2.07
+    assert trade["mae_r"] == 0.4
+
+
+def test_the_shadow_is_still_used_when_no_live_reading_exists():
+    """Callers that pass no exit_state keep the behaviour they had."""
+
+    trade = {}
+
+    paper_trade_manager._ratchet_excursions(trade, None, {"mfe_r": 1.39})
+
+    assert trade["mfe_r"] == 1.39
+
+
+def test_excursions_ratchet_across_scans_whichever_source_spoke():
+
+    trade = {}
+
+    paper_trade_manager._ratchet_excursions(trade, {"mfe_r": 2.07}, None)
+    paper_trade_manager._ratchet_excursions(trade, {"mfe_r": 0.5}, None)
+
+    assert trade["mfe_r"] == 2.07, "a retrace must not erase the peak"
+
+
 def test_profit_lock_holds_the_nvda_trade_and_ratchets_the_stop():
     """+1.66R peak, EMA9 breaks, trend 95, confidence 11.5: keep it."""
 

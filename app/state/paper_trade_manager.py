@@ -316,23 +316,28 @@ def update_paper_trade(
     if option_pl:
         trade["option_pl_pct"] = option_pl.get("option_pl_pct")
         trade["option_pl_dollars"] = option_pl.get("option_pl_dollars")
-    if execution_metrics:
-        # Excursions are the extreme over the life of the trade, not the latest
-        # scan's reading. This overwrote, so a trade that ran to +1.66R and
-        # retraced recorded mfe_r 0.0 -- which is exactly what NVDA did on
-        # 2026-07-31 while three "Partial profit threshold reached" signals
-        # fired and it closed at +0.60R.
-        #
-        # That is not only a reporting loss. MFE gates grace-zone eligibility
-        # ("in profit or MFE >= 1R") and profit protection, so both were
-        # reasoning about a number that reset every scan and could never see
-        # the peak they exist to defend. `state_trade_manager` already does
-        # this correctly; the two are now consistent.
-        for field in ("mfe_r", "mae_r"):
-            value = _safe_float(execution_metrics.get(field))
-            if value is not None:
-                trade[field] = max(_safe_float(trade.get(field)) or 0.0, value)
+    # Excursions are the extreme over the life of the trade, not the latest
+    # scan's reading. This overwrote, so a trade that ran to +1.66R and
+    # retraced recorded mfe_r 0.0 -- which is exactly what NVDA did on
+    # 2026-07-31 while three "Partial profit threshold reached" signals
+    # fired and it closed at +0.60R.
+    #
+    # That is not only a reporting loss. MFE gates grace-zone eligibility
+    # ("in profit or MFE >= 1R") and profit protection, so both were
+    # reasoning about a number that reset every scan and could never see
+    # the peak they exist to defend. `state_trade_manager` already does
+    # this correctly; the two are now consistent.
+    #
+    # **Sourced from the live engine, not the V2 shadow.** `execution_metrics`
+    # is `shadow_exit_v2`, a separate engine handed `active_trade["stop_loss"]`
+    # -- the *moved* stop -- so its R denominator shifts every time the stop
+    # trails, which is the exact failure `resolve_risk_per_share` documents. On
+    # 2026-08-03 SMCI recorded mfe_r 1.39 while its own `highest_price` of 28.91
+    # against the entry risk of 0.14 was a 2.07R peak. `evaluate_exit` has
+    # exposed its own mfe_r for precisely this reason and nothing read it.
+    _ratchet_excursions(trade, exit_state, execution_metrics)
 
+    if execution_metrics:
         if execution_metrics.get("trend_health_score") is not None:
             trade["trend_health_score"] = execution_metrics.get("trend_health_score")
         if execution_metrics.get("trend_health_status") is not None:
@@ -609,6 +614,37 @@ def _append_trend_capture_for_closed_trade(trade):
 
         print(f"[TREND CAPTURE WARNING] {exc}")
         return None
+
+
+def _ratchet_excursions(trade, exit_state, execution_metrics):
+    """Keep the peak, and take it from the engine that owns the trade's R.
+
+    The live exit engine and the V2 shadow both emit `mfe_r` against independent
+    risk denominators. The trade's realised `r_multiple` is measured against the
+    risk frozen at entry, so its MFE has to be too or the two are not comparable
+    -- and every consumer (trend capture, grace-zone eligibility, profit
+    protection) compares exactly those two.
+
+    Falls back to `execution_metrics` for callers that pass no exit_state, so the
+    shadow's number is still better than nothing where nothing else exists.
+    """
+
+    for source in (exit_state, execution_metrics):
+
+        if not source:
+            continue
+
+        for field in ("mfe_r", "mae_r"):
+
+            value = _safe_float(source.get(field))
+
+            if value is not None:
+                trade[field] = max(_safe_float(trade.get(field)) or 0.0, value)
+
+        # The live engine is authoritative where it spoke at all; only fields it
+        # left unset fall through to the shadow.
+        if source is exit_state and _safe_float(source.get("mfe_r")) is not None:
+            return
 
 
 def spread_widening_exit_ratio():
