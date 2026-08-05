@@ -1,3 +1,4 @@
+from app.config.settings import get_float_env
 from app.utils.runtime_logging import debug_print
 
 import pandas as pd
@@ -10,6 +11,33 @@ ENTRY_BASE_SCORES = {
     "VWAP_REJECTION": 88,
     "EMA_REJECTION_SHORT": 86
 }
+
+
+def _base_score(setup_type):
+    """The pattern's own contribution, and the only thing that separates them.
+
+    `_entry_score` adds the analysis score, a regime bonus, a volume bonus and
+    an extension penalty -- all of which read the same `analysis` and the same
+    bar for every candidate pattern. So the base score is the *entire*
+    difference between two patterns competing on one bar, and `detect_entry`
+    keeps the maximum.
+
+    BREAKOUT sits at 80 against EMA_PULLBACK's 85, which means it cannot win
+    when both qualify: it loses by a fixed five points on every symbol, in every
+    regime, always. Over a 21-day replay that produced 167 EMA_PULLBACK entries
+    and 2 BREAKOUT ones, and it is why a stock running 13% in a session never
+    triggers -- the one pattern built for that move is outranked by construction.
+
+    Making these tunable does not change the ranking; it makes the ranking
+    testable. `ENTRY_BASE_SCORE_BREAKOUT=85` levels it against the pullback so
+    a replay can price the difference in dollars, which is the only way to know
+    whether the current ordering is deliberate or merely old.
+    """
+
+    return get_float_env(
+        f"ENTRY_BASE_SCORE_{setup_type}",
+        ENTRY_BASE_SCORES.get(setup_type, 70),
+    )
 
 
 def _normalized_market_regime(value):
@@ -52,7 +80,7 @@ def _recent_ema_touch(df, price_column="High", ema_column="EMA9", window=3):
 
 def _entry_score(setup_type, analysis, latest, avoid_chasing, direction):
 
-    base_score = ENTRY_BASE_SCORES.get(setup_type, 70)
+    base_score = _base_score(setup_type)
 
     try:
 

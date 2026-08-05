@@ -48,10 +48,43 @@ class ReviewAlertFloorTests(unittest.TestCase):
         env = {
             "TELEGRAM_ALERTS_ENABLED": "1",
             "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+            # Review alerts ship off since 2026-08-04. These tests are about
+            # the floor and the message, so they turn the feature on rather
+            # than pinning the default -- which its own test below does.
+            "TELEGRAM_REVIEW_ALERTS_ENABLED": "1",
         }
         env.update(extra)
 
         return env
+
+    def test_review_alerts_are_off_unless_switched_on(self):
+        """The default is the product decision; the rest of this file is mechanism.
+
+        Review alerts were the majority of channel volume -- 15 of 28 messages
+        on 2026-08-04 against 2 entry alerts -- and once
+        ALLOW_REVIEW_TV_CHART_AUTO_PAPER was switched off the same day, a
+        REVIEW_TV_CHART candidate could no longer become a trade by any path.
+        The message was promising a follow-up that could not arrive.
+        """
+
+        with patch.dict(
+            "os.environ",
+            {
+                "TELEGRAM_ALERTS_ENABLED": "1",
+                "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+            },
+            clear=False,
+        ):
+
+            with patch.dict("os.environ", {}, clear=False):
+
+                import os
+
+                os.environ.pop("TELEGRAM_REVIEW_ALERTS_ENABLED", None)
+                result = maybe_send_scanner_entry_alert(**_kwargs())
+
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["reason"], "REVIEW_ALERTS_DISABLED")
 
     def test_candidate_below_the_floor_is_not_alerted(self):
 

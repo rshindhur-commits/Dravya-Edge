@@ -92,6 +92,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_ALERT_POLICY": "PAPER",
                 "TELEGRAM_ALERTS_ENABLED": "1",
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+                "TELEGRAM_REVIEW_ALERTS_ENABLED": "1",
                 "TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE": "0",
             },
             clear=False,
@@ -118,6 +119,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             {
                 "TELEGRAM_ALERTS_ENABLED": "1",
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+                "TELEGRAM_REVIEW_ALERTS_ENABLED": "1",
                 "TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE": "100",
             },
             clear=False,
@@ -140,6 +142,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_ALERT_POLICY": "REAL_REVIEW",
                 "TELEGRAM_ALERTS_ENABLED": "1",
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+                "TELEGRAM_REVIEW_ALERTS_ENABLED": "1",
             },
             clear=False,
         ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
@@ -158,7 +161,8 @@ class TelegramAlertPolicyTests(unittest.TestCase):
 
         with patch.dict(
             "os.environ",
-            {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1"},
+            {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+             "TELEGRAM_REVIEW_ALERTS_ENABLED": "1"},
             clear=False,
         ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
 
@@ -175,7 +179,8 @@ class TelegramAlertPolicyTests(unittest.TestCase):
 
         with patch.dict(
             "os.environ",
-            {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1"},
+            {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+             "TELEGRAM_REVIEW_ALERTS_ENABLED": "1"},
             clear=False,
         ), patch("app.alerts.telegram_alerts.send_telegram_alert") as send_alert:
 
@@ -264,7 +269,8 @@ class TelegramAlertPolicyTests(unittest.TestCase):
         }
         with patch.dict(
             "os.environ",
-            {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1"},
+            {"TELEGRAM_ALERTS_ENABLED": "1", "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+             "TELEGRAM_REVIEW_ALERTS_ENABLED": "1"},
             clear=False,
         ), patch(
             "app.alerts.telegram_alerts._last_trade_lifecycle_metadata",
@@ -302,6 +308,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
                 "TELEGRAM_ALERT_POLICY": "PAPER",
                 "TELEGRAM_ALERTS_ENABLED": "1",
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+                "TELEGRAM_REVIEW_ALERTS_ENABLED": "1",
                 "TELEGRAM_MIN_PAPER_ENTRY_SETUP_SCORE": "0",
                 "TELEGRAM_DISPATCH_MODE": "QUEUED",
             },
@@ -338,6 +345,7 @@ class TelegramAlertPolicyTests(unittest.TestCase):
             {
                 "TELEGRAM_ALERTS_ENABLED": "1",
                 "TELEGRAM_ENTRY_ALERTS_ENABLED": "1",
+                "TELEGRAM_REVIEW_ALERTS_ENABLED": "1",
             },
             clear=False,
         ), patch(
