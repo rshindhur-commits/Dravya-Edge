@@ -43,6 +43,11 @@ from app.backtesting.historical_market_data import (
 
 MARKET_TZ = "America/New_York"
 
+# A day's option chain for one underlying is a few hundred contracts and
+# Polygon pages them 1,000 at a time, so single figures is already generous.
+# This exists to bound an unattended run, not to shape the result.
+_MAX_CONTRACT_PAGES = 20
+
 # Contracts whose quoted spread exceeds this are untradeable in practice; a
 # backtest that fills them anyway is manufacturing edge out of a price nobody
 # could have transacted at.
@@ -138,7 +143,26 @@ def list_contracts_as_of(
     contracts = []
     next_url = url
 
-    while next_url:
+    # Pagination driven entirely by a URL the server hands back, with nothing
+    # bounding it. A `next_url` that repeats -- or simply never stops coming --
+    # spins here forever, appending to `contracts` the whole time, which looks
+    # from outside exactly like the hang two overnight runs died of: process
+    # alive, memory climbing, no output. It was not the cause in the run that
+    # was finally instrumented, but an unbounded remote-controlled loop in a
+    # job meant to run unattended is worth closing regardless.
+    seen = set()
+
+    while next_url and len(seen) < _MAX_CONTRACT_PAGES:
+
+        if next_url in seen:
+
+            print(
+                f"[CONTRACTS WARNING] {underlying} {day}: next_url repeated "
+                f"after {len(seen)} pages; stopping pagination"
+            )
+            break
+
+        seen.add(next_url)
 
         payload = request_with_retry(
             next_url,
@@ -150,6 +174,14 @@ def list_contracts_as_of(
 
         next_url = payload.get("next_url")
         params = {"apiKey": _api_key()} if next_url else params
+
+    if next_url and len(seen) >= _MAX_CONTRACT_PAGES:
+
+        print(
+            f"[CONTRACTS WARNING] {underlying} {day}: stopped at "
+            f"{_MAX_CONTRACT_PAGES} pages with more offered; "
+            f"{len(contracts)} contracts kept"
+        )
 
     return contracts
 
