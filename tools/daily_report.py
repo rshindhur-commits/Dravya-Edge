@@ -170,7 +170,21 @@ def load_day(connection, day):
         """), {"day": str(day)}).mappings()
     ]
 
-    return rows, trades
+    # The ledger says why each trade was admitted, which is the only exact
+    # record of the paper trader and the alert layer disagreeing. Inferring it
+    # from the snapshot does not work: a symbol can pass the gate on one scan
+    # and be taken off a different, failing one.
+    ledger = [
+        dict(row)
+        for row in connection.execute(text("""
+            SELECT symbol, decision, reason, scan_timestamp
+            FROM auto_paper_decision
+            WHERE DATE(scan_timestamp) = CAST(:day AS DATE)
+            ORDER BY id
+        """), {"day": str(day)}).mappings()
+    ]
+
+    return rows, trades, ledger
 
 
 def day_metrics(rows, trades):
@@ -505,6 +519,90 @@ def show_trades(trades):
               f"-- the spread, crossed twice")
 
 
+def show_integrity(rows, trades, ledger):
+    """Whether the day's own record is trustworthy, before anyone reads it.
+
+    Two defects shipped to production on 2026-08-03 and neither was visible to
+    894 passing tests, because both were about what the running system wrote
+    rather than what a function returned. `mae_r` silently became None on every
+    trade, and the paper trader took three trades the alert layer refused to
+    publish -- a divergence that had been live for weeks and surfaced only
+    because a subscriber count did not add up.
+
+    Both are one query away. A report that does not check its own inputs is how
+    a number nobody trusts gets quoted for a month.
+    """
+
+    problems = []
+
+    for field in ("mfe_r", "mae_r"):
+
+        missing = [
+            trade for trade in trades
+            if number(as_dict(trade.get("payload")).get(field)) is None
+        ]
+
+        if missing and trades:
+
+            problems.append(
+                f"{len(missing)}/{len(trades)} trades missing {field} "
+                f"({', '.join(str(t['symbol']) for t in missing[:6])})"
+            )
+
+    # Trades admitted by a path the alert layer will not publish. The ledger
+    # names it outright: OPENED / REVIEW_TV_CHART_VALIDATION_ELIGIBLE, followed
+    # by TELEGRAM_ENTRY_ALERT / ACTION_NOT_ALERTABLE.
+    off_gate = [
+        entry for entry in ledger
+        if str(entry.get("decision") or "").upper().startswith("OPENED")
+        and "REVIEW_TV_CHART" in str(entry.get("reason") or "").upper()
+    ]
+
+    if off_gate:
+
+        problems.append(
+            f"{len(off_gate)} trade(s) opened via REVIEW_TV_CHART_VALIDATION, "
+            f"which the alert layer refuses to publish "
+            f"({', '.join(str(e['symbol']) for e in off_gate[:6])}) "
+            f"-- the record and the subscriber experience diverge here"
+        )
+
+    not_alertable = [
+        entry for entry in ledger
+        if "ACTION_NOT_ALERTABLE" in str(entry.get("reason") or "").upper()
+    ]
+
+    if not_alertable:
+
+        problems.append(
+            f"{len(not_alertable)} alert(s) suppressed as ACTION_NOT_ALERTABLE "
+            f"({', '.join(str(e['symbol']) for e in not_alertable[:6])})"
+        )
+
+    unpriced = [
+        trade for trade in trades
+        if not number(trade.get("option_entry_mid"))
+    ]
+
+    if unpriced:
+
+        problems.append(
+            f"{len(unpriced)}/{len(trades)} trades carry no entry premium, "
+            f"so their cash P&L cannot be computed"
+        )
+
+    print("\n== data integrity ==")
+
+    if not problems:
+
+        print("   nothing to flag")
+        return
+
+    for problem in problems:
+
+        print(f"   !! {problem}")
+
+
 def show_noise_note(today, history):
     """The whole point: say out loud when a day proves nothing."""
 
@@ -564,7 +662,7 @@ def main():
 
     with get_engine().begin() as connection:
 
-        rows, trades = load_day(connection, day)
+        rows, trades, ledger = load_day(connection, day)
 
         if not rows:
 
@@ -576,7 +674,7 @@ def main():
 
         for previous in baseline_days(connection, day, args.baseline):
 
-            past_rows, past_trades = load_day(connection, previous)
+            past_rows, past_trades, _past_ledger = load_day(connection, previous)
             history.append(day_metrics(past_rows, past_trades))
 
     today = day_metrics(rows, trades)
@@ -592,6 +690,7 @@ def main():
     show_rejections(rows)
     show_gate(rows)
     show_trades(trades)
+    show_integrity(rows, trades, ledger)
     show_noise_note(today, history)
     print()
 
