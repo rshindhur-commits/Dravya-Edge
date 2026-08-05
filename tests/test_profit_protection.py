@@ -73,6 +73,30 @@ def test_mfe_comes_from_the_live_engine_not_the_v2_shadow():
     assert trade["mae_r"] == 0.4
 
 
+def test_mae_survives_a_live_engine_that_only_reports_mfe():
+    """The shape that actually occurs, and that cost a day of MAE.
+
+    `evaluate_exit` returns `mfe_r` and never `mae_r`. Precedence was applied
+    per *source* rather than per field, so the live engine supplying mfe_r
+    ended the walk and the shadow's mae_r was discarded unread. Every trade on
+    2026-08-04 stored mae_r None where 2026-08-03 had 0.18, 0.73 and 0.14.
+
+    The test above passes mae_r in both sources, which is why it stayed green
+    through the regression.
+    """
+
+    trade = {}
+
+    paper_trade_manager._ratchet_excursions(
+        trade,
+        {"mfe_r": 2.07},                        # live engine: no mae_r, ever
+        {"mfe_r": 1.39, "mae_r": 0.9},          # shadow has one
+    )
+
+    assert trade["mfe_r"] == 2.07, "the live engine still wins where it spoke"
+    assert trade["mae_r"] == 0.9, "a field it never sets must fall through"
+
+
 def test_the_shadow_is_still_used_when_no_live_reading_exists():
     """Callers that pass no exit_state keep the behaviour they had."""
 

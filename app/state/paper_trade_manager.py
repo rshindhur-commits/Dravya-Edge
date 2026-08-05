@@ -629,6 +629,14 @@ def _ratchet_excursions(trade, exit_state, execution_metrics):
     shadow's number is still better than nothing where nothing else exists.
     """
 
+    # Precedence is per field, not per source. Returning as soon as the live
+    # engine supplied *any* excursion discarded the ones it did not supply: it
+    # emits `mfe_r` and never `mae_r`, so every trade opened after that early
+    # return shipped lost its MAE entirely -- all five on 2026-08-04 recorded
+    # None where 2026-08-03 had 0.18, 0.73 and 0.14. The comment below always
+    # described this behaviour; the code did something stricter.
+    authoritative = set()
+
     for source in (exit_state, execution_metrics):
 
         if not source:
@@ -636,15 +644,19 @@ def _ratchet_excursions(trade, exit_state, execution_metrics):
 
         for field in ("mfe_r", "mae_r"):
 
+            # The live engine is authoritative where it spoke at all; only
+            # fields it left unset fall through to the shadow.
+            if field in authoritative:
+                continue
+
             value = _safe_float(source.get(field))
 
             if value is not None:
+
                 trade[field] = max(_safe_float(trade.get(field)) or 0.0, value)
 
-        # The live engine is authoritative where it spoke at all; only fields it
-        # left unset fall through to the shadow.
-        if source is exit_state and _safe_float(source.get("mfe_r")) is not None:
-            return
+                if source is exit_state:
+                    authoritative.add(field)
 
 
 def spread_widening_exit_ratio():
