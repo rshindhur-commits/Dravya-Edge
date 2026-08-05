@@ -825,25 +825,46 @@ def _append_option_liquidity_audit(df_results, trading_day, scan_id):
         audit = pd.DataFrame(rows)
         path = daily_path(trading_day, "option_liquidity_attempts.csv")
         path.parent.mkdir(parents=True, exist_ok=True)
-        existing = None
+        # Only the header is needed to tell whether the schema moved, and this
+        # runs on every scan against a file that grows all session. Reading the
+        # whole thing to compare column names -- which is what this did -- meant
+        # ~115 full reads a day of an ever-larger frame, each one allocated and
+        # discarded immediately. The full read now happens only when the schema
+        # actually changed, which is once per deploy at most.
+        existing_columns = None
 
         if path.exists() and path.stat().st_size > 0:
 
-            existing = pd.read_csv(path)
+            with open(path, "r", encoding="utf-8") as handle:
+
+                header = handle.readline().strip()
+
+            if header:
+
+                existing_columns = header.split(",")
 
         # Appending rows with a wider schema under a header written before the
         # columns existed silently shifts every field. A deploy that adds a
         # column lands mid-session, so the widened frame is rewritten whole
         # rather than appended to a header that predates it.
-        if existing is not None and list(existing.columns) != list(audit.columns):
+        widened = (
+            existing_columns is not None
+            and existing_columns != list(audit.columns)
+        )
 
-            audit = pd.concat([existing, audit], ignore_index=True)
-            existing = None
+        if widened:
+
+            audit = pd.concat(
+                [pd.read_csv(path), audit],
+                ignore_index=True
+            )
+
+        append = existing_columns is not None and not widened
 
         audit.to_csv(
             path,
-            mode="a" if existing is not None else "w",
-            header=existing is None,
+            mode="a" if append else "w",
+            header=not append,
             index=False
         )
 
