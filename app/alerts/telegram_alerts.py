@@ -129,6 +129,46 @@ def _float_setting(name, default):
         return default
 
 
+def _bool_setting(name, default):
+
+    try:
+
+        raw = os.getenv(name, _streamlit_secret([name], None))
+
+    except Exception:
+
+        return default
+
+    if raw is None:
+
+        return default
+
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _review_alerts_enabled():
+    """Whether watch-only candidates are announced at all.
+
+    **Off by default, and that is a change.** Review alerts were the majority of
+    everything subscribers received -- 9 of 22 messages on 2026-08-03 and 15 of
+    28 on 2026-08-04, against 3 and 2 entry alerts respectively. More than twice
+    as many "watch this" messages as actionable ones.
+
+    What made them indefensible rather than merely noisy is that the path by
+    which a REVIEW_TV_CHART candidate could become a trade was closed on
+    2026-08-04: `ALLOW_REVIEW_TV_CHART_AUTO_PAPER` now defaults off, because it
+    was opening positions the alert layer refused to publish. With it off these
+    candidates cannot convert at all, so the message promises a follow-up that
+    will never arrive. The JPM example that prompted this carried a planned 1.7R
+    against a 2.0 floor -- it could not have converted even before that.
+
+    Kept as a switch rather than deleted: the message itself is good, and a
+    channel that wants a watchlist feed can turn it back on without a deploy.
+    """
+
+    return _bool_setting("TELEGRAM_REVIEW_ALERTS_ENABLED", False)
+
+
 def _exit_price_mismatch_limit():
 
     return _float_setting(
@@ -2632,6 +2672,13 @@ def maybe_send_scanner_entry_alert(
         return {
             "sent": False,
             "reason": "ACTION_NOT_ALERTABLE"
+        }
+
+    if not _review_alerts_enabled():
+
+        return {
+            "sent": False,
+            "reason": "REVIEW_ALERTS_DISABLED"
         }
 
     option_contract = option_contract or {}
