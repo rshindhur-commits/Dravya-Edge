@@ -429,7 +429,19 @@ def _momentum_exits_allowed(holding_profile, bars_in_trade):
     control.
 
     Tunable for A/B against archived days. Zero restores the previous behaviour.
+
+    `EXIT_MOMENTUM_ENABLED=false` removes all four at once, which is the only
+    version of this experiment that measures anything. Testing them one at a
+    time does not: disabling the EMA rule over 21 sessions moved return on
+    capital by -0.40sd, because EMA exits went 75 -> 0 while MACD went 88 -> 129
+    and VWAP 16 -> 37. They are substitutes, so removing one renames the exit
+    rather than preventing it. Removing the class leaves stop, target, time and
+    end-of-day -- a different strategy rather than a relabelling.
     """
+
+    if not _env_bool("EXIT_MOMENTUM_ENABLED", True):
+
+        return False
 
     if str(holding_profile or "").upper() != "MULTIDAY":
         return True

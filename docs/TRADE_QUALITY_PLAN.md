@@ -74,19 +74,42 @@ at an identical loss rate. It does not fix anything; it halves the stake on a
 book that loses 3% of its stake. This was my recommendation to raise and it was
 wrong.
 
-### 1.2 Test removing or tightening the EMA exit — **highest expected value**
-151 trades, −6.81% each, 55% of all losses, mean R −0.42. The hypothesis is that
-it exits positions that the hard stop would not have taken out, at close to
-hard-stop cost. Arms: disabled, and confirmation-delayed by one bar.
+### 1.2 The EMA exit — **RUN 2026-08-08, no effect**
 
-*Risk:* it may be preventing worse losses that the replay will now realise.
-The A/B answers that directly — if disabling it makes things worse, that is the
-answer and the exit stays.
+Two arms over the same 21 sessions, against the cap-$500 baseline:
 
-### 1.3 Test the MACD exit
-177 trades, −3.03%, mean R +0.07. It exits almost exactly flat on R and loses
-the spread. That is the signature of an exit with no informational content:
-it is paying 3% to close positions at breakeven.
+| | baseline | confirm 1 bar | disabled |
+|---|---|---|---|
+| return on capital | −3.00% | −3.23% | −3.24% |
+| per trade | −$11.9 | −$12.8 | −$12.8 |
+| vs baseline | — | **−0.40sd** | **−0.38sd** |
+
+Both inside noise — about 1.4 points of premium are needed to clear 2sd at this
+sample size, and the difference is 0.27. The point estimates are slightly
+negative, which matches the prediction recorded before the run: disabling it
+would probably be worse.
+
+**The mechanism is redistribution, not removal.** EMA exits went 75 → 12 → 0
+while MACD went 88 → 122 → 129 and VWAP 16 → 38 → 37. Take the rule away and
+another fires at nearly the same bar. A one-day smoke test had already shown
+this — two of three EMA exits were matched by MACD at an identical price.
+
+**This retracts the framing in section 0.** "The EMA exit is 55% of all losses"
+is true as accounting and false as cause. Those losses occur regardless; the
+rule that gets named changes. Any claim that a single exit rule is responsible
+for the book's losses should be read the same way until tested.
+
+### 1.3 The MACD exit — **superseded**
+Was to be tested the same way. There is no point: 1.2 shows EMA, MACD and VWAP
+are substitutes, so removing one redistributes to the others and the result will
+be another null. The meaningful experiment is the class, not the member —
+see 1.6.
+
+### 1.6 Disable momentum exits as a class — **replaces 1.2 and 1.3**
+EMA, MACD, VWAP and failed-breakout together decide 60% of exits and behave as
+one rule wearing four names. Disabling all of them leaves stop, target, time and
+end-of-day, which is a genuinely different strategy rather than a relabelling.
+That is the test worth running.
 
 ### 1.4 Measure the entry spread distribution, then test a ceiling
 Not yet measured. Live payloads carry `option_entry_spread_pct` (SMCI on 08-05
