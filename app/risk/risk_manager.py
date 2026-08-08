@@ -1,4 +1,4 @@
-from app.config.settings import get_float_env
+from app.config.settings import get_bool_env, get_float_env
 from app.utils.runtime_logging import debug_print
 from app.gates import validate_price_geometry
 from app.strategies.setup_registry import is_short_setup
@@ -393,9 +393,10 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
     # rather than argued about; raising it means fewer candidates clear the RR
     # gate, which is the intended trade.
     minimum_stop_pct = get_float_env("MIN_STOP_DISTANCE_PCT", 0.50)
+    price_floor_distance = entry_price * (minimum_stop_pct / 100.0)
     minimum_stop_distance = max(
         minimum_stop_distance,
-        entry_price * (minimum_stop_pct / 100.0)
+        price_floor_distance
     )
 
     original_stop_loss = stop_loss
@@ -437,6 +438,31 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
             f"rr_after={round(adjusted_risk_reward, 2)}"
         )
 
+    # A stop that had to be invented is not a stop.
+    #
+    # The floor above rescues a setup whose structure gave less distance than
+    # the option spread needs. But rescuing it puts the stop where nothing in
+    # the chart says it belongs, and the target -- set at a multiple of that
+    # distance -- inherits the same arbitrariness. What the floor actually
+    # detects is a setup with no usable stop, and the honest response to that
+    # is to decline it rather than to invent one.
+    #
+    # Over 5-7 Aug, seven of twelve alerted trades had a stop sitting exactly on
+    # this floor. All seven lost, with holds of 6, 10, 13, 20, 22, 32 minutes.
+    # The five whose structure gave a real stop distance were mixed.
+    #
+    # Off by default: it removes candidates rather than re-scoring them, so the
+    # archive is where it earns its place before production sees it.
+    if (original_risk_per_share < price_floor_distance
+            and get_bool_env("REJECT_SUB_FLOOR_STOPS", False)):
+
+        trade_allowed = False
+
+        reasons.append(
+            f"Stop below the {minimum_stop_pct}% floor: structure gave "
+            f"{round(original_risk_per_share / entry_price * 100, 3)}% "
+            f"and the floor would have invented the rest"
+        )
 
     risk_per_share = abs(
         entry_price - stop_loss
