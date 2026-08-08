@@ -1,0 +1,4 @@
+observed_at_utc,trading_day,scan_id,category,stage,page,seconds,metadata
+2026-08-08T14:23:14.453119+00:00,2026-08-08,2026-08-08_102309,scanner,run_scanner,,5.34,"{""symbols"": 26, ""workers"": 5}"
+2026-08-08T14:23:19.529727+00:00,2026-08-08,2026-08-08_102316,scanner,run_scanner,,3.49,"{""symbols"": 26, ""workers"": 5}"
+2026-08-08T14:23:24.060746+00:00,2026-08-08,2026-08-08_102321,scanner,run_scanner,,2.96,"{""symbols"": 26, ""workers"": 5}"
