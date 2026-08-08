@@ -105,33 +105,84 @@ says the entry gate is not where this is lost.
 
 ---
 
+## 1a. The equation everything else is judged against
+
+Fitting realised premium against realised R over all 601 trades:
+
+```
+premium % = 8.59 x R - 3.40          R2 = 0.80
+```
+
+Three readings, all of them consequential:
+
+* **The round trip costs 3.40 points** before the underlying moves at all.
+* **1R is worth 8.6 points** of premium.
+* **A trade must reach +0.40R just to pay for itself.**
+
+Against that, the two halves of the book: the 287 that never travel realise
+−0.403R, and the 314 that do peak at 0.803R and keep +0.428R — 53% of peak, and
+barely past the 0.40R break-even.
+
+**This bounds every improvement in section 2.** Substituting into the equation:
+
+| scenario | book return |
+|---|---|
+| today | −3.13% |
+| exits capture 100% of peak instead of 53% | −1.45% |
+| that, **and** every loser cut at exactly breakeven | **+0.20%** |
+
+Perfect exit timing and perfect loss-cutting — both unattainable — reach
+roughly zero. **No amount of exit or stop work makes this profitable**, because
+the 3.40-point toll is charged 601 times regardless. Only two things move that
+number: paying a smaller toll, or making the moves big enough that the toll
+stops mattering.
+
+---
+
 ## 2. Long term — needs more sessions and cleaner capture
 
-### 2.1 A predictor for the 48% that never move
-The single largest prize: this half loses 7% each at a 2% win rate. Removing it
-would take the book to roughly breakeven before any other change. One holdout
-test has already failed to find a predictor among entry-time features. The next
-attempt needs features not currently recorded — order-book state at entry,
-time-since-signal, and whether the move had already happened before the scan saw
-it.
+*Reordered after the equation above. The original order put the largest
+prize first; the equation says the largest prize is capped below breakeven.*
 
-### 2.2 Is the signal late?
+### 2.1 Cut the 3.40-point toll — **now the first priority**
+It is charged on every trade, it is the largest single number in the system, and
+it has never been attacked. Three routes, in order of directness:
+
+* **Spread ceiling at entry.** Live payloads carry `option_entry_spread_pct`;
+  SMCI on 08-05 entered at 5.43%. Refusing entries above ~3% trades volume for
+  toll and is testable on the archive today.
+* **Fewer round trips.** Every entry pays 3.40 points whatever it does. 601
+  trades in 21 sessions is ~29 a day; each one is a toll payment.
+* **More liquid contracts.** Related to the cost cap but not the same lever:
+  cheaper is not necessarily tighter, and it is the spread that is charged.
+
+### 2.2 Can this strategy produce larger-R trades at all? — **the existential one**
+At 8.59 points per R, a book averaging 0.4R cannot clear a 3.40-point toll, but
+one averaging 1.5R clears it comfortably. 38 trades did reach the target and
+paid +16.97%. The question is whether the strategy can be reconfigured to
+produce more of those rather than 601 small ones — different holding profile,
+different setup, or a different instrument.
+
+If the answer is no, no further tuning is warranted, and that is a finding
+worth having early rather than after another quarter.
+
+### 2.3 Is the signal late?
 Your original diagnosis, still untested: entries arriving after the move has
 run. Needs entry timestamps compared against the bar sequence that triggered
 them. Now feasible: the exit-timestamp defect is fixed, so alert and database
 times agree.
 
-### 2.3 Does any setup have edge once the exits are fixed?
+### 2.4 Does any setup have edge once the exits are fixed?
 EMA_PULLBACK (183) and EMA_REJECTION (123) are indistinguishable today, both at
 −24/trade. That comparison is meaningless while 83% of losses come from two exit
 rules applied to both. Re-run it after section 1.
 
-### 2.4 Whether this strategy clears its own costs at all
-The honest question behind everything. A directional signal with no edge, paying
-3% a round trip, cannot be rescued by tuning. If sections 1 and 2 do not produce
-a configuration with positive return on capital across a holdout, the answer is
-that this approach does not work at these transaction costs, and the response is
-fewer, longer, larger-conviction positions — or a different instrument.
+### 2.5 A predictor for the 48% that never move — **deprioritised**
+Was first on this list. The equation demotes it: even cutting every one of those
+trades at exactly breakeven, with perfect exits on everything else, reaches
++0.20%. It is a large prize with a ceiling barely above zero, and one holdout
+test has already failed to find a predictor among entry-time features. Worth
+returning to only if 2.1 and 2.2 succeed and it becomes the binding constraint.
 
 ---
 
@@ -171,16 +222,22 @@ it today, live trading will not for months.
 
 ## 4. Order of work
 
-| | what | needs |
-|---|---|---|
-| 1 | Revert cost cap to $500 | nothing — proven |
-| 2 | EMA exit A/B | replay, ~2h |
-| 3 | MACD exit A/B | replay, ~2h |
-| 4 | Entry spread distribution, then ceiling A/B | replay |
-| 5 | `MIN_STOP_SPREAD_MULTIPLE` A/B | replay |
-| 6 | Re-test setups with the winning exit config | replay |
-| 7 | Never-moves predictor | new features, more sessions |
-| 8 | Signal latency | more sessions |
+| | what | needs | ceiling |
+|---|---|---|---|
+| 1 | Revert cost cap to $500 | nothing — proven | halves the stake |
+| 2 | **Entry spread ceiling** — measure, then A/B | replay | attacks the 3.40 toll |
+| 3 | **Can it produce larger-R trades?** | replay | decides whether any of this is worth doing |
+| 4 | EMA exit A/B (running) | replay, ~2h | bounded by 1a |
+| 5 | MACD exit A/B | replay, ~2h | bounded by 1a |
+| 6 | `MIN_STOP_SPREAD_MULTIPLE` A/B | replay | bounded by 1a |
+| 7 | Signal latency | more sessions | unknown |
+| 8 | Re-test setups with winning exit config | replay | bounded by 1a |
+| 9 | Never-moves predictor | new features, more sessions | +0.20% at perfect play |
+
+Items 4, 5, 6 and 8 are all capped below breakeven by section 1a. They are worth
+doing because they are cheap and because the ceiling assumes the toll stays at
+3.40 — but **nothing in that group can make this profitable on its own.** Items
+2 and 3 are the only ones that can, which is why they moved to the top.
 
 Subscribers return when a configuration shows positive return on capital across
 a holdout, and a month of sessions captures cleanly. Not before.
