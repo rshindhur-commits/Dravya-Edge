@@ -50,7 +50,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from app.db.connection import get_engine
 
@@ -60,6 +60,25 @@ ACTIONABLE = {
 }
 GATE_PASS = {"PASS", "TRUE", "ELIGIBLE"}
 EMPTY = {"", "None", "-", "nan"}
+
+# What this tool actually reads out of a snapshot's decision_payload. Selecting
+# the whole blob and picking these out in Python moved megabytes per day to
+# reach a few hundred bytes of it.
+SNAPSHOT_FIELDS = (
+    "Symbol",
+    "ENTRY_GATE_RESULT",
+    "ENTRY_GATE_FAILURE",
+    "Blocked By",
+    "Option Quote Freshness",
+    "Option Rejection Reason",
+)
+
+# The nested array behind the contract-selection section. It is most of a
+# snapshot row's weight -- one has been seen at 51KB -- and only the reported
+# day needs it.
+ATTEMPTS_FIELD = "Option Liquidity Attempts"
+
+TRADE_RETURN_FIELDS = ("option_pnl_pct_net", "option_pnl_pct", "option_pl_pct")
 
 
 # --------------------------------------------------------------------- helpers
@@ -126,9 +145,15 @@ def option_return(trade):
 
     payload = as_dict(trade.get("payload"))
 
-    for field in ("option_pnl_pct_net", "option_pnl_pct", "option_pl_pct"):
+    for field in TRADE_RETURN_FIELDS:
 
+        # Baseline rows carry these projected out of the payload rather than
+        # dragging the whole document across for three numbers.
         value = number(payload.get(field))
+
+        if value is None:
+
+            value = number(trade.get(field))
 
         if value is not None:
 
@@ -147,23 +172,80 @@ def option_return(trade):
 # ------------------------------------------------------------------ collection
 
 
-def load_day(connection, day):
+def _snapshot_columns(with_attempts):
+    """Project the fields out of the jsonb rather than shipping the document."""
 
+    columns = [
+        f"""decision_payload ->> '{field}' AS "{field}\""""
+        for field in SNAPSHOT_FIELDS
+    ]
+
+    if with_attempts:
+
+        columns.append(
+            f"""decision_payload -> '{ATTEMPTS_FIELD}' AS "{ATTEMPTS_FIELD}\""""
+        )
+
+    return ", ".join(columns)
+
+
+def transfer_estimate(connection, days):
+    """Bytes of decision_payload behind the days about to be read.
+
+    Reported before the read rather than after. Run often enough with a ten-day
+    baseline, this tool worked through a month of the database's transfer
+    allowance in a week, and the first sign of it was the bill.
+    """
+    statement = text("""
+        SELECT count(*) AS rows,
+               COALESCE(sum(pg_column_size(decision_payload)), 0) AS bytes
+        FROM scanner_snapshot
+        WHERE trading_day IN :days
+    """).bindparams(bindparam("days", expanding=True))
+
+    result = connection.execute(
+        statement,
+        {"days": [date.fromisoformat(str(day)[:10]) for day in days]},
+    ).mappings().one()
+
+    return int(result["rows"]), int(result["bytes"])
+
+
+def load_day(connection, day, full=True):
+    """Read one day. `full` adds what only the reported day's sections need.
+
+    Baseline days feed `day_metrics` and nothing else, and `day_metrics` never
+    looks at the liquidity attempts or the decision ledger. Fetching those for
+    ten trailing sessions was most of this tool's transfer, for none of its
+    output.
+    """
     rows = [
-        row["decision_payload"] or {}
-        for row in connection.execute(text("""
-            SELECT decision_payload FROM scanner_snapshot
+        dict(row)
+        for row in connection.execute(text(f"""
+            SELECT {_snapshot_columns(full)} FROM scanner_snapshot
             WHERE trading_day = CAST(:day AS DATE)
             ORDER BY scan_id, symbol
         """), {"day": str(day)}).mappings()
     ]
 
+    if full:
+
+        trade_columns = """
+            symbol, direction, option_ticker, status, holding_profile,
+            entry_price, option_entry_mid, option_close_mid,
+            r_multiple, payload, opened_at, closed_at
+        """
+
+    else:
+
+        trade_columns = "r_multiple, option_entry_mid, option_close_mid, " + ", ".join(
+            f"payload ->> '{field}' AS {field}" for field in TRADE_RETURN_FIELDS
+        )
+
     trades = [
         dict(row)
-        for row in connection.execute(text("""
-            SELECT symbol, direction, option_ticker, status, holding_profile,
-                   entry_price, option_entry_mid, option_close_mid,
-                   r_multiple, payload, opened_at, closed_at
+        for row in connection.execute(text(f"""
+            SELECT {trade_columns}
             FROM paper_trades
             WHERE DATE(opened_at) = CAST(:day AS DATE)
             ORDER BY opened_at
@@ -174,15 +256,19 @@ def load_day(connection, day):
     # record of the paper trader and the alert layer disagreeing. Inferring it
     # from the snapshot does not work: a symbol can pass the gate on one scan
     # and be taken off a different, failing one.
-    ledger = [
-        dict(row)
-        for row in connection.execute(text("""
-            SELECT symbol, decision, reason, scan_timestamp
-            FROM auto_paper_decision
-            WHERE DATE(scan_timestamp) = CAST(:day AS DATE)
-            ORDER BY id
-        """), {"day": str(day)}).mappings()
-    ]
+    ledger = []
+
+    if full:
+
+        ledger = [
+            dict(row)
+            for row in connection.execute(text("""
+                SELECT symbol, decision, reason, scan_timestamp
+                FROM auto_paper_decision
+                WHERE DATE(scan_timestamp) = CAST(:day AS DATE)
+                ORDER BY id
+            """), {"day": str(day)}).mappings()
+        ]
 
     return rows, trades, ledger
 
@@ -667,13 +753,25 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--day", default=None, help="YYYY-MM-DD, default today")
-    parser.add_argument("--baseline", type=int, default=10,
+    # Three is enough for the bands and cheap enough to run daily. Ten was not:
+    # the bands barely move between the two, and the transfer scales with it.
+    parser.add_argument("--baseline", type=int, default=3,
                         help="trailing sessions used for the bands")
     args = parser.parse_args()
 
     day = args.day or str(date.today())
 
     with get_engine().begin() as connection:
+
+        previous_days = baseline_days(connection, day, args.baseline)
+        snapshot_rows, payload_bytes = transfer_estimate(
+            connection, [day] + list(previous_days)
+        )
+        print(f"\n   reading {snapshot_rows:,} snapshot rows across "
+              f"{len(previous_days) + 1} session(s); the decision_payload behind "
+              f"them is {payload_bytes / 1e6:.1f} MB.")
+        print(f"   fields are projected server-side and the trailing sessions "
+              f"skip the liquidity attempts, so the transfer is a fraction of it.")
 
         rows, trades, ledger = load_day(connection, day)
 
@@ -685,9 +783,11 @@ def main():
 
         history = []
 
-        for previous in baseline_days(connection, day, args.baseline):
+        for previous in previous_days:
 
-            past_rows, past_trades, _past_ledger = load_day(connection, previous)
+            past_rows, past_trades, _past_ledger = load_day(
+                connection, previous, full=False
+            )
             history.append(day_metrics(past_rows, past_trades))
 
     today = day_metrics(rows, trades)
