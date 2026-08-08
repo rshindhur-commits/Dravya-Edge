@@ -5218,11 +5218,15 @@ def _run_scanner_impl():
                             r_multiple=exit_setup.get("rr_progress"),
                             outcome="EXIT_SIGNAL",
                             event_type="EXIT",
-                            event_timestamp=(
-                                df_15m.index[-1].isoformat()
-                                if df_15m is not None and not df_15m.empty
-                                else None
-                            ),
+                            # The moment the exit was decided, not the bar it was
+                            # decided from. A 15m bar is indexed by its open, so
+                            # this used to stamp an exit taken at 09:50 as 09:45
+                            # -- five minutes before the entry it followed, on
+                            # AAPL on 2026-08-05 -- and made every holding time a
+                            # bar short. close_paper_trade records the wall clock,
+                            # so this also brings the alert back in line with the
+                            # database rather than disagreeing with it.
+                            event_timestamp=now_et().isoformat(),
                             expected_underlying_price=current_symbol_close,
                             price_source=current_symbol_price_source,
                             scanner_row_symbol=symbol,

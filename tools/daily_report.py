@@ -312,6 +312,82 @@ def day_metrics(rows, trades):
     }
 
 
+def capture_completeness(connection, day, trades):
+    """Whether the day was recorded at all, and recorded fully.
+
+    This exists because the failure is silent. On 2026-08-05 four positions were
+    alerted and three were written. On the 6th and 7th the scanner ran and
+    alerted all day and wrote nothing whatever -- no snapshots, no trades, no
+    decisions -- while subscribers kept receiving signals. Neither was noticed
+    for days, by which point the sessions were unrecoverable.
+
+    A capture that can fail without saying so is not a capture, and a
+    confidence built on one is worse than no confidence.
+    """
+
+    problems = []
+
+    coverage = connection.execute(text("""
+        SELECT count(DISTINCT scan_id) AS scans,
+               to_char(min(scan_timestamp) AT TIME ZONE 'America/New_York',
+                       'HH24:MI') AS first_scan,
+               to_char(max(scan_timestamp) AT TIME ZONE 'America/New_York',
+                       'HH24:MI') AS last_scan
+        FROM scanner_snapshot
+        WHERE trading_day = CAST(:day AS DATE)
+    """), {"day": str(day)}).mappings().one()
+
+    scans = int(coverage["scans"] or 0)
+
+    if not scans:
+
+        problems.append(
+            "no scans recorded at all -- if the scanner ran, nothing it did "
+            "was persisted and this session cannot be recovered"
+        )
+
+    else:
+        # REGULAR cadence is 300s, so a full session is roughly 78 scans plus
+        # the opening range and pre-market. Well under that means the worker
+        # died partway and the day is a fragment, not a session.
+        if scans < 40:
+
+            problems.append(
+                f"only {scans} scans recorded ({coverage['first_scan']} to "
+                f"{coverage['last_scan']} ET) -- a full session is ~78 at the "
+                f"300s regular cadence, so this day is a fragment"
+            )
+
+        if coverage["last_scan"] and coverage["last_scan"] < "15:30":
+
+            problems.append(
+                f"last scan at {coverage['last_scan']} ET, well before the "
+                f"close -- capture stopped early"
+            )
+
+    # A position open from an earlier session is the shape the 2026-08-05 SMCI
+    # put had: opened, lost to a restart, never exited, never alerted.
+    orphans = list(connection.execute(text("""
+        SELECT symbol,
+               to_char(opened_at AT TIME ZONE 'America/New_York',
+                       'YYYY-MM-DD HH24:MI') AS opened_et
+        FROM paper_trades
+        WHERE status <> 'CLOSED'
+          AND DATE(opened_at) < CAST(:day AS DATE)
+        ORDER BY opened_at
+    """), {"day": str(day)}).mappings())
+
+    if orphans:
+
+        problems.append(
+            f"{len(orphans)} position(s) still open from an earlier session: "
+            + ", ".join(f"{o['symbol']} since {o['opened_et']}" for o in orphans[:5])
+            + " -- these were never exited and never alerted"
+        )
+
+    return problems, scans, coverage
+
+
 def baseline_days(connection, day, count):
     """The trading days actually present in the archive before `day`."""
 
@@ -618,7 +694,7 @@ def show_trades(trades):
               f"-- the spread, crossed twice")
 
 
-def show_integrity(rows, trades, ledger):
+def show_integrity(rows, trades, ledger, capture_problems=None):
     """Whether the day's own record is trustworthy, before anyone reads it.
 
     Two defects shipped to production on 2026-08-03 and neither was visible to
@@ -632,7 +708,9 @@ def show_integrity(rows, trades, ledger):
     a number nobody trusts gets quoted for a month.
     """
 
-    problems = []
+    # Completeness first. Everything below judges the record; these say whether
+    # there is a record to judge.
+    problems = list(capture_problems or [])
 
     for field in ("mfe_r", "mae_r"):
 
@@ -774,11 +852,21 @@ def main():
               f"skip the liquidity attempts, so the transfer is a fraction of it.")
 
         rows, trades, ledger = load_day(connection, day)
+        capture_problems, _scans, _coverage = capture_completeness(
+            connection, day, trades
+        )
 
         if not rows:
 
-            print(f"no scanner_snapshot rows for {day} -- "
-                  f"either not a trading day, or the archive has not landed yet")
+            print(f"\nno scanner_snapshot rows for {day} -- either not a "
+                  f"trading day, or nothing was persisted")
+
+            # The empty case is the one worth shouting about: 6 and 7 Aug 2026
+            # looked exactly like a quiet day and were a total capture failure.
+            for problem in capture_problems:
+
+                print(f"   !! {problem}")
+
             return
 
         history = []
@@ -803,7 +891,7 @@ def main():
     show_rejections(rows)
     show_gate(rows)
     show_trades(trades)
-    show_integrity(rows, trades, ledger)
+    show_integrity(rows, trades, ledger, capture_problems)
     show_noise_note(today, history)
     print()
 
