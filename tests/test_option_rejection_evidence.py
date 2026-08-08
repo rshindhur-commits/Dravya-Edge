@@ -113,8 +113,14 @@ class RejectionEvidenceTests(unittest.TestCase):
 
         self.assertNotEqual(result["spread_pct"], 999.0)
 
-    def test_a_passing_contract_is_left_alone(self):
-        """Evidence is for rejections; a healthy verdict keeps its old shape."""
+    def test_a_passing_contract_records_its_own_liquidity(self):
+        """The spread of a contract we bought is the one worth keeping.
+
+        This asserted the opposite until 2026-08-08. Skipping evidence on a
+        passing verdict threw away the spread of every contract the system
+        actually traded, which is the one number the round-trip cost is made
+        of.
+        """
 
         with patch("app.options.options_filter.settings") as settings:
             settings.option_require_bid_ask = False
@@ -127,8 +133,10 @@ class RejectionEvidenceTests(unittest.TestCase):
             result = _evaluate(_contract())
 
         self.assertTrue(result["liquid"])
+        self.assertEqual(result["open_interest"], 5000)
+        self.assertIn("spread_pct", result)
+        # Nothing failed, so there is no threshold to name.
         self.assertNotIn("required_value", result)
-        self.assertNotIn("open_interest", result)
 
     def test_absent_fields_are_omitted_rather_than_blanked(self):
         """A missing OI and an OI of zero are different facts."""
@@ -213,16 +221,25 @@ class AttemptEvidenceTests(unittest.TestCase):
         self.assertEqual(attempts[0]["source"], "active")
         self.assertIs(attempts[0]["accepted"], False)
 
-    def test_an_accepted_attempt_carries_no_rejection_evidence(self):
-        """A passing verdict keeps its shape, so the audit stays readable."""
+    def test_an_accepted_attempt_records_the_contract_it_accepted(self):
+        """The spread of a contract we bought is the one worth keeping.
+
+        This used to assert the opposite. Skipping evidence on a passing
+        verdict meant the spread was computed, used to admit the contract, and
+        then thrown away -- so archived runs hold the spread of every rejection
+        and of no trade, and measuring the round-trip cost of 310 archived
+        trades needed 310 fresh quote requests to recover it.
+        """
 
         contract, _liquidity, attempts = self._select({"active": _contract()})
 
         self.assertIsNotNone(contract)
         self.assertEqual(len(attempts), 1)
         self.assertTrue(attempts[0]["accepted"])
+        self.assertIn("open_interest", attempts[0])
+        self.assertIn("spread_pct", attempts[0])
+        # Nothing failed, so there is no threshold to name.
         self.assertNotIn("required_value", attempts[0])
-        self.assertNotIn("open_interest", attempts[0])
 
 
 if __name__ == "__main__":

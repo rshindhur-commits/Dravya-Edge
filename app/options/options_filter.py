@@ -71,15 +71,23 @@ def evaluate_option_liquidity(option_data):
 
     result = _evaluate_option_liquidity(option_data)
 
-    if result.get("liquid"):
-
-        return result
-
+    # Evidence is attached whatever the verdict. It used to be skipped for
+    # passing contracts, which meant the spread of every contract the system
+    # actually bought was computed, used to admit it, and then discarded --
+    # so the archived replay runs record the spread of rejections and not of
+    # trades. Measuring the round-trip cost of 310 archived trades then needed
+    # 310 fresh quote requests to recover a number the run already had.
+    #
     # Evidence never overwrites a verdict's own fields: `spread_pct` is rounded
     # deliberately by some branches, and the raw quote value must not replace it.
     for field, value in _rejection_evidence(option_data).items():
 
         result.setdefault(field, value)
+
+    if result.get("liquid"):
+
+        # No threshold was failed, so there is none to name.
+        return result
 
     required = _required_value(result.get("code"))
 
