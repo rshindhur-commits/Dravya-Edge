@@ -1,0 +1,67 @@
+{
+  "trading_day": "2026-08-08",
+  "readonly": true,
+  "snapshots": [
+    {
+      "scan_id": "2026-08-08_102309",
+      "scan_timestamp": "2026-08-08 10:23:15.719878-04:00",
+      "path": "20260808_102315_2026-08-08_102309.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-08_102316",
+      "scan_timestamp": "2026-08-08 10:23:20.967131-04:00",
+      "path": "20260808_102320_2026-08-08_102316.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    },
+    {
+      "scan_id": "2026-08-08_102321",
+      "scan_timestamp": "2026-08-08 10:23:25.603890-04:00",
+      "path": "20260808_102325_2026-08-08_102321.parquet",
+      "rows": 26,
+      "format": "parquet",
+      "strategy_version": "unknown"
+    }
+  ],
+  "scanner_version": "unknown",
+  "configuration": {
+    "entry_engine": "v1",
+    "exit_engine": "v1",
+    "strategy_version": "unknown"
+  },
+  "watchlist": [
+    "AAPL",
+    "AMAT",
+    "AMD",
+    "AMZN",
+    "ARM",
+    "AVGO",
+    "CRWD",
+    "GOOGL",
+    "JPM",
+    "META",
+    "MRVL",
+    "MSFT",
+    "MU",
+    "NFLX",
+    "NVDA",
+    "ORCL",
+    "PANW",
+    "PLTR",
+    "QQQ",
+    "SMCI",
+    "SMH",
+    "SPCX",
+    "SPY",
+    "TSLA",
+    "TSM",
+    "XOM"
+  ],
+  "timezone": "America/New_York",
+  "scan_count": 3,
+  "scan_interval_seconds": 4
+}

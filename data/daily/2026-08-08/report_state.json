@@ -1,0 +1,193 @@
+{
+  "metadata": {
+    "scan_id": "2026-08-08_102321",
+    "generation": "69e8ad3b-3861-47d2-91b8-4e45399899fa",
+    "schema": 1,
+    "created_at": "2026-08-08T14:23:21.119624Z"
+  },
+  "generated_at": "2026-08-08T14:27:33.883859+00:00",
+  "trading_day": "2026-08-08",
+  "scan_id": "2026-08-08_102321",
+  "status": "MISSING",
+  "daily_report": {
+    "exists": false,
+    "path": "D:\\Dravya_Trade_Works\\data\\daily\\2026-08-08\\daily_validation_report.html",
+    "size_bytes": 0,
+    "mtime": null
+  },
+  "root_report": {
+    "exists": false,
+    "path": "D:\\Dravya_Trade_Works\\reports\\daily_validation_2026-08-08.html",
+    "size_bytes": 0,
+    "mtime": null
+  },
+  "scanner_snapshot": {
+    "exists": true,
+    "path": "D:\\Dravya_Trade_Works\\data\\daily\\2026-08-08\\scanner_output_close.csv",
+    "size_bytes": 22960,
+    "mtime": "2026-08-08T14:24:43.474888+00:00"
+  },
+  "historical_trade_efficiency": {
+    "daily": [
+      {
+        "Trading Day": "2026-07-31T00:00:00.000",
+        "Capture": null,
+        "TES": null,
+        "Average R": null,
+        "Win Rate": null,
+        "Weekday": "Friday",
+        "Rolling Average Capture": null
+      },
+      {
+        "Trading Day": "2026-08-01T00:00:00.000",
+        "Capture": null,
+        "TES": null,
+        "Average R": null,
+        "Win Rate": null,
+        "Weekday": "Saturday",
+        "Rolling Average Capture": null
+      },
+      {
+        "Trading Day": "2026-08-08T00:00:00.000",
+        "Capture": null,
+        "TES": null,
+        "Average R": null,
+        "Win Rate": null,
+        "Weekday": "Saturday",
+        "Rolling Average Capture": null
+      }
+    ],
+    "weekly": [
+      {
+        "Trading Day": "2026-07-31T00:00:00.000",
+        "Capture": null,
+        "TES": null,
+        "Average R": null,
+        "Win Rate": null
+      },
+      {
+        "Trading Day": "2026-08-07T00:00:00.000",
+        "Capture": null,
+        "TES": null,
+        "Average R": null,
+        "Win Rate": null
+      },
+      {
+        "Trading Day": "2026-08-14T00:00:00.000",
+        "Capture": null,
+        "TES": null,
+        "Average R": null,
+        "Win Rate": null
+      }
+    ],
+    "monthly": [
+      {
+        "Trading Day": "2026-07-31T00:00:00.000",
+        "Capture": null,
+        "TES": null,
+        "Average R": null,
+        "Win Rate": null
+      },
+      {
+        "Trading Day": "2026-08-31T00:00:00.000",
+        "Capture": null,
+        "TES": null,
+        "Average R": null,
+        "Win Rate": null
+      }
+    ],
+    "weekday": [
+      {
+        "Weekday": "Friday",
+        "Capture": null
+      },
+      {
+        "Weekday": "Saturday",
+        "Capture": null
+      }
+    ],
+    "setup": [],
+    "regime": [],
+    "exit": []
+  },
+  "historical_v2_learning": {
+    "daily": [],
+    "exit_phase": []
+  },
+  "historical_observational_analytics": {
+    "daily": [
+      {
+        "Trading Day": "2026-08-08",
+        "Average Entry Timing": null,
+        "Late Entries": 0,
+        "Average TQS": 23.0,
+        "Average Rank": 10.5
+      },
+      {
+        "Trading Day": "2026-08-01",
+        "Average Entry Timing": null,
+        "Late Entries": 0,
+        "Average TQS": 20.0,
+        "Average Rank": 10.5
+      },
+      {
+        "Trading Day": "2026-07-31",
+        "Average Entry Timing": 25.52,
+        "Late Entries": 20,
+        "Average TQS": 40.27,
+        "Average Rank": 10.5
+      }
+    ]
+  },
+  "historical_blocking_trends": {
+    "daily": [
+      {
+        "Trading Day": "2026-08-08",
+        "Stage": "Momentum",
+        "Count": 26,
+        "Percentage": 100.0
+      },
+      {
+        "Trading Day": "2026-08-01",
+        "Stage": "Momentum",
+        "Count": 26,
+        "Percentage": 100.0
+      },
+      {
+        "Trading Day": "2026-07-31",
+        "Stage": "Entry",
+        "Count": 23,
+        "Percentage": 88.5
+      },
+      {
+        "Trading Day": "2026-07-31",
+        "Stage": "Momentum",
+        "Count": 3,
+        "Percentage": 11.5
+      }
+    ],
+    "dominant_daily": [
+      {
+        "Trading Day": "2026-08-08",
+        "Dominant Blocking Stage": "Momentum",
+        "Count": 26,
+        "Percentage": 100.0
+      },
+      {
+        "Trading Day": "2026-08-01",
+        "Dominant Blocking Stage": "Momentum",
+        "Count": 26,
+        "Percentage": 100.0
+      },
+      {
+        "Trading Day": "2026-07-31",
+        "Dominant Blocking Stage": "Entry",
+        "Count": 23,
+        "Percentage": 88.5
+      }
+    ]
+  },
+  "errors": [
+    "Daily validation report has not been generated."
+  ]
+}

@@ -1,0 +1,1 @@
+trading_day,scan_id,symbol,direction,setup,setup_score,candidate_rank,scanner_recommendation,execution_eligibility,execution_outcome,execution_reason,trade_status,telegram_status

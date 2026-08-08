@@ -1,0 +1,4 @@
+timestamp,trading_day,runtime,health_score,polygon_requests,polygon_cache_hits,polygon_cache_misses,cache_hit_pct,average_api_time,average_cache_read_time,background_pending_jobs,background_completed_jobs,background_failed_jobs,background_queue_depth,background_longest_job_time,background_longest_job_name,background_average_job_time,workers,requests,exceptions,symbols_completed,symbols_failed,average_symbol_runtime
+2026-08-08T10:23:35.632789-04:00,2026-08-08,5.34,100,,,,,,,,,,,,,,5,26,0,26,0,0.28
+2026-08-08T10:24:00.586502-04:00,2026-08-08,3.49,100,,,,,,,,,,,,,,5,26,0,26,0,0.22
+2026-08-08T10:24:24.864571-04:00,2026-08-08,2.96,100,,,,,,,,,,,,,,5,26,0,26,0,0.26
