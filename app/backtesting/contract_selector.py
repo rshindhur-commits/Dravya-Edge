@@ -55,7 +55,10 @@ from app.options.option_metrics import (
     classify_expiration_bucket,
     score_option_quality,
 )
-from app.options.options_filter import evaluate_option_liquidity
+from app.options.options_filter import (
+    ATTEMPT_EVIDENCE_FIELDS,
+    evaluate_option_liquidity,
+)
 from app.options.options_recommender import _pick_first_by_dte
 
 # The window contracts get priced in. OPTION_MIN_DTE is 5 and the ranker scores
@@ -624,15 +627,34 @@ def _apply_live_pick(ranked, config, direction, affordability, diagnostics):
             continue
 
         liquidity = evaluate_option_liquidity(candidate)
+        attempt = {
+            "source": source,
+            "ticker": ticker,
+            "liquid": liquidity.get("liquid"),
+            "code": liquidity.get("code"),
+            # Named here rather than left to the loop below, because the
+            # verdict rounds it deliberately and ATTEMPT_EVIDENCE_FIELDS
+            # therefore leaves it out. The live path names it the same way.
+            "spread_pct": liquidity.get("spread_pct"),
+            "reason": liquidity.get("reason"),
+        }
 
-        attempts.append(
-            {
-                "source": source,
-                "ticker": ticker,
-                "liquid": liquidity.get("liquid"),
-                "code": liquidity.get("code"),
-            }
-        )
+        # The same four keys were recorded whatever the verdict returned, so a
+        # forward run archived which contract it bought and nothing about why
+        # it was ownable -- above all not the spread. That is the term the
+        # round trip is made of: fitting premium against R over 601 archived
+        # trades gives a 3.40 point cost before the underlying moves at all,
+        # and recovering it meant re-requesting 310 quotes the run had already
+        # paid for. Mirrors the live path in app/main.py.
+        for field in ATTEMPT_EVIDENCE_FIELDS:
+
+            value = liquidity.get(field)
+
+            if value is not None:
+
+                attempt.setdefault(field, value)
+
+        attempts.append(attempt)
 
         if liquidity.get("liquid"):
 
