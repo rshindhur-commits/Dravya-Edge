@@ -5,6 +5,7 @@ import hashlib
 import pandas as pd
 
 from app.storage.daily_paths import daily_path
+from app.storage.incremental_csv import append_new_rows
 
 
 SHADOW_COLUMNS = [
@@ -163,39 +164,13 @@ def write_shadow_comparison(rows, trading_day, scan_id, observed_at):
         parents=True,
         exist_ok=True
     )
-    existing = (
-        pd.read_csv(path)
-        if path.exists() and path.stat().st_size
-        else pd.DataFrame()
-    )
-    combined = pd.concat(
-        [existing, comparison],
-        ignore_index=True,
-        sort=False
-    )
-    combined.drop_duplicates(
-        subset=["shadow_id"],
-        keep="last"
-    ).to_csv(
-        path,
-        index=False
-    )
+    append_new_rows(path, comparison, ["shadow_id"])
     differences = build_engine_differences(comparison)
     differences_path = daily_path(trading_day, "engine_differences.csv")
+
     if not differences.empty:
-        existing_differences = (
-            pd.read_csv(differences_path)
-            if differences_path.exists() and differences_path.stat().st_size
-            else pd.DataFrame()
-        )
-        pd.concat(
-            [existing_differences, differences],
-            ignore_index=True,
-            sort=False
-        ).drop_duplicates(
-            subset=["difference_id"],
-            keep="last"
-        ).to_csv(differences_path, index=False)
+
+        append_new_rows(differences_path, differences, ["difference_id"])
 
     return {
         "path": str(path),

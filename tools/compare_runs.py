@@ -110,14 +110,45 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("runs", nargs="+", help="run JSONs; the first is baseline")
     parser.add_argument("--label", action="append", default=None)
+    parser.add_argument(
+        "--all-days",
+        action="store_true",
+        help="compare every day each run has, rather than only shared ones",
+    )
     args = parser.parse_args()
 
     labels = args.label or []
+    loaded = [load(path) for path in args.runs]
+
+    # A stalled day produces no trades, so two arms can cover different windows
+    # and every difference between them then includes "which days each one
+    # happened to get". lev025 finished 16 of 21 days against a 21-day baseline
+    # and looked $1,889 better, nearly all of which was the five missing days.
+    # Restricting to the shared window is the only comparison that means
+    # anything, so it is the default.
+    if not args.all_days and len(loaded) > 1:
+
+        per_run = [
+            {str(t.get("entry_time"))[:10] for t in trades}
+            for trades in loaded
+        ]
+        shared = set.intersection(*per_run)
+        dropped = sorted(set.union(*per_run) - shared)
+
+        if dropped:
+
+            print(f"\n   restricted to {len(shared)} day(s) present in every "
+                  f"run; dropped {len(dropped)}: {', '.join(dropped)}")
+
+        loaded = [
+            [t for t in trades if str(t.get("entry_time"))[:10] in shared]
+            for trades in loaded
+        ]
+
     summaries = []
 
-    for index, path in enumerate(args.runs):
+    for index, (path, trades) in enumerate(zip(args.runs, loaded)):
 
-        trades = load(path)
         summary = summarise(trades)
 
         if summary is None:

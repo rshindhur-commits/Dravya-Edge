@@ -8,6 +8,7 @@ import pandas as pd
 
 from app.db.persistence import db_writes_enabled
 from app.storage.daily_paths import daily_path
+from app.storage.incremental_csv import append_new_rows
 
 
 HORIZON_SESSIONS = (5, 10)
@@ -181,12 +182,29 @@ def build_horizon_outcomes(facts, existing_outcomes, current_rows, evaluation_da
 
 
 def _append_unique(path, current, key_columns):
+    """Store rows with unseen keys and return the whole ledger.
+
+    This ledger spans every trading day rather than one, so it is the file that
+    grows without bound, and the horizon maths downstream genuinely does need
+    all of it. What it does not need is the old version's second copy: a concat
+    of the full ledger plus a rewrite of the full ledger, on every scan.
+    """
     existing = _read_csv(path)
+
+    if current is None or current.empty:
+
+        return existing
+
+    if not append_new_rows(path, current, key_columns):
+
+        return existing
+
     merged = pd.concat([existing, current], ignore_index=True, sort=False)
+
     if key_columns and all(column in merged.columns for column in key_columns):
+
         merged = merged.drop_duplicates(key_columns, keep="first")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    merged.to_csv(path, index=False)
+
     return merged
 
 
