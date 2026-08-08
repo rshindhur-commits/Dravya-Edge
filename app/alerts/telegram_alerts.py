@@ -1,6 +1,7 @@
 import html
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from inspect import signature
@@ -353,6 +354,57 @@ def telegram_exit_alerts_enabled():
     return _telegram_alert_type_enabled(
         "TELEGRAM_EXIT_ALERTS_ENABLED"
     )
+
+
+# `database_status()` opens a connection, and the entry path runs per candidate
+# per scan. The answer cannot change faster than a scan, so a short cache keeps
+# this from adding a round trip to every candidate.
+_PERSISTENCE_TTL_SECONDS = 60.0
+_persistence_probe = {"checked_at": 0.0, "status": None}
+
+
+def entry_persistence_available():
+    """Whether a position opened now would survive this container restarting.
+
+    Returns `(ok, reason)`. The database is the only thing that survives:
+    `paper_trade_state.json` sits on an ephemeral disk, and
+    `restore_open_trades_from_db()` is what re-adopts an open position once the
+    container comes back. When writes are not landing there is nothing to
+    re-adopt from.
+
+    Deliberately not applied to exits. Closing a position that is already open
+    is always safe, and suppressing an exit alert is the very harm this guards
+    against.
+    """
+
+    if not _bool_setting("TELEGRAM_REQUIRE_PERSISTED_ENTRY", True):
+
+        return True, None
+
+    now = time.time()
+    cached = _persistence_probe["status"]
+
+    if (cached is None
+            or now - _persistence_probe["checked_at"] >= _PERSISTENCE_TTL_SECONDS):
+
+        try:
+
+            from app.db.persistence import database_status
+
+            cached = database_status()
+
+        except Exception as exc:
+
+            cached = "UNREACHABLE"
+            print(f"[ENTRY ALERT GUARD] persistence probe failed: {exc}")
+
+        _persistence_probe.update({"checked_at": now, "status": cached})
+
+    if cached == "ON":
+
+        return True, None
+
+    return False, f"ENTRY_NOT_PERSISTABLE_DB_{cached}"
 
 
 def get_telegram_credentials():
@@ -2087,6 +2139,27 @@ def maybe_send_paper_entry_alert(
         return {
             "sent": False,
             "reason": "TELEGRAM_ENTRY_ALERTS_DISABLED"
+        }
+
+    # An entry alert is a promise of an exit alert, and only the database can
+    # keep it across a restart. On 2026-08-06 and 07 nothing was written at all
+    # -- no snapshots, no trades, no decisions -- while entry alerts kept going
+    # out, because Telegram needs no database. An SMCI put opened on the 5th
+    # peaked at 1.28R, lost its state to a restart 54 minutes later and was
+    # never closed: subscribers got the entry and never got the exit.
+    persistable, persistence_reason = entry_persistence_available()
+
+    if not persistable:
+
+        # Loud on purpose. Silence is what turned this into two days of
+        # unmatched entries before anyone noticed.
+        print(f"[ENTRY ALERT GUARD] suppressed: {persistence_reason}. "
+              f"An entry that cannot be recorded cannot be exited after a "
+              f"restart.")
+
+        return {
+            "sent": False,
+            "reason": persistence_reason
         }
 
     trade = trade or {}
