@@ -50,7 +50,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from app.db.connection import get_engine
 
@@ -60,6 +60,25 @@ ACTIONABLE = {
 }
 GATE_PASS = {"PASS", "TRUE", "ELIGIBLE"}
 EMPTY = {"", "None", "-", "nan"}
+
+# What this tool actually reads out of a snapshot's decision_payload. Selecting
+# the whole blob and picking these out in Python moved megabytes per day to
+# reach a few hundred bytes of it.
+SNAPSHOT_FIELDS = (
+    "Symbol",
+    "ENTRY_GATE_RESULT",
+    "ENTRY_GATE_FAILURE",
+    "Blocked By",
+    "Option Quote Freshness",
+    "Option Rejection Reason",
+)
+
+# The nested array behind the contract-selection section. It is most of a
+# snapshot row's weight -- one has been seen at 51KB -- and only the reported
+# day needs it.
+ATTEMPTS_FIELD = "Option Liquidity Attempts"
+
+TRADE_RETURN_FIELDS = ("option_pnl_pct_net", "option_pnl_pct", "option_pl_pct")
 
 
 # --------------------------------------------------------------------- helpers
@@ -126,9 +145,15 @@ def option_return(trade):
 
     payload = as_dict(trade.get("payload"))
 
-    for field in ("option_pnl_pct_net", "option_pnl_pct", "option_pl_pct"):
+    for field in TRADE_RETURN_FIELDS:
 
+        # Baseline rows carry these projected out of the payload rather than
+        # dragging the whole document across for three numbers.
         value = number(payload.get(field))
+
+        if value is None:
+
+            value = number(trade.get(field))
 
         if value is not None:
 
@@ -147,23 +172,80 @@ def option_return(trade):
 # ------------------------------------------------------------------ collection
 
 
-def load_day(connection, day):
+def _snapshot_columns(with_attempts):
+    """Project the fields out of the jsonb rather than shipping the document."""
 
+    columns = [
+        f"""decision_payload ->> '{field}' AS "{field}\""""
+        for field in SNAPSHOT_FIELDS
+    ]
+
+    if with_attempts:
+
+        columns.append(
+            f"""decision_payload -> '{ATTEMPTS_FIELD}' AS "{ATTEMPTS_FIELD}\""""
+        )
+
+    return ", ".join(columns)
+
+
+def transfer_estimate(connection, days):
+    """Bytes of decision_payload behind the days about to be read.
+
+    Reported before the read rather than after. Run often enough with a ten-day
+    baseline, this tool worked through a month of the database's transfer
+    allowance in a week, and the first sign of it was the bill.
+    """
+    statement = text("""
+        SELECT count(*) AS rows,
+               COALESCE(sum(pg_column_size(decision_payload)), 0) AS bytes
+        FROM scanner_snapshot
+        WHERE trading_day IN :days
+    """).bindparams(bindparam("days", expanding=True))
+
+    result = connection.execute(
+        statement,
+        {"days": [date.fromisoformat(str(day)[:10]) for day in days]},
+    ).mappings().one()
+
+    return int(result["rows"]), int(result["bytes"])
+
+
+def load_day(connection, day, full=True):
+    """Read one day. `full` adds what only the reported day's sections need.
+
+    Baseline days feed `day_metrics` and nothing else, and `day_metrics` never
+    looks at the liquidity attempts or the decision ledger. Fetching those for
+    ten trailing sessions was most of this tool's transfer, for none of its
+    output.
+    """
     rows = [
-        row["decision_payload"] or {}
-        for row in connection.execute(text("""
-            SELECT decision_payload FROM scanner_snapshot
+        dict(row)
+        for row in connection.execute(text(f"""
+            SELECT {_snapshot_columns(full)} FROM scanner_snapshot
             WHERE trading_day = CAST(:day AS DATE)
             ORDER BY scan_id, symbol
         """), {"day": str(day)}).mappings()
     ]
 
+    if full:
+
+        trade_columns = """
+            symbol, direction, option_ticker, status, holding_profile,
+            entry_price, option_entry_mid, option_close_mid,
+            r_multiple, payload, opened_at, closed_at
+        """
+
+    else:
+
+        trade_columns = "r_multiple, option_entry_mid, option_close_mid, " + ", ".join(
+            f"payload ->> '{field}' AS {field}" for field in TRADE_RETURN_FIELDS
+        )
+
     trades = [
         dict(row)
-        for row in connection.execute(text("""
-            SELECT symbol, direction, option_ticker, status, holding_profile,
-                   entry_price, option_entry_mid, option_close_mid,
-                   r_multiple, payload, opened_at, closed_at
+        for row in connection.execute(text(f"""
+            SELECT {trade_columns}
             FROM paper_trades
             WHERE DATE(opened_at) = CAST(:day AS DATE)
             ORDER BY opened_at
@@ -174,15 +256,19 @@ def load_day(connection, day):
     # record of the paper trader and the alert layer disagreeing. Inferring it
     # from the snapshot does not work: a symbol can pass the gate on one scan
     # and be taken off a different, failing one.
-    ledger = [
-        dict(row)
-        for row in connection.execute(text("""
-            SELECT symbol, decision, reason, scan_timestamp
-            FROM auto_paper_decision
-            WHERE DATE(scan_timestamp) = CAST(:day AS DATE)
-            ORDER BY id
-        """), {"day": str(day)}).mappings()
-    ]
+    ledger = []
+
+    if full:
+
+        ledger = [
+            dict(row)
+            for row in connection.execute(text("""
+                SELECT symbol, decision, reason, scan_timestamp
+                FROM auto_paper_decision
+                WHERE DATE(scan_timestamp) = CAST(:day AS DATE)
+                ORDER BY id
+            """), {"day": str(day)}).mappings()
+        ]
 
     return rows, trades, ledger
 
@@ -224,6 +310,82 @@ def day_metrics(rows, trades):
             if returns else None
         ),
     }
+
+
+def capture_completeness(connection, day, trades):
+    """Whether the day was recorded at all, and recorded fully.
+
+    This exists because the failure is silent. On 2026-08-05 four positions were
+    alerted and three were written. On the 6th and 7th the scanner ran and
+    alerted all day and wrote nothing whatever -- no snapshots, no trades, no
+    decisions -- while subscribers kept receiving signals. Neither was noticed
+    for days, by which point the sessions were unrecoverable.
+
+    A capture that can fail without saying so is not a capture, and a
+    confidence built on one is worse than no confidence.
+    """
+
+    problems = []
+
+    coverage = connection.execute(text("""
+        SELECT count(DISTINCT scan_id) AS scans,
+               to_char(min(scan_timestamp) AT TIME ZONE 'America/New_York',
+                       'HH24:MI') AS first_scan,
+               to_char(max(scan_timestamp) AT TIME ZONE 'America/New_York',
+                       'HH24:MI') AS last_scan
+        FROM scanner_snapshot
+        WHERE trading_day = CAST(:day AS DATE)
+    """), {"day": str(day)}).mappings().one()
+
+    scans = int(coverage["scans"] or 0)
+
+    if not scans:
+
+        problems.append(
+            "no scans recorded at all -- if the scanner ran, nothing it did "
+            "was persisted and this session cannot be recovered"
+        )
+
+    else:
+        # REGULAR cadence is 300s, so a full session is roughly 78 scans plus
+        # the opening range and pre-market. Well under that means the worker
+        # died partway and the day is a fragment, not a session.
+        if scans < 40:
+
+            problems.append(
+                f"only {scans} scans recorded ({coverage['first_scan']} to "
+                f"{coverage['last_scan']} ET) -- a full session is ~78 at the "
+                f"300s regular cadence, so this day is a fragment"
+            )
+
+        if coverage["last_scan"] and coverage["last_scan"] < "15:30":
+
+            problems.append(
+                f"last scan at {coverage['last_scan']} ET, well before the "
+                f"close -- capture stopped early"
+            )
+
+    # A position open from an earlier session is the shape the 2026-08-05 SMCI
+    # put had: opened, lost to a restart, never exited, never alerted.
+    orphans = list(connection.execute(text("""
+        SELECT symbol,
+               to_char(opened_at AT TIME ZONE 'America/New_York',
+                       'YYYY-MM-DD HH24:MI') AS opened_et
+        FROM paper_trades
+        WHERE status <> 'CLOSED'
+          AND DATE(opened_at) < CAST(:day AS DATE)
+        ORDER BY opened_at
+    """), {"day": str(day)}).mappings())
+
+    if orphans:
+
+        problems.append(
+            f"{len(orphans)} position(s) still open from an earlier session: "
+            + ", ".join(f"{o['symbol']} since {o['opened_et']}" for o in orphans[:5])
+            + " -- these were never exited and never alerted"
+        )
+
+    return problems, scans, coverage
 
 
 def baseline_days(connection, day, count):
@@ -532,7 +694,7 @@ def show_trades(trades):
               f"-- the spread, crossed twice")
 
 
-def show_integrity(rows, trades, ledger):
+def show_integrity(rows, trades, ledger, capture_problems=None):
     """Whether the day's own record is trustworthy, before anyone reads it.
 
     Two defects shipped to production on 2026-08-03 and neither was visible to
@@ -546,7 +708,9 @@ def show_integrity(rows, trades, ledger):
     a number nobody trusts gets quoted for a month.
     """
 
-    problems = []
+    # Completeness first. Everything below judges the record; these say whether
+    # there is a record to judge.
+    problems = list(capture_problems or [])
 
     for field in ("mfe_r", "mae_r"):
 
@@ -667,7 +831,9 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--day", default=None, help="YYYY-MM-DD, default today")
-    parser.add_argument("--baseline", type=int, default=10,
+    # Three is enough for the bands and cheap enough to run daily. Ten was not:
+    # the bands barely move between the two, and the transfer scales with it.
+    parser.add_argument("--baseline", type=int, default=3,
                         help="trailing sessions used for the bands")
     args = parser.parse_args()
 
@@ -675,19 +841,41 @@ def main():
 
     with get_engine().begin() as connection:
 
+        previous_days = baseline_days(connection, day, args.baseline)
+        snapshot_rows, payload_bytes = transfer_estimate(
+            connection, [day] + list(previous_days)
+        )
+        print(f"\n   reading {snapshot_rows:,} snapshot rows across "
+              f"{len(previous_days) + 1} session(s); the decision_payload behind "
+              f"them is {payload_bytes / 1e6:.1f} MB.")
+        print(f"   fields are projected server-side and the trailing sessions "
+              f"skip the liquidity attempts, so the transfer is a fraction of it.")
+
         rows, trades, ledger = load_day(connection, day)
+        capture_problems, _scans, _coverage = capture_completeness(
+            connection, day, trades
+        )
 
         if not rows:
 
-            print(f"no scanner_snapshot rows for {day} -- "
-                  f"either not a trading day, or the archive has not landed yet")
+            print(f"\nno scanner_snapshot rows for {day} -- either not a "
+                  f"trading day, or nothing was persisted")
+
+            # The empty case is the one worth shouting about: 6 and 7 Aug 2026
+            # looked exactly like a quiet day and were a total capture failure.
+            for problem in capture_problems:
+
+                print(f"   !! {problem}")
+
             return
 
         history = []
 
-        for previous in baseline_days(connection, day, args.baseline):
+        for previous in previous_days:
 
-            past_rows, past_trades, _past_ledger = load_day(connection, previous)
+            past_rows, past_trades, _past_ledger = load_day(
+                connection, previous, full=False
+            )
             history.append(day_metrics(past_rows, past_trades))
 
     today = day_metrics(rows, trades)
@@ -703,7 +891,7 @@ def main():
     show_rejections(rows)
     show_gate(rows)
     show_trades(trades)
-    show_integrity(rows, trades, ledger)
+    show_integrity(rows, trades, ledger, capture_problems)
     show_noise_note(today, history)
     print()
 
