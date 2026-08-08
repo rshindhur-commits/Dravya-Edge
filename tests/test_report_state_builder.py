@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,8 @@ from unittest.mock import patch
 import pandas as pd
 
 from app.ui.cache.report_state_builder import (
+    _VALIDATION_STATE_CACHE,
+    _daily_validation_states,
     build_historical_v2_learning,
     build_historical_observational_analytics,
     build_historical_blocking_trends,
@@ -173,6 +176,90 @@ class ReportStateBuilderTests(unittest.TestCase):
             self.assertTrue(daily.exists())
             self.assertEqual(payload["scan_id"], "scan")
             self.assertEqual(payload["metadata"]["scan_id"], "scan")
+
+
+class DailyValidationStateCacheTests(unittest.TestCase):
+    """Re-reading finished days was the worker's largest memory cost."""
+
+    def setUp(self):
+
+        _VALIDATION_STATE_CACHE.clear()
+
+    def _write_day(self, root, name, payload="x"):
+
+        directory = root / name
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "validation_state.json"
+        path.write_text(
+            json.dumps({"trading_day": name, "note": payload}),
+            encoding="utf-8",
+        )
+
+        return path
+
+    def test_a_finished_day_is_not_read_twice(self):
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            root = Path(temp_dir)
+            self._write_day(root, "2026-08-01")
+            self._write_day(root, "2026-08-02")
+
+            with patch("app.ui.cache.report_state_builder.DAILY_DIR", root):
+
+                first = _daily_validation_states()
+                reads = []
+                original = Path.read_text
+
+                def counting_read_text(self, *args, **kwargs):
+
+                    reads.append(str(self))
+
+                    return original(self, *args, **kwargs)
+
+                with patch.object(Path, "read_text", counting_read_text):
+
+                    second = _daily_validation_states()
+
+            self.assertEqual(len(first), 2)
+            self.assertEqual(second, first)
+            self.assertEqual(reads, [], "cached days should not be re-read")
+
+    def test_a_changed_day_is_picked_up(self):
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            root = Path(temp_dir)
+            self._write_day(root, "2026-08-01", payload="before")
+
+            with patch("app.ui.cache.report_state_builder.DAILY_DIR", root):
+
+                before = _daily_validation_states()
+                # Today's file keeps changing all session; it must not go stale.
+                self._write_day(root, "2026-08-01", payload="after-and-longer")
+                after = _daily_validation_states()
+
+            self.assertEqual(before[0]["note"], "before")
+            self.assertEqual(after[0]["note"], "after-and-longer")
+
+    def test_the_cache_does_not_grow_past_the_window(self):
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            root = Path(temp_dir)
+
+            for day in range(1, 26):
+
+                self._write_day(root, f"2026-08-{day:02d}")
+
+            with patch("app.ui.cache.report_state_builder.DAILY_DIR", root):
+
+                states = _daily_validation_states(limit=20)
+
+            self.assertEqual(len(states), 20)
+            self.assertEqual(len(_VALIDATION_STATE_CACHE), 20)
+            # Newest first, so the oldest days fall out rather than accumulate.
+            self.assertEqual(states[0]["trading_day"], "2026-08-25")
 
 
 if __name__ == "__main__":

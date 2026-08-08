@@ -46,19 +46,60 @@ def _file_info(path: Path):
         }
 
 
-def _daily_validation_states(limit=20):
+_VALIDATION_STATE_CACHE: dict[str, tuple[tuple[int, int], Any]] = {}
 
+
+def _daily_validation_states(limit=20):
+    """The most recent days' validation states, parsed once each.
+
+    Three builders want this list, and it was being read once for each of them
+    -- twenty files of half a megabyte of JSON turned into Python objects and
+    thrown away, three times over, on every scan of the session. It was the
+    largest single thing the worker did with memory.
+
+    A finished day's validation state never changes, so entries are held
+    against (mtime, size) and only today's file is re-read. The cache is
+    rebuilt from the paths still in range each call, so a worker that runs for
+    months does not keep one more state for every day it has survived.
+    """
     states = []
+    fresh = {}
 
     try:
 
-        for path in sorted(DAILY_DIR.glob("*/validation_state.json"), reverse=True)[:limit]:
-
-            states.append(json.loads(path.read_text(encoding="utf-8")))
+        paths = sorted(
+            DAILY_DIR.glob("*/validation_state.json"), reverse=True
+        )[:limit]
 
     except Exception:
 
         return states
+
+    for path in paths:
+
+        try:
+
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size)
+            cached = _VALIDATION_STATE_CACHE.get(str(path))
+
+            if cached is not None and cached[0] == stamp:
+
+                state = cached[1]
+
+            else:
+
+                state = json.loads(path.read_text(encoding="utf-8"))
+
+        except Exception:
+
+            continue
+
+        fresh[str(path)] = (stamp, state)
+        states.append(state)
+
+    _VALIDATION_STATE_CACHE.clear()
+    _VALIDATION_STATE_CACHE.update(fresh)
 
     return states
 
@@ -294,22 +335,17 @@ def build_report_state_payload(
     daily_info = _file_info(daily_report_path)
     root_info = _file_info(root_report_path)
     scanner_info = _file_info(scanner_path)
-    historical_trade_efficiency = build_historical_trade_efficiency(
-        validation_states if validation_states is not None else _daily_validation_states()
-    )
+    # Read once and hand the same list to all three builders.
+    if validation_states is None:
+
+        validation_states = _daily_validation_states()
+
+    historical_trade_efficiency = build_historical_trade_efficiency(validation_states)
     historical_v2_learning = build_historical_v2_learning()
     historical_observational_analytics = (
-        build_historical_observational_analytics(
-            validation_states
-            if validation_states is not None
-            else _daily_validation_states()
-        )
+        build_historical_observational_analytics(validation_states)
     )
-    historical_blocking_trends = build_historical_blocking_trends(
-        validation_states
-        if validation_states is not None
-        else _daily_validation_states()
-    )
+    historical_blocking_trends = build_historical_blocking_trends(validation_states)
 
     if daily_info["exists"] or root_info["exists"]:
 
