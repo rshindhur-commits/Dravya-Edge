@@ -449,10 +449,19 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
     #
     # Over 5-7 Aug, seven of twelve alerted trades had a stop sitting exactly on
     # this floor. All seven lost, with holds of 6, 10, 13, 20, 22, 32 minutes.
-    # The five whose structure gave a real stop distance were mixed.
+    # That looked decisive and was not.
     #
-    # Off by default: it removes candidates rather than re-scoring them, so the
-    # archive is where it earns its place before production sees it.
+    # MEASURED AND REFUTED. Against 310 trades over 21 archived days, the floor
+    # binds on 178 of them, so it is structurally real -- but the trades it
+    # binds on lose $23.6 each against $24.3 for the trades whose structure gave
+    # a real stop. Win rates 19% and 18%. Removing them saves $4,580 only by
+    # removing 194 trades; per trade they are indistinguishable, and no stop
+    # band is profitable at all. The twelve-trade result was selection after the
+    # fact and did not survive the larger sample.
+    #
+    # Left in place, off, so the question is not reopened from the same twelve
+    # trades. Turning it on does less of an equally unprofitable thing, which is
+    # not the same as an improvement.
     if (original_risk_per_share < price_floor_distance
             and get_bool_env("REJECT_SUB_FLOOR_STOPS", False)):
 
