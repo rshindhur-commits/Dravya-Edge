@@ -239,7 +239,18 @@ SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
         "OPTION_MIN_QUALITY_SCORE",
         65.0,
     ),
-    max_spread_pct=get_float_env("OPTION_MAX_SPREAD_PCT", 10.0),
+    # 6.0, not 10.0, because that is what app/config/settings.py has defaulted
+    # this same variable to all along. Restating the name here but not the
+    # default is the identical defect the comment above describes, one layer
+    # down: where the variable is unset the two disagree, and rule_evaluation
+    # shows which one won -- 1,337 ENTRY evaluations recorded required_value
+    # 10.0, through 2026-08-05, against a configuration that says 6.
+    #
+    # It is not cosmetic. 947 contracts passed this gate and 202 of them (21%)
+    # were wider than 6%, admitted only by this default. At a measured round
+    # trip of 3.40 points against 8.59 points per R, a contract quoted 10% wide
+    # has to travel more than 1R before it is worth owning.
+    max_spread_pct=get_float_env("OPTION_MAX_SPREAD_PCT", 6.0),
 )
 
 
