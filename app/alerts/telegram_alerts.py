@@ -2433,8 +2433,28 @@ def build_trade_exit_alert_message(
         else None
     )
     final_r = _number(r_multiple)
-    is_win = final_r is not None and final_r > 0
-    result_label = "✅ WIN" if is_win else "Loss" if final_r is not None and final_r < 0 else "Closed"
+
+    # The verdict follows the money, not R. R is measured against the
+    # underlying's stop distance and is blind to the option spread, which is
+    # crossed twice; across 601 archived trades that spread costs 3.40 points
+    # of premium before the underlying moves at all, so the two disagree in
+    # sign routinely. On 2026-08-05 a TSLA put closed at +0.46R having lost
+    # $32.50 and went out as "WIN", SMCI did the same at +0.4R and -$2.50, and
+    # an AVGO call that made $12.50 went out as a loss on -0.7R. Subscribers
+    # acting on those labels were told the opposite of what their account did.
+    #
+    # R stays in the message, and stays the basis when no premium is recorded.
+    if option_pnl is not None:
+
+        is_win = option_pnl > 0
+        is_loss = option_pnl < 0
+
+    else:
+
+        is_win = final_r is not None and final_r > 0
+        is_loss = final_r is not None and final_r < 0
+
+    result_label = "✅ WIN" if is_win else "Loss" if is_loss else "Closed"
     execution_label = _execution_label(trend_capture_pct)
     status_line = _trade_status_line(event_type)
     holding_time = _holding_time_label(
