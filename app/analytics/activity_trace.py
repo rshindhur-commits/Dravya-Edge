@@ -120,11 +120,8 @@ def _value(row, *names):
     return None
 
 
-def _annotate_state_changes(current, existing):
-    previous_by_symbol = {}
-    for row in existing.to_dict("records") if not existing.empty else []:
-        if row.get("origin") == "Scanner decision" and row.get("symbol"):
-            previous_by_symbol[str(row["symbol"])] = row.get("event")
+def _annotate_state_changes(current, previous_by_symbol):
+    previous_by_symbol = dict(previous_by_symbol or {})
 
     for record in current:
         if record.get("origin") != "Scanner decision" or not record.get("symbol"):
@@ -232,17 +229,104 @@ def build_activity_trace(trading_day, scanner_rows=None, scan_id=None, observed_
     return pd.DataFrame(records, columns=TRACE_COLUMNS)
 
 
+_STATE_COLUMNS = ("event_id", "origin", "symbol", "event")
+
+
+def _existing_trace_state(path):
+    """Event ids already on disk, and the last scanner state per symbol.
+
+    Reading the whole trace back was costing more than writing it. The file is
+    thirty-four mostly-text columns and grows all session, so by the close a
+    scan was loading tens of megabytes of Python objects to answer two small
+    questions: which events have we already written, and what did each symbol
+    last do. Four columns answer both.
+
+    Returns (seen_event_ids, previous_state_by_symbol, row_count, columns).
+    `columns` is None when the file is absent, and is compared against the
+    current schema so a trace written by an older build gets rewritten once
+    rather than appended to with misaligned columns.
+    """
+    if not path.exists() or not path.stat().st_size:
+        return set(), {}, 0, None
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            header = handle.readline().strip()
+        columns = header.split(",") if header else []
+        wanted = [column for column in _STATE_COLUMNS if column in columns]
+        frame = pd.read_csv(path, usecols=wanted) if wanted else pd.DataFrame()
+    except Exception:
+        return set(), {}, 0, None
+
+    seen = (
+        set(frame["event_id"].astype(str))
+        if "event_id" in frame.columns else set()
+    )
+
+    previous_by_symbol = {}
+    if {"origin", "symbol", "event"}.issubset(frame.columns):
+        decisions = frame[
+            (frame["origin"] == "Scanner decision") & frame["symbol"].notna()
+        ]
+        # Later rows win, which is what walking the file in order used to do.
+        for symbol, event in zip(decisions["symbol"], decisions["event"]):
+            previous_by_symbol[str(symbol)] = event
+
+    return seen, previous_by_symbol, len(frame), columns
+
+
 def write_daily_activity_trace(trading_day, scanner_rows=None, scan_id=None, observed_at=None):
     path = daily_path(trading_day, "activity_trace.csv")
     current = build_activity_trace(trading_day, scanner_rows, scan_id, observed_at)
-    existing = _read_csv(path)
+    seen, previous_by_symbol, existing_rows, columns = _existing_trace_state(path)
+
     current_records = current.to_dict("records")
-    _annotate_state_changes(current_records, existing)
-    current = pd.DataFrame(current_records, columns=TRACE_COLUMNS)
-    trace = pd.concat([existing, current], ignore_index=True, sort=False)
-    trace = trace.drop_duplicates("event_id", keep="last")
-    trace.to_csv(path, index=False)
-    return {"path": str(path), "rows": len(trace), "events": trace.to_dict("records")}
+    _annotate_state_changes(current_records, previous_by_symbol)
+
+    # build_activity_trace re-derives the whole day from the jsonl logs on every
+    # scan, so most of what it returns is already on disk. event_id is a hash of
+    # the fields that identify an event, which makes "already written" an exact
+    # test rather than a guess -- and the rows it leaves are exactly the rows
+    # the old drop_duplicates would have kept.
+    fresh = []
+    for record in current_records:
+        event_id = str(record.get("event_id"))
+        if event_id in seen:
+            continue
+        seen.add(event_id)
+        fresh.append(record)
+
+    stale_schema = columns is not None and columns != list(TRACE_COLUMNS)
+
+    if stale_schema:
+        # One rewrite to bring an older file up to the current columns; every
+        # scan after this one appends.
+        trace = pd.concat(
+            [_read_csv(path), pd.DataFrame(fresh, columns=TRACE_COLUMNS)],
+            ignore_index=True,
+            sort=False,
+        ).drop_duplicates("event_id", keep="last")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        trace.to_csv(path, index=False)
+        existing_rows = len(trace)
+        fresh = trace.to_dict("records")
+
+    elif fresh:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(fresh, columns=TRACE_COLUMNS).to_csv(
+            path,
+            mode="a",
+            header=columns is None,
+            index=False,
+        )
+
+    # Only the new events go to the database. The upsert keys on event_id, so
+    # replaying rows already stored changed nothing except the bill.
+    return {
+        "path": str(path),
+        "rows": existing_rows + (0 if stale_schema else len(fresh)),
+        "events": fresh,
+    }
 
 
 def persist_activity_trace(events):

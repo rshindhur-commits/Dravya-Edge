@@ -5,6 +5,7 @@ import hashlib
 import pandas as pd
 
 from app.storage.daily_paths import daily_path
+from app.storage.incremental_csv import append_new_rows
 
 
 QUOTE_ATTRIBUTION_COLUMNS = [
@@ -147,20 +148,7 @@ def write_quote_attribution(rows, trading_day, scan_id, observed_at):
 
     path = daily_path(trading_day, "quote_attribution.csv")
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = (
-        pd.read_csv(path)
-        if path.exists() and path.stat().st_size
-        else pd.DataFrame()
-    )
-    combined = pd.concat(
-        [existing, attribution],
-        ignore_index=True,
-        sort=False
-    )
-    combined.drop_duplicates(
-        subset=["attribution_id"],
-        keep="last"
-    ).to_csv(path, index=False)
+    append_new_rows(path, attribution, ["attribution_id"])
 
     from app.db.quote_attribution_repository import QuoteAttributionRepository
 

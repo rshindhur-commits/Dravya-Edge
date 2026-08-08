@@ -478,15 +478,28 @@ def show_trades(trades):
         entry_mid = number(trade.get("option_entry_mid"))
         returns = option_return(trade)
 
+        # A missing field and a zero are different facts, and printing "0" for
+        # both invites exactly the wrong conclusion: AAPL on 2026-08-05 read as
+        # traded on zero open interest against a 500 floor, when in truth its
+        # OI was never recorded. `evaluate_option_liquidity` attaches evidence
+        # to rejections only, so the contract actually bought stores none.
+        def cell(value, width, spec, scale=1.0):
+
+            if value is None:
+
+                return "-".rjust(width)
+
+            return f"{value * scale:{spec}}".rjust(width)
+
         print(
             f"   {str(trade['symbol']):6}{str(trade['direction'])[:4]:5}"
-            f"{(number(trade.get('r_multiple')) or 0):>7.2f}"
-            f"{(returns if returns is not None else 0):>8.1f}"
-            f"{(number(payload.get('mfe_r')) or 0):>7.2f}"
-            f"{(number(payload.get('mae_r')) or 0):>7.2f}"
-            f"{(entry_mid * 100 if entry_mid else 0):>7.0f}"
-            f"{(number(payload.get('option_entry_spread_pct')) or 0):>7.2f}"
-            f"{(number(payload.get('option_open_interest')) or 0):>8.0f}"
+            f"{cell(number(trade.get('r_multiple')), 7, '.2f')}"
+            f"{cell(returns, 8, '.1f')}"
+            f"{cell(number(payload.get('mfe_r')), 7, '.2f')}"
+            f"{cell(number(payload.get('mae_r')), 7, '.2f')}"
+            f"{cell(entry_mid, 7, '.0f', 100.0)}"
+            f"{cell(number(payload.get('option_entry_spread_pct')), 7, '.2f')}"
+            f"{cell(number(payload.get('option_open_interest')), 8, '.0f')}"
             f"  {str(payload.get('exit_rule') or payload.get('exit_reason') or '-')[:20]:<22}"
             f"{trade['status']}"
         )

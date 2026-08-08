@@ -285,13 +285,40 @@ def _snapshot_date(df):
 
 
 def _write_parquet(df, path):
+    """Append a scan's snapshots to the day's parquet.
 
-    if path.exists():
+    Parquet has no in-place append, so the existing rows do have to be read and
+    written back. What they do not have to be is a DataFrame: pandas turns every
+    text column into Python objects, which over a full session is tens of
+    megabytes rebuilt on every scan. Arrow keeps them as buffers and
+    concatenates without copying, so only the new rows cost much.
 
-        existing_df = pd.read_parquet(path)
-        df = pd.concat([existing_df, df], ignore_index=True)
+    Readers guard on `stat().st_size`, so this stays one file -- a directory of
+    part files would read as empty and silently fall through to the CSV.
+    """
+    if not path.exists():
 
-    df.to_parquet(path, index=False)
+        df.to_parquet(path, index=False)
+        return
+
+    try:
+
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        existing = pq.read_table(path)
+        incoming = pa.Table.from_pandas(df, preserve_index=False)
+        pq.write_table(
+            pa.concat_tables([existing, incoming], promote_options="permissive"),
+            path,
+        )
+
+    except Exception:
+
+        # Older pyarrow, or a schema Arrow will not reconcile. Correctness first.
+        pd.concat(
+            [pd.read_parquet(path), df], ignore_index=True
+        ).to_parquet(path, index=False)
 
 
 def save_candidate_snapshots(
