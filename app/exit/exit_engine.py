@@ -511,6 +511,64 @@ def _select_primary_exit(exit_reasons):
     )[0]
 
 
+def _ema_invalidation(price, bar, is_short):
+    """Is price on the wrong side of a turning EMA9, on this bar."""
+
+    ema = bar.get("EMA9")
+
+    if not pd.notna(ema) or price is None or not pd.notna(price):
+
+        return False
+
+    slope = bar.get("EMA9_SLOPE", 0)
+
+    if is_short:
+
+        return price > ema and slope > 0
+
+    return price < ema and slope < 0
+
+
+def _ema_exit_signalled(df, latest, current_price, is_short):
+    """EMA9 invalidation, optionally required to persist before it is acted on.
+
+    Across 601 archived trades this rule fires 151 times against the hard
+    stop's 75, and costs -6.81% of premium against the stop's -7.62%. That
+    makes it an earlier second stop rather than protection: it closes at a
+    mean of -0.42R, and the spread turns that into most of the book's losses.
+
+    Whether it is preventing something worse is exactly what cannot be settled
+    by reading it, so both knobs exist to be A/B'd against the archive.
+    `EXIT_EMA_ENABLED=false` removes the rule; `EXIT_EMA_CONFIRM_BARS=n`
+    requires the same invalidation on the n bars before this one, which keeps
+    the rule but stops it acting on a single bar's excursion.
+    """
+
+    if not _env_bool("EXIT_EMA_ENABLED", True):
+
+        return False
+
+    if not _ema_invalidation(current_price, latest, is_short):
+
+        return False
+
+    confirm = int(_env_float("EXIT_EMA_CONFIRM_BARS", 0))
+
+    for offset in range(2, confirm + 2):
+
+        if len(df) < offset:
+
+            return False
+
+        bar = df.iloc[-offset]
+
+        if not _ema_invalidation(bar.get("Close"), bar, is_short):
+
+            return False
+
+    return True
+
+
 def evaluate_exit(
     df,
     analysis,
@@ -772,23 +830,12 @@ def evaluate_exit(
 
     if momentum_exits_allowed:
 
-        if is_short and pd.notna(latest.get("EMA9")):
+        if _ema_exit_signalled(df, latest, current_price, is_short):
 
-            if (
-                current_price > latest["EMA9"]
-                and latest.get("EMA9_SLOPE", 0) > 0
-            ):
-
-                exit_reasons.append(_exit_diagnostic("EMA", "EMA9 invalidation (short)"))
-
-        elif not is_short and pd.notna(latest.get("EMA9")):
-
-            if (
-                current_price < latest["EMA9"]
-                and latest.get("EMA9_SLOPE", 0) < 0
-            ):
-
-                exit_reasons.append(_exit_diagnostic("EMA", "EMA9 invalidation (long)"))
+            exit_reasons.append(_exit_diagnostic(
+                "EMA",
+                f"EMA9 invalidation ({'short' if is_short else 'long'})",
+            ))
 
         primary_exit = _select_primary_exit(exit_reasons)
 
