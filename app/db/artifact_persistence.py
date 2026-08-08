@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.db.candidate_snapshot_repository import CandidateSnapshotRepository
 from app.db.decision_waterfall_repository import DecisionWaterfallRepository
 from app.db.persistence import record_gate_decisions, record_scanner_run_finish
+from app.runtime.process_memory import memory_snapshot
 from app.db.rule_evaluation_repository import RuleEvaluationRepository
 from app.db.scanner_snapshot_repository import ScannerSnapshotRepository
 from app.analytics.decision_waterfall import (
@@ -52,6 +53,11 @@ def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output
             "health": health_payload or {},
             "rule_evaluations": len(rule_evaluations),
             "decision_waterfall_rules": len(waterfall_records),
+            # One row per scan, kept 21 days, so the worker's memory becomes a
+            # series that can be queried rather than a graph read by eye. The
+            # heartbeat cannot carry this: it upserts on owner, so it only ever
+            # holds the last value, and a leak is only visible as a slope.
+            **memory_snapshot(),
         },
     )
 
