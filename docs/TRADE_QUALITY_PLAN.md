@@ -405,20 +405,60 @@ model is now stated as **12.6 premium points per 1% of underlying** — which
 cross-checks against a ~50 delta contract costing ~3% of notional (16.7 points)
 and, with theta excluded, reproduces the measured control to within 0.15 points.
 
-#### 2.2e What this closes, and the one thing it opens
-§2.2 is answered: **no.** Three independent bounds now sit below break-even —
-spread ceiling +0.41% at zero toll, perfect exits +0.20%, and larger moves
-−5.64%. Larger moves is not merely bounded, it is *negative*, and it was the
-last lever with a ceiling above zero. No further tuning of this strategy as an
-options strategy is warranted.
+#### 2.2e What this closes
+§2.2 is answered: **no.** Three independent bounds sit below break-even — spread
+ceiling +0.41% at zero toll, perfect exits +0.20%, and larger moves −5.64%.
+Larger moves is not merely bounded, it is *negative*, and it was the last lever
+with a ceiling above zero. No further tuning of this as an options strategy is
+warranted.
 
-What it opens is the opposite reading of the same table. The swing arm captured
-**+14.43% of underlying across 342 trades**, +0.0436% per trade. Net of 2bp
-round-trip costs that is roughly +7.8% total — thin, but positive, and the first
-positive number this project has produced. The signal is not the problem and has
-not been for some time; the instrument is. That belongs in §2.1's territory
-(cutting the toll) rather than here, and it is a decision about what the product
-is, not a parameter.
+#### 2.2f RUN 2026-08-09, hold sweep — **and the +14.43% does not survive it**
+
+The obvious follow-up: the anchor creates edge but needs 2.1 sessions to collect
+it, while the intraday version holds two hours and has none. Is there a hold in
+between where the edge has arrived and the decay has not? Five arms, same 21
+sessions, each cap its own arm with its own position lock.
+
+| hold | trades | captured/trade | t |
+|---|---|---|---|
+| control (13 bars) | 792 | −0.0123% | −0.33 |
+| 20 bars | 1026 | +0.0144% | +0.46 |
+| 39 bars | 718 | −0.0538% | −1.15 |
+| 78 bars | 468 | −0.0713% | −0.86 |
+| 156 bars | 438 | −0.1332% | −1.16 |
+| 234 bars | 331 | +0.0436% | +0.28 |
+
+**The sign flips positive → negative → positive across adjacent hold caps on the
+same data.** A real effect varies smoothly with hold length. |t| < 1.2 on every
+arm; none is distinguishable from zero.
+
+And the number this document reported an hour earlier as the project's first
+positive result:
+
+```
+swing_h234:  mean +0.0436%   95% CI [-0.2709, +0.3420]
+             without its top 5 trades (of 331):  -0.0735%
+             median trade: -0.75% of price
+```
+
+Five trades of 331 carry 266% of the total. The median trade loses 0.75% of
+price. **The claim that the signal works and only the instrument is wrong was
+built on the mean of a lottery-ticket distribution and is withdrawn.** The check
+that would have caught it — bootstrap the mean, and re-read it without the top
+few trades — costs seconds and now runs beside every arm.
+
+#### 2.2g The one thing that does survive, and it is worth having
+For the intraday control, 792 trades give SE = 0.037% per trade. An edge large
+enough to break even at spread ceiling 2 (+0.155%) would appear as **t = 4.2**.
+Observed: **−0.33**.
+
+So an edge sufficient to pay for options is *ruled out* for the strategy as it
+runs today — a real conclusion, not an absence of one, and the one that stops
+money being spent looking for it.
+
+For the swing arm nothing is ruled out either way: SE 0.157% against a 0.492%
+requirement. Several hundred more sessions would be needed to say anything, and
+the theta arithmetic in §2.2d says it loses even if the edge is real.
 
 ### 2.3 Is the signal late?
 Your original diagnosis, still untested: entries arriving after the move has

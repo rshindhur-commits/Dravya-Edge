@@ -48,19 +48,36 @@ archived trades are INTRADAY and force-closed at the bell, and
 
 ## The item that replaced them
 
-### 8. The signal is not the problem; the instrument is — **open, and it is a product decision**
-The same 21-session study, read the other way: the swing arm captured **+14.43%
-of underlying across 342 trades**, +0.0436% per trade. Net of 2bp round-trip
-costs that is roughly **+7.8% total** — thin, but positive, and the first
-positive number this project has produced.
+### 8. No edge is measurable, in options or in the underlying — **open, and it is a product decision**
 
-Every lever inside the options framing is now measured and bounded below
-break-even: spread ceiling +0.41% at zero toll, perfect exits +0.20%, larger
-moves −5.64%. The toll and the decay are 148–344bp and ~240bp/session against an
-edge of about 4bp per trade.
+An earlier version of this item claimed the signal worked and only the
+instrument was wrong, on the strength of +14.43% of underlying captured across
+342 trades. **Withdrawn.** A hold sweep over the same 21 sessions put the sign
+positive → negative → positive across adjacent hold caps, |t| < 1.2 on every
+arm, and the +14.43% came from 5 trades of 331 — without them the total is
+negative, and the median trade loses 0.75% of price. Detail in
+[TRADE_QUALITY_PLAN.md §2.2f](TRADE_QUALITY_PLAN.md).
 
-This is not a parameter. It is a decision about what the product is, and it is
-the user's to make. Nothing should be tuned further until it is made.
+What is established:
+
+* Every lever inside the options framing is bounded below break-even — spread
+  ceiling +0.41% at zero toll, perfect exits +0.20%, larger moves −5.64%.
+* An edge big enough to pay for options is **ruled out** for the strategy as it
+  runs today: break-even needs +0.155% per trade, 792 trades give SE 0.037%, so
+  it would show at t = 4.2. Observed −0.33.
+* Whether a smaller, share-sized edge exists is **unresolved** — 21 sessions
+  cannot separate it from zero either way.
+
+Two directions remain, and the choice is the user's:
+
+1. **Accumulate sessions.** Subscribers are already paused, so this costs only
+   the Render/Neon bill. 21 sessions is too few to conclude much; the same
+   study re-run at 60–90 sessions would separate a small edge from zero.
+2. **Treat raising the edge as the project.** New features, different setups, or
+   a different universe. Open-ended, and the honest path if an options product
+   specifically is the goal.
+
+Nothing should be tuned further until this is decided.
 
 ---
 

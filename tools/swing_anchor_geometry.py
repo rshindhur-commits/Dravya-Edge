@@ -31,6 +31,8 @@ Cost: no option quotes, no network if the cache is warm.
 """
 
 import argparse
+import random
+import statistics as st
 import json
 import pathlib
 import sys
@@ -384,6 +386,25 @@ def _with_swing(df_15m, analysis_15m, setup, df_1h):
             os.environ["SWING_STRUCTURE_ENABLED"] = previous
 
 
+def _bootstrap_mean_ci(values, draws=2000, seed=7):
+    """Percentile bootstrap on the mean.
+
+    Seeded so a rerun of the same data gives the same interval; an interval that
+    moved between readings would invite picking the reading.
+    """
+
+    if len(values) < 2:
+
+        return float("nan"), float("nan")
+
+    rng = random.Random(seed)
+    means = sorted(
+        st.mean(rng.choices(values, k=len(values))) for _ in range(draws)
+    )
+
+    return means[int(draws * 0.025)], means[int(draws * 0.975)]
+
+
 def _percentiles(values, points=(10, 25, 50, 75, 90)):
 
     if not values:
@@ -494,6 +515,23 @@ def summarise(rows):
             f"  mean underlying move captured: {mean_move:+.4f}% of price"
             f"   (mean MFE {sum(m for m in mfes)/len(mfes) if mfes else 0:+.2f}R)"
         )
+
+        # Printed beside the mean, always, because the mean alone is what got
+        # +14.43% reported as this project's first positive result. It was five
+        # trades of 331: without them the total is negative and the median trade
+        # loses 0.75% of price. Both checks cost milliseconds.
+        low, high = _bootstrap_mean_ci(moves)
+        trimmed = sorted(moves, reverse=True)[5:]
+
+        print(
+            f"  95% CI [{low:+.4f}, {high:+.4f}]"
+            f"   median {st.median(moves):+.4f}%"
+            f"   without top 5 {st.mean(trimmed) if trimmed else 0:+.4f}%"
+        )
+
+        if low <= 0 <= high:
+
+            print("  -> not distinguishable from zero")
         print(
             f"  premium from delta: {delta_pnl:+.2f}%"
             f"   theta over {sessions:.1f} sessions: -{theta:.2f}%"
