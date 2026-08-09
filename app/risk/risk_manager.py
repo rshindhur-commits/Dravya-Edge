@@ -202,6 +202,12 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
     # Dynamic ATR Risk Engine
     # =========================
 
+    # Scaled together at the end of this block by ATR_DISTANCE_SCALE, which is
+    # what actually moves the trade's size. Raising the max-stop cap alone does
+    # nothing: it stops rejecting wide stops, and these decide whether any get
+    # produced. Two knobs that each look sufficient and are only jointly so is
+    # how three earlier arms in this project ran byte-identical to their
+    # baselines.
     stop_atr_multiplier = 1.3
     target_atr_multiplier = 3.0
 
@@ -223,16 +229,24 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
     elif "TRENDING" in market_regime:
 
         stop_atr_multiplier = 1.5
-        target_atr_multiplier = 3.5    
+        target_atr_multiplier = 3.5
 
+    # Both scaled by the same factor so the reward-to-risk ratio the gate checks
+    # is unchanged -- this widens the trade, it does not make it look better.
+    # MAX_STOP_DISTANCE_SCALE has to move with it or the cap rejects everything
+    # the wider multiplier produces.
+    _distance_scale = get_float_env("ATR_DISTANCE_SCALE", 1.0)
+    stop_atr_multiplier *= _distance_scale
+    target_atr_multiplier *= _distance_scale
 
     if _is_short_entry(entry_type):
 
         if entry_type == "EMA_REJECTION_SHORT":
 
+            # Mirror of the EMA_PULLBACK anchor; same reason for the scale.
             stop_loss = max(
-                latest["High"] + (atr * 0.15),
-                latest["EMA9"] + (atr * 0.10)
+                latest["High"] + (atr * 0.15 * _distance_scale),
+                latest["EMA9"] + (atr * 0.10 * _distance_scale)
             )
 
             structure_target = min(
@@ -306,14 +320,21 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
     else:
         if entry_type == "EMA_PULLBACK":
 
+            # Anchored to this 15m bar's low and its EMA9, which for a liquid
+            # megacap sit a fraction of a percent from price. That anchor, not
+            # the max-stop cap, is why every stop lands at 0.5-0.75% and why the
+            # strategy can only hunt moves smaller than the option spread it
+            # pays. _distance_scale widens the offsets so the same setup can be
+            # replayed hunting a multi-percent move; at 1.0 the arithmetic is
+            # unchanged.
             stop_loss = min(
-                latest["Low"] - (atr * 0.15),
-                latest["EMA9"] - (atr * 0.10)
+                latest["Low"] - (atr * 0.15 * _distance_scale),
+                latest["EMA9"] - (atr * 0.10 * _distance_scale)
             )
 
             take_profit = max(
                 rolling_resistance + (atr * 0.10),
-                entry_price + (atr * 1.8)
+                entry_price + (atr * 1.8 * _distance_scale)
             )
 
         elif entry_type in [
@@ -495,7 +516,23 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
 
         max_stop_distance_pct = 0.95
 
-    
+    # These four numbers are the boundary of what this strategy can be.
+    #
+    # With a 2R target they cap the largest move it will ever aim at around
+    # 1.5-2.3% of price, over a hold of twenty to sixty minutes, against an
+    # option round trip measured at 1.5-3.4%. Mean peak across 21 archived
+    # sessions is 0.39R, roughly 0.3% of price, which is inside the ordinary
+    # noise band of a liquid megacap -- so half of all entries never travel at
+    # all, and the winners that do reach the target are 3.8% of the book.
+    #
+    # Nothing inside this boundary can fix that. The scale factor exists so the
+    # boundary itself can be tested: at 4.0 the same scanner, gates and exits
+    # hunt 6% moves over days instead of 1.5% moves over minutes, which is the
+    # only untested change with a ceiling above break-even. The regime spread is
+    # preserved rather than replaced, because which regime tolerates more risk
+    # is a separate question from how much risk the strategy takes at all.
+    max_stop_distance_pct *= get_float_env("MAX_STOP_DISTANCE_SCALE", 1.0)
+
     if stop_distance_pct > max_stop_distance_pct:
 
         trade_allowed = False
