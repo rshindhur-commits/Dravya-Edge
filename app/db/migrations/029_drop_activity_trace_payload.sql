@@ -1,0 +1,24 @@
+-- Drop activity_trace_event.payload: written on every row, read by nothing.
+--
+-- The column holds json.dumps of the same record the other columns are
+-- extracted from, so it is not extra information -- it is the row again, in
+-- text. `ActivityTraceRepository` has exactly one method, `batch_upsert`, and
+-- nothing anywhere issues a SELECT against this table; the only other statement
+-- that touches it is retention's DELETE. The dashboard's Activity Feed reads
+-- data/daily/<day>/activity_trace.csv, not this.
+--
+-- It costs 37MB of a 150MB table and a proportional share of every upsert's
+-- network payload. That upsert used to re-send the whole day on every scan --
+-- about 193MB a day where 3.4MB was needed -- so while it was being paid
+-- roughly a hundred times a session, this column was most of what crossed the
+-- wire for no reader at all.
+--
+-- APPLY AFTER the code that stops writing it is deployed. The reverse order
+-- fails every insert until the deploy lands. The column is NOT NULL DEFAULT
+-- '{}', so a build that has stopped writing it works fine before this runs.
+--
+-- Not recoverable, and deliberately so: every field is still present in its own
+-- column, and the 2026-08-06 backup holds the old shape if a row is ever needed
+-- in the original form.
+
+ALTER TABLE activity_trace_event DROP COLUMN IF EXISTS payload;
