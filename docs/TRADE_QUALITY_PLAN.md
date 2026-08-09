@@ -303,6 +303,70 @@ different setup, or a different instrument.
 If the answer is no, no further tuning is warranted, and that is a finding
 worth having early rather than after another quarter.
 
+#### 2.2a Why it cannot, as built — **the anchor, not any knob**
+The blocker is one line. `EMA_PULLBACK`, 183 of 310 archived trades, sets its
+stop to `min(bar low − atr*0.15, EMA9 − atr*0.10)` on the **15m** frame. For a
+liquid megacap that bar's own low sits a fraction of a percent from price, so
+the stop lands at 0.5–0.75%, a 2R target at ~1.5%, and mean peak is 0.39R ≈
+0.3% of price — inside the ordinary noise band of the names traded. The option
+round trip costs 1.5–3.4%. The strategy is structurally unable to reach a move
+that pays for the instrument expressing it.
+
+Three things that looked like the constraint and are not:
+
+| suspected | measured |
+|---|---|
+| `max_stop_distance_pct` cap | raising it alone changes nothing — nothing produces stops that wide |
+| `stop_atr_multiplier` | `EMA_PULLBACK` never reads it |
+| the ATR offset | 4× offset buys a **1.53×** stop; the bar's low dominates and does not scale. 3% would need ~14× |
+
+Pinned in `tests/test_distance_scale.py`.
+
+#### 2.2b The higher-timeframe anchor — **built 2026-08-09**
+`app/risk/swing_anchor.py`, behind `SWING_STRUCTURE_ENABLED` (default off).
+Anchors the stop to a swing pivot on the **1h** frame, which sits 1–4% away
+because that is what a swing pivot is. Scanner, gates, entry rules and contract
+selection are untouched.
+
+Four things move together or the arm silently runs the control — the failure
+that made three earlier arms byte-identical to their baselines:
+
+* the anchor (1h pivot ± `SWING_STOP_ATR_BUFFER` × 1h ATR)
+* `SWING_MIN_STOP_DISTANCE_PCT` 1.0 replaces the 0.50 floor
+* `SWING_MAX_STOP_DISTANCE_PCT` 4.0 replaces the 0.75–1.15 ceiling
+* `EXIT_MOMENTUM_ENABLED=false` — otherwise a 3% stop is decided by a
+  nine-period EMA within minutes and the wider anchor is paid for and never used
+
+The first three are applied together by `calculate_risk` so they cannot be
+half-set; the fourth is named in `swing_anchor.describe_mode()` so a run that
+forgot it is visible in its own output. A missing or too-short 1h frame
+**rejects the trade** rather than falling back to the intraday anchor, because a
+silent fallback blends treatment and control inside one arm.
+
+**Known side effect, and it is a loss of filtering.** Reward is a fixed multiple
+of risk, so RR is constant at `SWING_TARGET_RR` and the 1.5 floor can never
+fire. On a 4-day smoke test that took candidates clearing the gates from 40 to
+73 of 83. More trades at equal R is not an improvement. `SWING_HEADROOM_MULTIPLE`
+(default 0, off) restores filtering in the term that matters at this timeframe —
+whether there is room to the next 1h level to reach the target at all — and is
+kept separable so the two effects do not arrive mixed together.
+
+#### 2.2c Measuring it without spending quota
+`tools/swing_anchor_geometry.py` answers this from **cached underlying bars, no
+option quotes, no network**. Each candidate is walked forward bar by bar on real
+5m data to first touch of stop or target; a bar containing both scores as the
+stop, since intrabar order is unknowable at 5m and assuming otherwise
+manufactures exactly the edge being looked for. One position per symbol at a
+time, tracked per arm, because the control exits in minutes and can re-enter
+while the swing arm cannot — that difference in trade count is half of what
+return on capital measures. R is then converted with the §1a model.
+
+Limitation, stated because it favours the treatment: the walk uses pure
+stop/target and bypasses the exit engine, so it does not give the control its
+measured loss-limiting from momentum exits. Compare the swing arm against the
+**actually measured** control (−1.12% at ceiling 2), not against this run's
+control column.
+
 ### 2.3 Is the signal late?
 Your original diagnosis, still untested: entries arriving after the move has
 run. Needs entry timestamps compared against the bar sequence that triggered

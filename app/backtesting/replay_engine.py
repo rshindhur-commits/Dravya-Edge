@@ -322,6 +322,7 @@ def _open_trade(
     config,
     analysis_5m=None,
     analysis_1h=None,
+    df_1h=None,
 ):
     """Run the live entry path; return a ReplayTrade or None."""
 
@@ -335,7 +336,7 @@ def _open_trade(
 
         return None
 
-    risk_setup = calculate_risk(df_15m, analysis_15m, entry_setup)
+    risk_setup = calculate_risk(df_15m, analysis_15m, entry_setup, htf=df_1h)
 
     if not risk_setup.get("trade_allowed"):
 
@@ -629,7 +630,7 @@ def replay_day(
 
                     continue
 
-            df_5m, df_15m, _, analysis_5m, analysis_15m, analysis_1h = build_frames(
+            df_5m, df_15m, df_1h, analysis_5m, analysis_15m, analysis_1h = build_frames(
                 raw, moment, symbol, config
             )
 
@@ -660,6 +661,7 @@ def replay_day(
                 config,
                 analysis_5m=analysis_5m,
                 analysis_1h=analysis_1h,
+                df_1h=df_1h,
             )
 
             if trade:

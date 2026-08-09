@@ -4732,7 +4732,8 @@ def _run_scanner_impl():
                     risk_setup = calculate_risk(
                         df_15m,
                         analysis_15m,
-                        entry_setup
+                        entry_setup,
+                        htf=df_1h
                     )
 
                 print(
@@ -4840,6 +4841,7 @@ def _run_scanner_impl():
                             df_15m,
                             analysis_15m,
                             v2_entry_setup,
+                            htf=df_1h,
                         )
 
                     if v2_shadow_risk.get("trade_allowed"):

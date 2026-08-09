@@ -1,6 +1,7 @@
 from app.config.settings import get_bool_env, get_float_env
 from app.utils.runtime_logging import debug_print
 from app.gates import validate_price_geometry
+from app.risk import swing_anchor
 from app.strategies.setup_registry import is_short_setup
 
 
@@ -57,8 +58,15 @@ STRUCTURE_STOP_SETUPS = {
 }
 
 
-def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
+def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING", htf=None):
     """Size risk for a candidate setup.
+
+    `htf` is the higher-timeframe frame (1h in both live and replay) and is only
+    read when SWING_STRUCTURE_ENABLED is on, in which case it replaces the whole
+    stop/target geometry -- see app/risk/swing_anchor.py for why that is the one
+    change with a ceiling above break-even. Passing it costs nothing when the
+    mode is off; not passing it while the mode is on rejects the trade rather
+    than quietly reverting to the intraday anchor.
 
     `stop_anchor` selects where a breakout/breakdown stop is anchored:
 
@@ -386,12 +394,84 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
             )
 
     # =========================
+    # Higher-timeframe anchor
+    # =========================
+
+    # Replaces whichever stop the block above produced. The setups differ in
+    # where they read local structure from; under this mode none of that matters,
+    # because the pathology is the timeframe itself rather than the setup.
+    swing_mode = swing_anchor.swing_mode_enabled()
+    swing_pivot = None
+
+    if swing_mode:
+
+        levels = swing_anchor.swing_levels(
+            htf,
+            entry_price,
+            _is_short_entry(entry_type) or _risk_direction(analysis, entry_type) == "PUT",
+        )
+
+        if levels is None:
+
+            # Deliberately not a fallback to the intraday anchor. Running some
+            # trades on 1h structure and the rest on the 15m bar would produce a
+            # blended arm that answers neither question, and the blend would be
+            # invisible in the result.
+            return {
+                "risk_reward": 0,
+                "max_loss": 0,
+                "position_size": 0,
+                "trade_allowed": False,
+                "entry_price": round(entry_price, 2),
+                "stop_loss": None,
+                "take_profit": None,
+                "reasons": [
+                    "Swing anchor unavailable: no usable higher-timeframe frame"
+                ],
+            }
+
+        stop_loss, take_profit, swing_pivot, _htf_atr = levels
+
+        swing_is_short = (
+            _is_short_entry(entry_type)
+            or _risk_direction(analysis, entry_type) == "PUT"
+        )
+
+        # The RR floor cannot filter in this mode -- reward is a fixed multiple
+        # of risk, so RR is constant. This is what replaces it.
+        has_headroom, available = swing_anchor.headroom_ok(
+            htf, entry_price, stop_loss, swing_is_short
+        )
+
+        if not has_headroom:
+
+            trade_allowed = False
+
+            reasons.append(
+                "No headroom to the next 1h level: "
+                f"{round(available / entry_price * 100, 2)}% available"
+            )
+
+        reasons.append(
+            f"Swing anchor: pivot={round(swing_pivot, 2)} "
+            f"stop={round(stop_loss, 2)} "
+            f"distance={round(abs(entry_price - stop_loss) / entry_price * 100, 2)}%"
+        )
+
+    # =========================
     # Risk Per Share
     # =========================
 
     minimum_stop_distance = atr
 
-    if entry_type == "EMA_PULLBACK" or structure_stops:
+    if swing_mode:
+
+        # The 15m ATR floor is meaningless against a 1h pivot -- it is smaller by
+        # construction -- and applying it would only ever narrow a stop this mode
+        # widened on purpose. The percentage band below governs instead.
+        minimum_stop_distance = 0.0
+
+    elif entry_type == "EMA_PULLBACK" or structure_stops:
 
         # A structure-anchored stop must not be widened back to a full ATR;
         # doing so is what collapsed breakout/breakdown RR below the 1.5 floor.
@@ -413,7 +493,11 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
     # the two cannot fight. Tunable so it can be A/B tested against archived days
     # rather than argued about; raising it means fewer candidates clear the RR
     # gate, which is the intended trade.
-    minimum_stop_pct = get_float_env("MIN_STOP_DISTANCE_PCT", 0.50)
+    minimum_stop_pct = (
+        swing_anchor.min_stop_distance_pct()
+        if swing_mode
+        else get_float_env("MIN_STOP_DISTANCE_PCT", 0.50)
+    )
     price_floor_distance = entry_price * (minimum_stop_pct / 100.0)
     minimum_stop_distance = max(
         minimum_stop_distance,
@@ -532,6 +616,13 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING"):
     # preserved rather than replaced, because which regime tolerates more risk
     # is a separate question from how much risk the strategy takes at all.
     max_stop_distance_pct *= get_float_env("MAX_STOP_DISTANCE_SCALE", 1.0)
+
+    if swing_mode:
+
+        # Replaces the band outright rather than scaling it. A 1h pivot lands
+        # where it lands; keeping a 0.75% ceiling would reject the entire
+        # treatment arm and report it as "no trades" instead of as a result.
+        max_stop_distance_pct = swing_anchor.max_stop_distance_pct()
 
     if stop_distance_pct > max_stop_distance_pct:
 
