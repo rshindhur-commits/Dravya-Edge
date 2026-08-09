@@ -460,6 +460,42 @@ For the swing arm nothing is ruled out either way: SE 0.157% against a 0.492%
 requirement. Several hundred more sessions would be needed to say anything, and
 the theta arithmetic in §2.2d says it loses even if the edge is real.
 
+### 2.2h The null model, 2026-08-09 — **the entry timing is worse than random**
+
+Every number this project produced before today was compared against zero. Zero
+is the wrong benchmark. The right one holds constant everything except the thing
+under test: same symbol, same session, same direction, same horizon, **random
+entry minute** inside the entry window.
+
+Edge over random, in percentage points of underlying move:
+
+| horizon | train | holdout | random draws beating the signal |
+|---|---|---|---|
+| 12 bars (1h) | −0.116 | −0.175 | 20/20 both halves |
+| 78 bars (1 session) | −0.297 | −0.308 | 20/20 both halves |
+| 234 bars (3 sessions) | −0.247 | −0.263 | 20/20 both halves |
+
+Draw-to-draw sd is 0.012–0.036, so the gap is roughly 8–20 standard deviations,
+and train and holdout agree to within 0.06 points at every horizon. Candidates
+sit slightly *earlier* in the session than uniform (168 min vs 187), so
+overnight-gap exposure cannot account for it — and would push the other way.
+
+**The entry rules are not uninformative. They are actively costly**, giving up
+about a quarter of a percentage point relative to firing at a random minute.
+That is consistent with what the five setups are: EMA_PULLBACK, BREAKOUT and
+their mirrors all trigger *after* a move, buying strength and selling weakness at
+horizons where liquid megacaps mean-revert.
+
+**Read the difference, never the levels.** The random arm reuses the symbol and
+direction the scanner chose later in the session, so its absolute return is
+lookahead-contaminated and is not achievable by anyone. The contamination is
+identical in both arms and cancels in the difference; `tools/null_model.py` now
+says so in its own output.
+
+This reframes Phase 1. The question is no longer only "can a new feature add
+edge" but "does removing the entry trigger add edge" — the cheapest experiment
+available, and one the harness can already answer.
+
 ### 2.3 Is the signal late?
 Your original diagnosis, still untested: entries arriving after the move has
 run. Needs entry timestamps compared against the bar sequence that triggered

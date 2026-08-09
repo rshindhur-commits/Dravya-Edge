@@ -238,7 +238,7 @@ def build_arms(hold_caps):
     return arms
 
 
-def evaluate(days, symbols, cadence, lookback_days, arms):
+def evaluate(days, symbols, cadence, lookback_days, arms, capture_features=True):
 
     config = ReplayConfig()
     config.lookback_days = lookback_days
@@ -308,6 +308,17 @@ def evaluate(days, symbols, cadence, lookback_days, arms):
                     "is_short": is_short,
                 }
 
+                # The indicator state the decision was actually made on. Without
+                # it, asking "does relative volume predict the move" costs a
+                # 45-minute rewalk instead of a regression on a dataframe, and
+                # the research loop is monthly rather than weekly. Captured for
+                # every candidate, including the ones no arm takes -- those are
+                # the counterfactual, and a filter cannot be evaluated against
+                # only the rows it already keeps.
+                if capture_features:
+
+                    row.update(_feature_snapshot(df_15m, df_1h, setup, analysis_15m))
+
                 for label, swing_enabled, max_hold_bars in arms:
 
                     result = treatment if swing_enabled else control
@@ -361,6 +372,91 @@ def evaluate(days, symbols, cadence, lookback_days, arms):
         print(f"  {symbol}: {len([r for r in rows if r['symbol'] == symbol])} candidates")
 
     return rows
+
+
+# Columns worth carrying into the research dataset. Prices and raw volumes are
+# excluded deliberately: they differ by two orders of magnitude across the
+# watchlist, so any model fitted on them learns which symbol it is looking at
+# rather than what the setup looks like. Everything here is a ratio, a distance
+# or a flag.
+FEATURE_COLUMNS_15M = (
+    "ATR_PCT", "RSI", "RSI_SLOPE", "MACD", "MACD_SIGNAL", "EMA9_SLOPE",
+    "VWAP_DISTANCE", "REL_VOLUME", "VOLUME_SPIKE", "VOLUME_TREND",
+    "BODY_STRENGTH", "DISTANCE_TO_RESISTANCE", "DISTANCE_TO_SUPPORT",
+    "SYMBOL_MOVE_PCT", "TREND_PHASE", "CONSOLIDATING", "BREAKOUT", "BREAKDOWN",
+    "FAILED_BREAKOUT", "FAILED_BREAKDOWN", "HIGHER_HIGH", "HIGHER_LOW",
+    "LOWER_HIGH", "LOWER_LOW", "ORB_BREAKOUT", "ORB_BREAKDOWN",
+)
+
+FEATURE_COLUMNS_1H = (
+    "ATR_PCT", "RSI", "EMA9_SLOPE", "VWAP_DISTANCE", "REL_VOLUME", "TREND_PHASE",
+)
+
+
+def _scalar(value):
+    """JSON-safe, NaN-safe, numpy-safe."""
+
+    if value is None:
+
+        return None
+
+    try:
+
+        if isinstance(value, (bool,)):
+
+            return bool(value)
+
+        number = float(value)
+
+        return None if number != number else number
+
+    except (TypeError, ValueError):
+
+        return str(value)
+
+
+def _feature_snapshot(df_15m, df_1h, setup, analysis_15m):
+    """Indicator state at decision time, prefixed by timeframe."""
+
+    snapshot = {}
+
+    latest_15m = df_15m.iloc[-1]
+
+    for column in FEATURE_COLUMNS_15M:
+
+        if column in df_15m.columns:
+
+            snapshot[f"f15_{column}"] = _scalar(latest_15m.get(column))
+
+    if df_1h is not None and not df_1h.empty:
+
+        latest_1h = df_1h.iloc[-1]
+
+        for column in FEATURE_COLUMNS_1H:
+
+            if column in df_1h.columns:
+
+                snapshot[f"f1h_{column}"] = _scalar(latest_1h.get(column))
+
+    snapshot["f_entry_quality"] = setup.get("entry_quality")
+    snapshot["f_avoid_chasing"] = bool(setup.get("avoid_chasing"))
+    snapshot["f_signal"] = (analysis_15m or {}).get("signal")
+    snapshot["f_market_regime"] = (analysis_15m or {}).get("market_regime")
+    snapshot["f_score"] = _scalar((analysis_15m or {}).get("score"))
+
+    # Minutes since the open. Time of day is a Phase 1 hypothesis and is not
+    # currently a factor anywhere in the app, so it has to be carried to be
+    # testable at all.
+    moment = pd.Timestamp(df_15m.index[-1]) if len(df_15m.index) else None
+
+    if moment is not None and moment.tzinfo is not None:
+
+        local = moment.tz_convert(ET)
+        snapshot["f_minutes_from_open"] = (
+            (local.hour - 9) * 60 + local.minute - 30
+        )
+
+    return snapshot
 
 
 def _with_swing(df_15m, analysis_15m, setup, df_1h):
@@ -574,6 +670,12 @@ def main():
     )
     parser.add_argument("--out", default=None)
     parser.add_argument(
+        "--no-features",
+        action="store_true",
+        help="skip the indicator snapshot; smaller output, and the "
+        "resulting file cannot be used for feature research",
+    )
+    parser.add_argument(
         "--summarise",
         default=None,
         help="re-read a saved run and summarise it again, without recomputing. "
@@ -604,7 +706,10 @@ def main():
 
     print("arms: " + ", ".join(label for label, _, _ in arms) + "\n")
 
-    rows = evaluate(days, symbols, args.cadence, args.lookback_days, arms)
+    rows = evaluate(
+        days, symbols, args.cadence, args.lookback_days, arms,
+        capture_features=not args.no_features,
+    )
 
     summarise(rows)
 

@@ -228,3 +228,9 @@ data/backtest_cache/
 # a fact about the repo -- commit a specific run deliberately if it is being
 # cited, rather than letting every experiment land here.
 data/forward_runs/
+
+# Research datasets are large and regenerable in ~45 minutes from cached bars.
+# research/splits.json and research/comparisons.jsonl are NOT ignored: the split
+# and the count of how many arms have been tried are the evidence that a finding
+# means what it claims, and they are worthless if they can be regenerated.
+research/candidates_*.json
