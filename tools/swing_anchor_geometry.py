@@ -217,7 +217,26 @@ def walk_to_first_touch(
     return None, "UNRESOLVED", len(forward), best, last_time
 
 
-def evaluate(days, symbols, cadence, lookback_days, max_hold_bars):
+def build_arms(hold_caps):
+    """(label, swing_enabled, max_hold_bars) per arm.
+
+    The hold cap has to be an arm rather than a post-hoc filter, because it
+    changes which trades exist. A shorter hold releases the symbol sooner and
+    the next candidate becomes takeable, so truncating a long-hold run's trades
+    would answer a question nobody asked: what the long arm would have earned
+    had it closed early, rather than what a short arm actually trades.
+    """
+
+    arms = [("control", False, 234)]
+
+    for cap in hold_caps:
+
+        arms.append((f"swing_h{cap}", True, cap))
+
+    return arms
+
+
+def evaluate(days, symbols, cadence, lookback_days, arms):
 
     config = ReplayConfig()
     config.lookback_days = lookback_days
@@ -241,7 +260,7 @@ def evaluate(days, symbols, cadence, lookback_days, max_hold_bars):
         # Tracked per arm on purpose. The control exits in minutes and is free to
         # re-enter; the swing arm holds and is not. That difference in trade
         # count is real, and it is half of what return on capital measures.
-        busy_until = {"control": None, "swing": None}
+        busy_until = {label: None for label, _, _ in arms}
 
         for day in days:
 
@@ -287,7 +306,9 @@ def evaluate(days, symbols, cadence, lookback_days, max_hold_bars):
                     "is_short": is_short,
                 }
 
-                for label, result in (("control", control), ("swing", treatment)):
+                for label, swing_enabled, max_hold_bars in arms:
+
+                    result = treatment if swing_enabled else control
 
                     allowed = bool(result.get("trade_allowed"))
                     stop = result.get("stop_loss")
@@ -382,7 +403,19 @@ def summarise(rows):
     print(f"\n{'='*78}")
     print(f"candidates evaluated: {len(rows)}")
 
-    for label in ("control", "swing"):
+    # Discovered rather than hardcoded, so a run with a different set of hold
+    # caps summarises without the reader having to match a flag to the output.
+    labels = []
+
+    for row in rows:
+
+        for key in row:
+
+            if key.endswith("_allowed") and key[: -len("_allowed")] not in labels:
+
+                labels.append(key[: -len("_allowed")])
+
+    for label in labels:
 
         allowed = [r for r in rows if r.get(f"{label}_allowed")]
         stops = [
@@ -494,11 +527,12 @@ def main():
     parser.add_argument("--cadence", type=int, default=15)
     parser.add_argument("--lookback-days", type=int, default=5)
     parser.add_argument(
-        "--max-hold-bars",
-        type=int,
-        default=234,
-        help="close at the prevailing price after this many 5m bars; 234 is "
-        "three sessions, the horizon a MULTIDAY position is opened against",
+        "--hold-caps",
+        default="234",
+        help="comma-separated 5m bar counts; one swing arm per cap. 78 is a "
+        "session, 234 is three. Theta is the swing anchor's whole problem -- it "
+        "costs 5.07%% over the 2.1 sessions the 234 arm holds -- so the question "
+        "this sweeps is whether the edge survives being collected sooner",
     )
     parser.add_argument("--out", default=None)
     parser.add_argument(
@@ -527,9 +561,12 @@ def main():
         f"  (underlying bars only -- no option quotes)\n"
     )
 
-    rows = evaluate(
-        days, symbols, args.cadence, args.lookback_days, args.max_hold_bars
-    )
+    caps = [int(c.strip()) for c in args.hold_caps.split(",") if c.strip()]
+    arms = build_arms(caps)
+
+    print("arms: " + ", ".join(label for label, _, _ in arms) + "\n")
+
+    rows = evaluate(days, symbols, args.cadence, args.lookback_days, arms)
 
     summarise(rows)
 
