@@ -105,11 +105,42 @@ are substitutes, so removing one redistributes to the others and the result will
 be another null. The meaningful experiment is the class, not the member —
 see 1.6.
 
-### 1.6 Disable momentum exits as a class — **replaces 1.2 and 1.3**
-EMA, MACD, VWAP and failed-breakout together decide 60% of exits and behave as
-one rule wearing four names. Disabling all of them leaves stop, target, time and
-end-of-day, which is a genuinely different strategy rather than a relabelling.
-That is the test worth running.
+### 1.6 Momentum exits as a class — **RUN 2026-08-08, no effect, and it settles the exits**
+
+EMA, MACD, VWAP and failed-breakout removed together, against a fresh control
+that reproduces the archived baseline exactly (291 trades, −$3,466, −3.00%):
+
+| | control | no momentum |
+|---|---|---|
+| return on capital | −3.00% | −3.37% |
+| trades | 291 | 164 |
+| vs control | — | **−0.37sd** |
+
+Null, like the other two. Total P&L improved by $1,197 purely because 42% less
+capital was deployed; per trade it is worse.
+
+**What it settles is more useful than the headline.** Splitting by whether a
+trade ever travelled:
+
+| | moved | never moved |
+|---|---|---|
+| control | n=145, **+1.15%** | n=146, **−7.41%** |
+| no momentum | n=106, **+1.27%** | n=58, **−12.31%** |
+
+The winners are untouched — +1.15% against +1.27% is nothing. The losers are far
+worse: without momentum exits a dead trade runs to its hard stop and loses 12.3%
+instead of 7.4%.
+
+**So momentum exits are loss-limiters, not profit-takers.** They are not cutting
+winners short; they are the only thing currently containing the half of the book
+that never works. The original hypothesis — that the exits eat the profits — is
+refuted from both directions: individually (substitution, §1.2) and as a class.
+
+**The exits are not the problem, and §2.4 is answered without running it.** Any
+remaining exit tuning is bounded by §1a and now also by this: the winners' +1.15%
+is what the exits already deliver, and no exit rule can improve a trade that
+never moved. What is left is entry selection, and entry-time features have
+already failed to predict the never-moves group.
 
 ### 1.4 Measure the entry spread distribution, then test a ceiling
 Not yet measured. Live payloads carry `option_entry_spread_pct` (SMCI on 08-05
