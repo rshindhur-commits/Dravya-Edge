@@ -142,6 +142,43 @@ is what the exits already deliver, and no exit rule can improve a trade that
 never moved. What is left is entry selection, and entry-time features have
 already failed to predict the never-moves group.
 
+### 1.4a Spread ceiling 6% -> 3% — **RUN 2026-08-08, the first thing that works**
+
+| | ceiling 6 | ceiling 3 |
+|---|---|---|
+| return on capital | −3.00% | **−2.29%** |
+| per trade | −$11.9 | −$8.3 |
+| cash win rate | 20% | 24% |
+| trades | 291 | 260 |
+| mean spread paid | 3.44% | **2.29%** |
+
+R and dollars agree, and it is the only change tested that improves return on
+capital rather than merely deploying less.
+
+**Holdout:** positive in both halves — +1.10 points in the first, +0.42 in the
+second. It shrinks, which is what a partly-overfit effect does, but it does not
+change sign. Three findings died at this gate on the same day; this one did not.
+
+**The statistics alone would not carry it.** The full-sample effect is +1.05sd,
+below the 2sd bar in section 3. What carries it is the mechanism:
+
+* the control pays a mean spread of **3.44%**, which independently reproduces
+  the −3.40 intercept fitted in section 1a from 601 different trades. The toll
+  is the spread, established twice by unrelated methods.
+* tightening the ceiling cuts the measured toll by 1.16 points.
+* the book improves by 0.75 of those 1.16, the shortfall being winners the
+  tighter ceiling also excluded.
+
+Cause, size and direction all line up. That is worth more here than a t-statistic
+on 550 trades.
+
+**It does not make the strategy profitable.** −2.29% is less bleeding, not a
+gain, and trade shape is untouched: 48% still never travel, mean peak is still
+0.39R. This buys back a quarter of the toll and nothing else.
+
+**Open:** whether 2% is better still. The trend says tighten; the volume cost so
+far is mild (11% fewer trades), but it will not stay mild.
+
 ### 1.4 Measure the entry spread distribution, then test a ceiling
 Not yet measured. Live payloads carry `option_entry_spread_pct` (SMCI on 08-05
 showed 5.43% at entry, 13.3% at 15:55). If a meaningful share of trades enter
