@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-import json
-
 from app.db.persistence import _json_safe
 from app.db.repository_base import BestEffortRepository
 
 
 class ActivityTraceRepository(BestEffortRepository):
+    """Writes the activity trace. There is no read path here, by design.
+
+    The Activity Feed renders from data/daily/<day>/activity_trace.csv; this
+    table is the archive that outlives the container.
+
+    A `payload` column used to carry json.dumps of the whole record alongside
+    the columns extracted from it -- the row again, in text. Nothing read it,
+    and it cost 37MB of a 150MB table plus its share of every upsert. Dropped
+    in migration 029; do not reintroduce it without a reader.
+    """
+
     def batch_upsert(self, events):
         rows = []
         for event in events or []:
@@ -48,7 +57,6 @@ class ActivityTraceRepository(BestEffortRepository):
                 "scan_id": record.get("scan_id"),
                 "candidate_key": record.get("candidate_key"),
                 "trade_id": record.get("trade_id"),
-                "payload": json.dumps(record, default=str),
             })
         if not rows:
             return 0
@@ -60,7 +68,7 @@ class ActivityTraceRepository(BestEffortRepository):
                 candle_time, candle_open, candle_high, candle_low, candle_close,
                 candle_volume, scanner_recommendation, execution_eligibility,
                 execution_outcome, execution_reason, trade_status, telegram_status,
-                telegram_reason, payload
+                telegram_reason
             ) VALUES (
                 :event_id, :trading_day, CAST(:occurred_at AS TIMESTAMPTZ), :symbol,
                 :category, :event, :context, :origin, :stage, :rule, :passed,
@@ -70,8 +78,7 @@ class ActivityTraceRepository(BestEffortRepository):
                 :candle_low, :candle_close, :candle_volume,
                 :scanner_recommendation, :execution_eligibility,
                 :execution_outcome, :execution_reason,
-                :trade_status, :telegram_status, :telegram_reason,
-                CAST(:payload AS JSONB)
+                :trade_status, :telegram_status, :telegram_reason
             ) ON CONFLICT (event_id) DO UPDATE SET
                 context = EXCLUDED.context,
                 stage = EXCLUDED.stage,
@@ -97,6 +104,5 @@ class ActivityTraceRepository(BestEffortRepository):
                 trade_status = EXCLUDED.trade_status,
                 telegram_status = EXCLUDED.telegram_status,
                 telegram_reason = EXCLUDED.telegram_reason,
-                payload = EXCLUDED.payload,
                 persisted_at = now()
         """, rows)

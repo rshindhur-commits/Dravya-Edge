@@ -10,16 +10,30 @@ closed, weekend, or holiday -- because a batched DELETE against
 reason to pay that during a session. And it runs at most once per ET date, so
 the idle branch looping every few minutes all weekend does not re-run it.
 
-The marker is a file, not a table. Retention is idempotent -- deleting rows
-older than N days twice removes nothing the second time -- so the worst case
-from a lost marker on a container restart is one extra pass of cheap COUNT
-queries, which is not worth a migration to prevent.
+The marker was a file and is now both. The original reasoning was that retention
+is idempotent -- deleting rows older than N days twice removes nothing the second
+time -- so a marker lost to a container restart costs one extra pass of cheap
+COUNT queries, and that did not justify a migration. On correctness that still
+holds.
+
+What it missed is that it left no way to answer "did retention run". On
+2026-08-08 the only available check was to query every retained table for rows
+past its window and infer the answer from their absence. The run is now recorded
+in `retention_run` as well, so the question has an answer instead of an
+inference.
+
+The database is read first and the file kept as a fallback, which also makes the
+once-a-day guard survive a restart -- while the worker was restarting hourly on
+the memory leak, the marker reset with it and retention ran on most idle passes
+rather than once a day.
 """
 from __future__ import annotations
 
 import json
 import logging
 from datetime import datetime
+
+from sqlalchemy import bindparam
 
 from app.storage.daily_paths import live_path
 
@@ -32,7 +46,39 @@ def _marker_path():
     return live_path(MARKER_FILENAME)
 
 
+def _last_run_day_from_db():
+    """The most recent recorded run, or None when unreachable or unrecorded.
+
+    Best effort in both directions: an unreachable database must not stop
+    retention, and must not silently answer "never ran" either -- the caller
+    falls through to the file rather than treating None as a fact.
+    """
+
+    try:
+
+        from sqlalchemy import text
+
+        from app.db.connection import get_engine
+
+        with get_engine().begin() as connection:
+
+            day = connection.execute(
+                text("SELECT max(ran_on)::text FROM retention_run")
+            ).scalar()
+
+        return day or None
+
+    except Exception:
+
+        return None
+
+
 def last_run_day():
+
+    return _last_run_day_from_db() or _last_run_day_from_file()
+
+
+def _last_run_day_from_file():
     try:
         payload = json.loads(_marker_path().read_text(encoding="utf-8"))
         return str(payload.get("last_run_day") or "") or None
@@ -40,7 +86,44 @@ def last_run_day():
         return None
 
 
+def _record_run_in_db(day, report):
+
+    try:
+
+        from sqlalchemy import text
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        from app.db.connection import get_engine
+
+        statement = text("""
+            INSERT INTO retention_run (ran_on, total_deleted, report)
+            VALUES (CAST(:ran_on AS DATE), :total_deleted, :report)
+        """).bindparams(bindparam("report", type_=JSONB))
+
+        with get_engine().begin() as connection:
+
+            connection.execute(
+                statement,
+                {
+                    "ran_on": day,
+                    "total_deleted": int(report.get("total_deleted") or 0),
+                    "report": {
+                        table: row.get("deleted", 0)
+                        for table, row in (report.get("tables") or {}).items()
+                    },
+                },
+            )
+
+    except Exception:
+
+        # A missing table on an un-migrated deployment lands here, and retention
+        # itself is unaffected. The file marker still records the run.
+        logger.warning("could not record retention run", exc_info=True)
+
+
 def _record_run(day, report):
+    _record_run_in_db(day, report)
+
     try:
         _marker_path().write_text(
             json.dumps(

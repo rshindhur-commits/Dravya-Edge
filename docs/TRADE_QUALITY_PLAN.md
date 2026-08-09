@@ -105,11 +105,79 @@ are substitutes, so removing one redistributes to the others and the result will
 be another null. The meaningful experiment is the class, not the member —
 see 1.6.
 
-### 1.6 Disable momentum exits as a class — **replaces 1.2 and 1.3**
-EMA, MACD, VWAP and failed-breakout together decide 60% of exits and behave as
-one rule wearing four names. Disabling all of them leaves stop, target, time and
-end-of-day, which is a genuinely different strategy rather than a relabelling.
-That is the test worth running.
+### 1.6 Momentum exits as a class — **RUN 2026-08-08, no effect, and it settles the exits**
+
+EMA, MACD, VWAP and failed-breakout removed together, against a fresh control
+that reproduces the archived baseline exactly (291 trades, −$3,466, −3.00%):
+
+| | control | no momentum |
+|---|---|---|
+| return on capital | −3.00% | −3.37% |
+| trades | 291 | 164 |
+| vs control | — | **−0.37sd** |
+
+Null, like the other two. Total P&L improved by $1,197 purely because 42% less
+capital was deployed; per trade it is worse.
+
+**What it settles is more useful than the headline.** Splitting by whether a
+trade ever travelled:
+
+| | moved | never moved |
+|---|---|---|
+| control | n=145, **+1.15%** | n=146, **−7.41%** |
+| no momentum | n=106, **+1.27%** | n=58, **−12.31%** |
+
+The winners are untouched — +1.15% against +1.27% is nothing. The losers are far
+worse: without momentum exits a dead trade runs to its hard stop and loses 12.3%
+instead of 7.4%.
+
+**So momentum exits are loss-limiters, not profit-takers.** They are not cutting
+winners short; they are the only thing currently containing the half of the book
+that never works. The original hypothesis — that the exits eat the profits — is
+refuted from both directions: individually (substitution, §1.2) and as a class.
+
+**The exits are not the problem, and §2.4 is answered without running it.** Any
+remaining exit tuning is bounded by §1a and now also by this: the winners' +1.15%
+is what the exits already deliver, and no exit rule can improve a trade that
+never moved. What is left is entry selection, and entry-time features have
+already failed to predict the never-moves group.
+
+### 1.4a Spread ceiling 6% -> 3% — **RUN 2026-08-08, the first thing that works**
+
+| | ceiling 6 | ceiling 3 |
+|---|---|---|
+| return on capital | −3.00% | **−2.29%** |
+| per trade | −$11.9 | −$8.3 |
+| cash win rate | 20% | 24% |
+| trades | 291 | 260 |
+| mean spread paid | 3.44% | **2.29%** |
+
+R and dollars agree, and it is the only change tested that improves return on
+capital rather than merely deploying less.
+
+**Holdout:** positive in both halves — +1.10 points in the first, +0.42 in the
+second. It shrinks, which is what a partly-overfit effect does, but it does not
+change sign. Three findings died at this gate on the same day; this one did not.
+
+**The statistics alone would not carry it.** The full-sample effect is +1.05sd,
+below the 2sd bar in section 3. What carries it is the mechanism:
+
+* the control pays a mean spread of **3.44%**, which independently reproduces
+  the −3.40 intercept fitted in section 1a from 601 different trades. The toll
+  is the spread, established twice by unrelated methods.
+* tightening the ceiling cuts the measured toll by 1.16 points.
+* the book improves by 0.75 of those 1.16, the shortfall being winners the
+  tighter ceiling also excluded.
+
+Cause, size and direction all line up. That is worth more here than a t-statistic
+on 550 trades.
+
+**It does not make the strategy profitable.** −2.29% is less bleeding, not a
+gain, and trade shape is untouched: 48% still never travel, mean peak is still
+0.39R. This buys back a quarter of the toll and nothing else.
+
+**Open:** whether 2% is better still. The trend says tighten; the volume cost so
+far is mild (11% fewer trades), but it will not stay mild.
 
 ### 1.4 Measure the entry spread distribution, then test a ceiling
 Not yet measured. Live payloads carry `option_entry_spread_pct` (SMCI on 08-05

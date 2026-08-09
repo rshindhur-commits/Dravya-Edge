@@ -128,6 +128,12 @@ TABLES = (
      "and the only way two engines scanning at once becomes visible -- the scan "
      "lock is a local file and cannot serialise across hosts."),
 
+    ("retention_run", "Runtime", "one per retention pass",
+     "When the daily prune last ran and how much it removed. The scheduler's "
+     "own marker is a file on an ephemeral disk, so before this the only way to "
+     "answer 'did retention run' was to query every retained table for rows "
+     "past its window and infer it from their absence."),
+
     # ---- Reference -------------------------------------------------------
     ("earnings_calendar", "Reference", "one per symbol per report date",
      "Known earnings dates, used to keep entries away from an event."),
