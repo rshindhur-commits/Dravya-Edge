@@ -39,10 +39,12 @@ out whether that number can be moved.
   *Evidence:* `tools/daily_report.py` integrity section
 - [ ] **S03** Verify the spread ceiling reached the worker
   *Evidence:* `required_value` on the spread rule equals the deployed value
-- [ ] **S04** Build the feature research dataset — indicator snapshot at decision time joined to forward outcome
-  *Evidence:* dataset on disk, one row per candidate, ~45 feature columns
-- [ ] **S05** Build the out-of-sample framework — fixed session split, declared arms, comparison ledger, and a report that refuses to call a winner unconfirmed on holdout
-  *Evidence:* split file committed; a deliberately overfit arm is refused
+- [x] **S04** Build the feature research dataset — indicator snapshot at decision time joined to forward outcome
+  *Evidence:* `research/candidates_21day.json`, 5,590 rows, 38 feature columns, zero missing, **100% label coverage** after `tools/label_candidates.py` (first cut covered 14% — only the rows the current rules already select)
+- [x] **S05** Build the out-of-sample framework — fixed session split, declared arms, comparison ledger, and a report that refuses to call a winner unconfirmed on holdout
+  *Evidence:* `app/research/holdout.py`, 11 tests; split committed (train 07-06→07-23, holdout 07-24→08-03) before anything was evaluated; overfit and includes-zero cases both refused
+- [x] **S05a** Build the null model — random-timing benchmark holding symbol, session and direction constant
+  *Evidence:* `tools/null_model.py`; comparison ledger entry 1
 - [ ] **S06** Fix duplicate close alerts (display-only, long deferred)
 - [ ] **S07** Stamp a signal version on every emitted signal, persisted with the trade
 
