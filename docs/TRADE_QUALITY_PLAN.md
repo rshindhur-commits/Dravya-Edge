@@ -176,8 +176,54 @@ on 550 trades.
 gain, and trade shape is untouched: 48% still never travel, mean peak is still
 0.39R. This buys back a quarter of the toll and nothing else.
 
-**Open:** whether 2% is better still. The trend says tighten; the volume cost so
-far is mild (11% fewer trades), but it will not stay mild.
+### 1.4b Ceiling 2% — **RUN 2026-08-09, and it bounds the whole approach**
+
+| | 6% | 3% | **2%** |
+|---|---|---|---|
+| return on capital | −3.00% | −2.29% | **−1.12%** |
+| per trade | −$11.9 | −$8.3 | **−$3.4** |
+| mean R | +0.007 | +0.009 | **+0.048** |
+| trades | 291 | 260 | 193 |
+| mean spread paid | 3.44% | 2.29% | **1.48%** |
+
+**+1.85 points, +2.33sd** on the full sample — the only result all weekend to
+clear the 2sd bar in section 3. Positive in both halves (+2.89 discovery, +0.86
+holdout; the decay is real and worth watching). Toll cut 1.96 points, book
+improved 1.85 — the mechanism accounts for essentially all of it.
+
+**The section 1a model predicted all three arms before they ran:**
+
+| ceiling | 8.59 × R − toll | measured |
+|---|---|---|
+| 6% | −3.38% | −3.15% |
+| 3% | −2.21% | −2.40% |
+| 2% | −1.07% | −1.30% |
+
+A model fitted on 601 unrelated trades forecasting three interventions to within
+0.25 points is the strongest evidence produced here. It also means the model can
+now be trusted to answer the question the experiments were circling.
+
+### 1.4c What the model says about the ceiling of this lever
+
+Set the toll to **zero** — better than any ceiling can achieve — and the arm at
+2% returns:
+
+```
+8.59 x 0.048 - 0 = +0.41%
+```
+
+**+0.41% is the theoretical maximum of all transaction-cost work.** Not the
+practical maximum; the arithmetic one, with fees abolished. Two thirds of the
+available reduction has already been taken, and what remains is worth about 1.5
+points at best.
+
+Combined with section 1a's other bound — perfect exits plus perfect loss-cutting
+reach +0.20% — **every lever except one is now measured and bounded below
+break-even.**
+
+The exception is mean R itself. At the current 0.048 nothing works. At 0.40,
+with today's toll, the same book returns +1.96%. That is the only remaining
+question worth asking, and it is section 2.2.
 
 ### 1.4 Measure the entry spread distribution, then test a ceiling
 Not yet measured. Live payloads carry `option_entry_spread_pct` (SMCI on 08-05
