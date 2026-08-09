@@ -51,6 +51,7 @@ from app.risk.risk_manager import calculate_risk
 from app.state.holding_policy import derive_holding_profile, holding_policy
 from app.strategies.entry_engine import detect_entry
 from app.strategies.momentum_strategy import analyze_setup
+from app.config.settings import get_bool_env
 from app.utils.timeframe_resampler import resample_timeframe
 
 # The live auto-paper entry window, ET. Outside it the scanner watches but does
@@ -198,8 +199,19 @@ def build_frames(raw_5m, moment, symbol, config):
         return (None,) * 6
 
     df_5m = compute_indicators(visible.copy(), interval="5m", symbol=symbol)
+    # ENTRY_REQUIRE_COMPLETED_BAR decides entries on closed 15m bars only,
+    # trading freshness for a signal that will not change under it. Entries
+    # cluster late in the bucket -- a median of 10.9 minutes into it against
+    # 6.7 for decisions generally -- which is what it would look like if the
+    # setup needs most of the bar to form. Off by default; the A/B decides.
     df_15m = compute_indicators(
-        resample_timeframe(visible, "15m"), interval="15m", symbol=symbol
+        resample_timeframe(
+            visible,
+            "15m",
+            drop_incomplete=get_bool_env("ENTRY_REQUIRE_COMPLETED_BAR", False),
+        ),
+        interval="15m",
+        symbol=symbol,
     )
     df_1h = compute_indicators(
         resample_timeframe(visible, "1h"), interval="1h", symbol=symbol
