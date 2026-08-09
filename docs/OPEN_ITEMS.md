@@ -12,57 +12,55 @@ Last reviewed: 2026-08-09.
 
 ---
 
-## The blocking pair
+## Closed 2026-08-09
 
-These two are one change. A wider stop the position cannot survive to reach is
-not an improvement, it is the same trade with a worse fill — so neither is worth
-deploying alone, and an arm that tests one without the other measures nothing.
+### 1. Higher-timeframe stop anchor — **built, measured, CLOSED as insufficient**
+`app/risk/swing_anchor.py`, `SWING_STRUCTURE_ENABLED`, default off. Leave it off.
 
-### 1. Higher-timeframe stop anchor — **built 2026-08-09, validating**
-`app/risk/swing_anchor.py`, `SWING_STRUCTURE_ENABLED`, default off.
+It does what it was built to do: median stop 0.54% → 2.27%, win rate 32% → 43%,
+and the underlying move captured flips sign from −0.0123% to **+0.0436%** of
+price per trade. Before carrying cost the book improves 0.70 points, −1.27% →
+−0.57% at spread ceiling 2 — the largest gain any lever has produced.
 
-The 15m anchor pins the stop to the current bar's own low, which for a liquid
-megacap is a fraction of a percent from price. Stops land at 0.5–0.75%, 2R
-targets at ~1.5%, against an option round trip of 1.5–3.4%. A 1h swing pivot
-sits 1–4% away. Smoke test moved median stop 0.55% → 2.20%.
+It still loses. Collecting those 0.70 points takes 2.1 sessions of holding, which
+costs **5.07%** of premium in theta. Net **−5.64%**, worse than the −1.12% the
+app books today. 46% of swing trades exited on time rather than at stop or
+target — full decay paid on an unresolved position.
 
-**Next:** `tools/swing_anchor_geometry.py` over the 21 archived sessions. Costs
-nothing — cached underlying bars, no option quotes, no network. It decides
-whether items 2–3 are worth building at all.
+Measured by `tools/swing_anchor_geometry.py` over 21 sessions and 5,590
+candidates, from cached bars at no quota cost. Detail in
+[TRADE_QUALITY_PLAN.md §2.2d](TRADE_QUALITY_PLAN.md).
 
-### 2. MULTIDAY holding under swing mode — **not built, and it is the blocker**
-Measured on the archived 21-day run, not assumed:
+### 2, 3, 4 — **dropped, they only existed to serve item 1**
+MULTIDAY holding, `EXIT_MOMENTUM_ENABLED=false` and the backtest selector's
+`--max-dte 45` were all prerequisites for running the anchor arm properly. The
+geometry study answered the question without needing any of them, and answered
+it against. Building them now would be work in service of a lever already
+measured as negative.
 
-```
-291 trades → INTRADAY 285, MULTIDAY 6
-```
-
-INTRADAY sets `force_eod_exit=True`. The swing arm's median hold in the smoke
-test was ~117 bars of 5m, about 1.5 sessions. So 98% of trades would be
-force-closed at the bell before a 2R swing target could resolve, and the wider
-anchor would be paid for and never used — the same failure as leaving momentum
-exits on, by a different route.
-
+Kept on record because the underlying facts remain true and will matter if a
+multi-session holding profile is ever revisited for another reason: 285 of 291
+archived trades are INTRADAY and force-closed at the bell, and
 `derive_holding_profile` requires expiration bucket ≥14 DTE **and** setup score
-≥76 **and** RR ≥1.8 **and** option quality ≥75. Six of 291 cleared it. Note that
-swing mode pins RR at `SWING_TARGET_RR`, so that clause now always passes; the
-binding conditions are setup score and option quality.
+≥76 **and** RR ≥1.8 **and** option quality ≥75, which six of 291 cleared.
 
 ---
 
-## Required for the arm to mean anything
+## The item that replaced them
 
-### 3. `EXIT_MOMENTUM_ENABLED=false` in any swing arm
-The switch exists and removes all four momentum rules at once. Not applied. With
-it on, a 3% stop is decided by a nine-period EMA within minutes. Named in
-`swing_anchor.describe_mode()` so a run that forgot it is visible in its own
-output rather than discovered afterwards.
+### 8. The signal is not the problem; the instrument is — **open, and it is a product decision**
+The same 21-session study, read the other way: the swing arm captured **+14.43%
+of underlying across 342 trades**, +0.0436% per trade. Net of 2bp round-trip
+costs that is roughly **+7.8% total** — thin, but positive, and the first
+positive number this project has produced.
 
-### 4. Backtest selector `--max-dte 45`
-Live is `OPTION_MIN_DTE=10`, preferred 14–30, max 45. The backtest selector caps
-at `DEFAULT_MAX_DTE = 30`, so the bundle's `longer_dte` slot (31–45) is always
-empty there and the arm cannot reproduce live. Costs roughly half again the
-requests per scan.
+Every lever inside the options framing is now measured and bounded below
+break-even: spread ceiling +0.41% at zero toll, perfect exits +0.20%, larger
+moves −5.64%. The toll and the decay are 148–344bp and ~240bp/session against an
+edge of about 4bp per trade.
+
+This is not a parameter. It is a decision about what the product is, and it is
+the user's to make. Nothing should be tuned further until it is made.
 
 ---
 

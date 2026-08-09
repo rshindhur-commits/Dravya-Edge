@@ -367,6 +367,59 @@ measured loss-limiting from momentum exits. Compare the swing arm against the
 **actually measured** control (−1.12% at ceiling 2), not against this run's
 control column.
 
+#### 2.2d RUN 2026-08-09, 21 sessions, 5,590 candidates — **the anchor works and it is not enough**
+
+| | control | swing |
+|---|---|---|
+| median stop | 0.54% | **2.27%** |
+| trades taken | 796 | 342 |
+| win rate | 32% | **43%** |
+| mean R | −0.025 | −0.007 |
+| **underlying move captured** | **−0.0123%** | **+0.0436%** |
+| median hold | 13 bars | 188 bars (~2.4 sessions) |
+| premium from delta | −0.15% | **+0.55%** |
+| theta over the hold | −0.83% | **−5.07%** |
+| **at ceiling 2** | −1.27% before theta | **−0.57% before theta, −5.64% after** |
+
+**The anchor does what it was built to do.** Stops move 0.54% → 2.27%, win rate
+32% → 43%, and the underlying move captured flips sign, −0.0123% → +0.0436% of
+price. Before carrying cost the book improves by 0.70 points, from −1.27% to
+−0.57%. That is the largest single improvement any lever has produced.
+
+**And it loses to theta by seven to one.** Collecting that 0.70 points requires
+holding 2.1 sessions, which costs 5.07% of premium in decay. Net −5.64%, against
+the measured −1.12% the app books today. *Widening the stop makes the options
+book worse*, and it does so through the one cost the §1a model never contained,
+because that model was fitted on a book that held for two hours.
+
+46% of swing trades (151 of 331) exited on time rather than at stop or target:
+the target is too far to be reached inside three sessions, so they pay full
+decay for an unresolved position.
+
+**A correction worth recording.** The first version of this study reported
+−1.18% for the swing arm by applying `premium% = 8.59 × R − toll` directly to
+its R. That slope was fitted where stops averaged 0.68%; R is the move *divided
+by* the stop, so it cannot be carried to an arm whose stops average 2.5%. Every
+arm must be converted through the underlying move it actually captured. The
+model is now stated as **12.6 premium points per 1% of underlying** — which
+cross-checks against a ~50 delta contract costing ~3% of notional (16.7 points)
+and, with theta excluded, reproduces the measured control to within 0.15 points.
+
+#### 2.2e What this closes, and the one thing it opens
+§2.2 is answered: **no.** Three independent bounds now sit below break-even —
+spread ceiling +0.41% at zero toll, perfect exits +0.20%, and larger moves
+−5.64%. Larger moves is not merely bounded, it is *negative*, and it was the
+last lever with a ceiling above zero. No further tuning of this strategy as an
+options strategy is warranted.
+
+What it opens is the opposite reading of the same table. The swing arm captured
+**+14.43% of underlying across 342 trades**, +0.0436% per trade. Net of 2bp
+round-trip costs that is roughly +7.8% total — thin, but positive, and the first
+positive number this project has produced. The signal is not the problem and has
+not been for some time; the instrument is. That belongs in §2.1's territory
+(cutting the toll) rather than here, and it is a decision about what the product
+is, not a parameter.
+
 ### 2.3 Is the signal late?
 Your original diagnosis, still untested: entries arriving after the move has
 run. Needs entry timestamps compared against the bar sequence that triggered

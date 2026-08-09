@@ -16,9 +16,13 @@ The chain of reasoning it has to survive:
      each candidate is walked forward bar by bar on real 5m data to first touch
      of stop or target. No lookahead, no optimistic fills: whichever is touched
      first wins, and a bar that contains both is scored as the stop.
-  4. R is then converted to money with the model fitted on 601 archived trades,
-     premium% = 8.59 x R - toll. That model predicted all three spread-ceiling
-     arms within 0.25 points, so it is the honest bridge from R to cash.
+  4. The move is then converted to money with the model fitted on 601 archived
+     trades. Converted from the **underlying move**, never from R: R is the move
+     divided by the stop, so a slope fitted at 0.68% stops says nothing about an
+     arm with 2.5% stops. Reading the first version of this tool's output as if
+     it did made the swing arm look 4.5 points better than it is.
+  5. And charged theta, which the fitted model omits because the book it was fit
+     on held for two hours. An arm that holds two sessions pays for them.
 
 Cost: no option quotes, no network if the cache is warm.
 
@@ -56,12 +60,34 @@ from app.strategies.setup_registry import is_short_setup
 
 ET = "America/New_York"
 
-# premium% = SLOPE x R - toll, fitted on 601 archived trades (R^2 = 0.80).
-# The toll is the quoted spread crossed twice; 3.40 is what the book actually
-# paid at OPTION_MAX_SPREAD_PCT=6, 1.12 is the measured figure at a ceiling of 2.
-PREMIUM_SLOPE = 8.59
+# premium% = 8.59 x R - toll, fitted on 601 archived trades (R^2 = 0.80).
+#
+# That slope CANNOT be applied to R from an arm with different stops, and doing
+# so is the mistake this constant exists to prevent. R is the move divided by
+# the stop distance, so a slope fitted where stops averaged 0.68% means "8.59
+# points of premium per 0.68% of underlying". An arm whose stops average 2.5%
+# has a completely different number of premium points per R.
+#
+# So the model is restated in the term that does transfer -- premium points per
+# 1% of underlying move -- and every arm is converted through the move it
+# actually captured, not through its R.
+PREMIUM_PER_R_AT_FIT = 8.59
+MEAN_STOP_PCT_AT_FIT = 0.683
+PREMIUM_PER_UNDERLYING_PCT = PREMIUM_PER_R_AT_FIT / MEAN_STOP_PCT_AT_FIT
+
+# Cross-check, because the number above is doing a lot of work: a ~50 delta
+# contract costing ~3% of notional moves 1% x 0.5 / 3% = 16.7% of premium per
+# 1% of underlying. 12.6 is the same order, measured rather than assumed.
+
 TOLL_AT_CEILING_6 = 3.40
 TOLL_AT_CEILING_2 = 1.12
+
+# Extrinsic decay per session, as a fraction of premium. For an ATM option
+# premium scales with sqrt(T), so dP/P = 0.5 x dT/T -- about 2.4%/session at 21
+# DTE. Zero for the intraday book, which is why the fitted model omits it
+# entirely and why applying that model to a multi-session hold overstates it.
+THETA_PCT_PER_SESSION = 2.4
+BARS_PER_SESSION = 78
 
 
 def scan_grid(trading_day, cadence_minutes, start="09:45", end="15:30"):
@@ -419,7 +445,27 @@ def summarise(rows):
 
             print(f"  mean MFE {sum(mfes)/len(mfes):+.2f}R")
 
-        # The only line that matters. R is blind to the spread; this is not.
+        # The only lines that matter, and they are computed from the underlying
+        # move rather than from R -- see PREMIUM_PER_UNDERLYING_PCT. Two arms
+        # with the same R and different stops do not earn the same money.
+        moves = [
+            r[f"{label}_r"] * r[f"{label}_stop_pct"] for r in resolved
+        ]
+        mean_move = sum(moves) / len(moves)
+        delta_pnl = PREMIUM_PER_UNDERLYING_PCT * mean_move
+
+        sessions = (sum(bars) / len(bars)) / BARS_PER_SESSION
+        theta = THETA_PCT_PER_SESSION * sessions
+
+        print(
+            f"  mean underlying move captured: {mean_move:+.4f}% of price"
+            f"   (mean MFE {sum(m for m in mfes)/len(mfes) if mfes else 0:+.2f}R)"
+        )
+        print(
+            f"  premium from delta: {delta_pnl:+.2f}%"
+            f"   theta over {sessions:.1f} sessions: -{theta:.2f}%"
+        )
+
         for toll, name in (
             (TOLL_AT_CEILING_6, "spread ceiling 6"),
             (TOLL_AT_CEILING_2, "spread ceiling 2"),
@@ -427,27 +473,23 @@ def summarise(rows):
 
             print(
                 f"  implied premium return @ {name}: "
-                f"{PREMIUM_SLOPE * mean_r - toll:+.2f}%"
+                f"{delta_pnl - toll - theta:+.2f}%"
+                f"   (before theta {delta_pnl - toll:+.2f}%)"
             )
 
-        break_even_r = TOLL_AT_CEILING_2 / PREMIUM_SLOPE
-
-        verdict = (
-            "CLEARS"
-            if mean_r >= break_even_r
-            else f"short by {break_even_r - mean_r:.3f}"
-        )
+        # What the move would have to be, in the term that transfers.
+        needed = (TOLL_AT_CEILING_2 + theta) / PREMIUM_PER_UNDERLYING_PCT
 
         print(
-            f"  R needed to break even at ceiling 2: {break_even_r:.3f}"
-            f"   ({verdict})"
+            f"  underlying move needed to break even at ceiling 2: "
+            f"{needed:+.3f}%   (captured {mean_move:+.4f}%)"
         )
 
 
 def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--days", required=True, help="comma-separated YYYY-MM-DD")
+    parser.add_argument("--days", default=None, help="comma-separated YYYY-MM-DD")
     parser.add_argument("--symbols", default=None)
     parser.add_argument("--cadence", type=int, default=15)
     parser.add_argument("--lookback-days", type=int, default=5)
@@ -459,7 +501,19 @@ def main():
         "three sessions, the horizon a MULTIDAY position is opened against",
     )
     parser.add_argument("--out", default=None)
+    parser.add_argument(
+        "--summarise",
+        default=None,
+        help="re-read a saved run and summarise it again, without recomputing. "
+        "The walk takes 45 minutes; asking a second question of it should not.",
+    )
     args = parser.parse_args()
+
+    if args.summarise:
+
+        summarise(json.loads(pathlib.Path(args.summarise).read_text()))
+
+        return
 
     days = [d.strip() for d in args.days.split(",") if d.strip()]
     symbols = (
