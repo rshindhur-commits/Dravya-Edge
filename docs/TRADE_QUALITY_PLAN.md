@@ -176,8 +176,54 @@ on 550 trades.
 gain, and trade shape is untouched: 48% still never travel, mean peak is still
 0.39R. This buys back a quarter of the toll and nothing else.
 
-**Open:** whether 2% is better still. The trend says tighten; the volume cost so
-far is mild (11% fewer trades), but it will not stay mild.
+### 1.4b Ceiling 2% — **RUN 2026-08-09, and it bounds the whole approach**
+
+| | 6% | 3% | **2%** |
+|---|---|---|---|
+| return on capital | −3.00% | −2.29% | **−1.12%** |
+| per trade | −$11.9 | −$8.3 | **−$3.4** |
+| mean R | +0.007 | +0.009 | **+0.048** |
+| trades | 291 | 260 | 193 |
+| mean spread paid | 3.44% | 2.29% | **1.48%** |
+
+**+1.85 points, +2.33sd** on the full sample — the only result all weekend to
+clear the 2sd bar in section 3. Positive in both halves (+2.89 discovery, +0.86
+holdout; the decay is real and worth watching). Toll cut 1.96 points, book
+improved 1.85 — the mechanism accounts for essentially all of it.
+
+**The section 1a model predicted all three arms before they ran:**
+
+| ceiling | 8.59 × R − toll | measured |
+|---|---|---|
+| 6% | −3.38% | −3.15% |
+| 3% | −2.21% | −2.40% |
+| 2% | −1.07% | −1.30% |
+
+A model fitted on 601 unrelated trades forecasting three interventions to within
+0.25 points is the strongest evidence produced here. It also means the model can
+now be trusted to answer the question the experiments were circling.
+
+### 1.4c What the model says about the ceiling of this lever
+
+Set the toll to **zero** — better than any ceiling can achieve — and the arm at
+2% returns:
+
+```
+8.59 x 0.048 - 0 = +0.41%
+```
+
+**+0.41% is the theoretical maximum of all transaction-cost work.** Not the
+practical maximum; the arithmetic one, with fees abolished. Two thirds of the
+available reduction has already been taken, and what remains is worth about 1.5
+points at best.
+
+Combined with section 1a's other bound — perfect exits plus perfect loss-cutting
+reach +0.20% — **every lever except one is now measured and bounded below
+break-even.**
+
+The exception is mean R itself. At the current 0.048 nothing works. At 0.40,
+with today's toll, the same book returns +1.96%. That is the only remaining
+question worth asking, and it is section 2.2.
 
 ### 1.4 Measure the entry spread distribution, then test a ceiling
 Not yet measured. Live payloads carry `option_entry_spread_pct` (SMCI on 08-05
@@ -256,6 +302,163 @@ different setup, or a different instrument.
 
 If the answer is no, no further tuning is warranted, and that is a finding
 worth having early rather than after another quarter.
+
+#### 2.2a Why it cannot, as built — **the anchor, not any knob**
+The blocker is one line. `EMA_PULLBACK`, 183 of 310 archived trades, sets its
+stop to `min(bar low − atr*0.15, EMA9 − atr*0.10)` on the **15m** frame. For a
+liquid megacap that bar's own low sits a fraction of a percent from price, so
+the stop lands at 0.5–0.75%, a 2R target at ~1.5%, and mean peak is 0.39R ≈
+0.3% of price — inside the ordinary noise band of the names traded. The option
+round trip costs 1.5–3.4%. The strategy is structurally unable to reach a move
+that pays for the instrument expressing it.
+
+Three things that looked like the constraint and are not:
+
+| suspected | measured |
+|---|---|
+| `max_stop_distance_pct` cap | raising it alone changes nothing — nothing produces stops that wide |
+| `stop_atr_multiplier` | `EMA_PULLBACK` never reads it |
+| the ATR offset | 4× offset buys a **1.53×** stop; the bar's low dominates and does not scale. 3% would need ~14× |
+
+Pinned in `tests/test_distance_scale.py`.
+
+#### 2.2b The higher-timeframe anchor — **built 2026-08-09**
+`app/risk/swing_anchor.py`, behind `SWING_STRUCTURE_ENABLED` (default off).
+Anchors the stop to a swing pivot on the **1h** frame, which sits 1–4% away
+because that is what a swing pivot is. Scanner, gates, entry rules and contract
+selection are untouched.
+
+Four things move together or the arm silently runs the control — the failure
+that made three earlier arms byte-identical to their baselines:
+
+* the anchor (1h pivot ± `SWING_STOP_ATR_BUFFER` × 1h ATR)
+* `SWING_MIN_STOP_DISTANCE_PCT` 1.0 replaces the 0.50 floor
+* `SWING_MAX_STOP_DISTANCE_PCT` 4.0 replaces the 0.75–1.15 ceiling
+* `EXIT_MOMENTUM_ENABLED=false` — otherwise a 3% stop is decided by a
+  nine-period EMA within minutes and the wider anchor is paid for and never used
+
+The first three are applied together by `calculate_risk` so they cannot be
+half-set; the fourth is named in `swing_anchor.describe_mode()` so a run that
+forgot it is visible in its own output. A missing or too-short 1h frame
+**rejects the trade** rather than falling back to the intraday anchor, because a
+silent fallback blends treatment and control inside one arm.
+
+**Known side effect, and it is a loss of filtering.** Reward is a fixed multiple
+of risk, so RR is constant at `SWING_TARGET_RR` and the 1.5 floor can never
+fire. On a 4-day smoke test that took candidates clearing the gates from 40 to
+73 of 83. More trades at equal R is not an improvement. `SWING_HEADROOM_MULTIPLE`
+(default 0, off) restores filtering in the term that matters at this timeframe —
+whether there is room to the next 1h level to reach the target at all — and is
+kept separable so the two effects do not arrive mixed together.
+
+#### 2.2c Measuring it without spending quota
+`tools/swing_anchor_geometry.py` answers this from **cached underlying bars, no
+option quotes, no network**. Each candidate is walked forward bar by bar on real
+5m data to first touch of stop or target; a bar containing both scores as the
+stop, since intrabar order is unknowable at 5m and assuming otherwise
+manufactures exactly the edge being looked for. One position per symbol at a
+time, tracked per arm, because the control exits in minutes and can re-enter
+while the swing arm cannot — that difference in trade count is half of what
+return on capital measures. R is then converted with the §1a model.
+
+Limitation, stated because it favours the treatment: the walk uses pure
+stop/target and bypasses the exit engine, so it does not give the control its
+measured loss-limiting from momentum exits. Compare the swing arm against the
+**actually measured** control (−1.12% at ceiling 2), not against this run's
+control column.
+
+#### 2.2d RUN 2026-08-09, 21 sessions, 5,590 candidates — **the anchor works and it is not enough**
+
+| | control | swing |
+|---|---|---|
+| median stop | 0.54% | **2.27%** |
+| trades taken | 796 | 342 |
+| win rate | 32% | **43%** |
+| mean R | −0.025 | −0.007 |
+| **underlying move captured** | **−0.0123%** | **+0.0436%** |
+| median hold | 13 bars | 188 bars (~2.4 sessions) |
+| premium from delta | −0.15% | **+0.55%** |
+| theta over the hold | −0.83% | **−5.07%** |
+| **at ceiling 2** | −1.27% before theta | **−0.57% before theta, −5.64% after** |
+
+**The anchor does what it was built to do.** Stops move 0.54% → 2.27%, win rate
+32% → 43%, and the underlying move captured flips sign, −0.0123% → +0.0436% of
+price. Before carrying cost the book improves by 0.70 points, from −1.27% to
+−0.57%. That is the largest single improvement any lever has produced.
+
+**And it loses to theta by seven to one.** Collecting that 0.70 points requires
+holding 2.1 sessions, which costs 5.07% of premium in decay. Net −5.64%, against
+the measured −1.12% the app books today. *Widening the stop makes the options
+book worse*, and it does so through the one cost the §1a model never contained,
+because that model was fitted on a book that held for two hours.
+
+46% of swing trades (151 of 331) exited on time rather than at stop or target:
+the target is too far to be reached inside three sessions, so they pay full
+decay for an unresolved position.
+
+**A correction worth recording.** The first version of this study reported
+−1.18% for the swing arm by applying `premium% = 8.59 × R − toll` directly to
+its R. That slope was fitted where stops averaged 0.68%; R is the move *divided
+by* the stop, so it cannot be carried to an arm whose stops average 2.5%. Every
+arm must be converted through the underlying move it actually captured. The
+model is now stated as **12.6 premium points per 1% of underlying** — which
+cross-checks against a ~50 delta contract costing ~3% of notional (16.7 points)
+and, with theta excluded, reproduces the measured control to within 0.15 points.
+
+#### 2.2e What this closes
+§2.2 is answered: **no.** Three independent bounds sit below break-even — spread
+ceiling +0.41% at zero toll, perfect exits +0.20%, and larger moves −5.64%.
+Larger moves is not merely bounded, it is *negative*, and it was the last lever
+with a ceiling above zero. No further tuning of this as an options strategy is
+warranted.
+
+#### 2.2f RUN 2026-08-09, hold sweep — **and the +14.43% does not survive it**
+
+The obvious follow-up: the anchor creates edge but needs 2.1 sessions to collect
+it, while the intraday version holds two hours and has none. Is there a hold in
+between where the edge has arrived and the decay has not? Five arms, same 21
+sessions, each cap its own arm with its own position lock.
+
+| hold | trades | captured/trade | t |
+|---|---|---|---|
+| control (13 bars) | 792 | −0.0123% | −0.33 |
+| 20 bars | 1026 | +0.0144% | +0.46 |
+| 39 bars | 718 | −0.0538% | −1.15 |
+| 78 bars | 468 | −0.0713% | −0.86 |
+| 156 bars | 438 | −0.1332% | −1.16 |
+| 234 bars | 331 | +0.0436% | +0.28 |
+
+**The sign flips positive → negative → positive across adjacent hold caps on the
+same data.** A real effect varies smoothly with hold length. |t| < 1.2 on every
+arm; none is distinguishable from zero.
+
+And the number this document reported an hour earlier as the project's first
+positive result:
+
+```
+swing_h234:  mean +0.0436%   95% CI [-0.2709, +0.3420]
+             without its top 5 trades (of 331):  -0.0735%
+             median trade: -0.75% of price
+```
+
+Five trades of 331 carry 266% of the total. The median trade loses 0.75% of
+price. **The claim that the signal works and only the instrument is wrong was
+built on the mean of a lottery-ticket distribution and is withdrawn.** The check
+that would have caught it — bootstrap the mean, and re-read it without the top
+few trades — costs seconds and now runs beside every arm.
+
+#### 2.2g The one thing that does survive, and it is worth having
+For the intraday control, 792 trades give SE = 0.037% per trade. An edge large
+enough to break even at spread ceiling 2 (+0.155%) would appear as **t = 4.2**.
+Observed: **−0.33**.
+
+So an edge sufficient to pay for options is *ruled out* for the strategy as it
+runs today — a real conclusion, not an absence of one, and the one that stops
+money being spent looking for it.
+
+For the swing arm nothing is ruled out either way: SE 0.157% against a 0.492%
+requirement. Several hundred more sessions would be needed to say anything, and
+the theta arithmetic in §2.2d says it loses even if the edge is real.
 
 ### 2.3 Is the signal late?
 Your original diagnosis, still untested: entries arriving after the move has
