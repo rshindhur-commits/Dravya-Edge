@@ -102,6 +102,38 @@ the comparison. No quota.*
 
 ---
 
+## Daily log
+
+One line a working day: what moved, what is blocked, on or behind timeline.
+Newest first. A day with no movement gets an entry saying so — a silent gap is
+indistinguishable from a day nobody looked.
+
+### Mon 11 Aug — planned
+S01, S02, S03 against the first full session after the deploy. No code changes
+during market hours. Nothing to decide.
+
+### Sun 9 Aug — **on timeline**
+Pushed and deployed (branch `Claude_POA`, merged to `main`). **Production
+behaviour is unchanged** — every flag added this weekend is inert at its default
+and the research package is not imported by the scanner.
+
+* **Done:** S04 (dataset, 5,590 rows, 100% label coverage), S05 (out-of-sample
+  framework, split fixed and committed before anything was evaluated), S05a
+  (null model).
+* **Found:** entry timing is **worse than random** by 0.12–0.31 points, 20/20
+  draws at every horizon, train and holdout agreeing within 0.06. See
+  TRADE_QUALITY_PLAN §2.2h.
+* **Consequence:** a Cycle 0 is added ahead of S08 — *remove* the entry trigger
+  and keep the direction call. If the trigger costs a quarter of a point,
+  deleting it is worth more than any feature currently planned, and the harness
+  can already answer it.
+* **Withdrawn:** the "+14.43% captured, signal works" claim from earlier the
+  same day. It was 5 trades of 331.
+
+- [ ] **S08a** Cycle 0 — does removing the entry trigger beat keeping it? *(added 9 Aug, runs first in Phase 1)*
+
+---
+
 ## Branch points, stated in advance
 
 | if | then |
