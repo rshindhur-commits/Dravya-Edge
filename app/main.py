@@ -43,6 +43,7 @@ from app.diagnostics import (
 )
 from app.indicators.daily_context import daily_context
 from app.risk.iv_richness import enforce_iv_richness, evaluate_iv_richness
+from app.risk.option_leverage import enforce_option_leverage, evaluate_option_leverage
 from app.risk.stop_viability import enforce_stop_viability, evaluate_stop_viability
 from app.gates import (
     build_entry_gate_diagnostics,
@@ -2676,6 +2677,55 @@ def _add_stop_viability(row):
         f"{viability.get('round_trip_spread_pct')}% round-trip spread "
         f"({viability.get('spread_multiple')}x, need "
         f"{viability.get('required_multiple')}x)"
+    )
+    row["Rejected Trade Reason"] = row["Action Reason"]
+
+    return row
+
+
+def _add_option_leverage(row):
+    """Flag entries whose contract barely amplifies the move being paid for.
+
+    Runs beside _add_stop_viability and not inside it: the two ask different
+    questions of the same two prices, and folding them together would file a
+    leverage rejection under STOP_INSIDE_OPTION_SPREAD, leaving neither rule's
+    rejection rate readable.
+
+    Off unless OPTION_MIN_LEVERAGE and OPTION_LEVERAGE_ENFORCE are both set --
+    the floor was derived on the archive, so it observes until tools/gate_ab.py
+    confirms it on sessions it was not fitted to.
+    """
+
+    row = dict(row)
+
+    leverage = evaluate_option_leverage(
+        row.get("Candidate Entry Price"),
+        row.get("Option Mid Price") or row.get("Option Ask"),
+    )
+
+    enforcing = enforce_option_leverage()
+
+    row["OPTION_LEVERAGE"] = leverage.get("leverage")
+    row["OPTION_LEVERAGE_VERDICT"] = leverage.get("reason")
+    row["OPTION_REQUIRED_LEVERAGE"] = leverage.get("required_leverage")
+    row["OPTION_LEVERAGE_ENFORCED"] = enforcing
+
+    # None means "not enough information", which must not block a trade.
+    if leverage.get("viable") is not False:
+        return row
+
+    if str(row.get("Action Status") or "").upper() not in _ENTRY_ACTION_STATUSES:
+        return row
+
+    if not enforcing:
+        row["OPTION_LEVERAGE_WOULD_BLOCK"] = True
+        return row
+
+    row["Action Status"] = "AVOID"
+    row["Blocked By"] = "LEVERAGE_BELOW_FLOOR"
+    row["Action Reason"] = (
+        f"Contract moves {leverage.get('leverage')}% per 1% of underlying, "
+        f"below the {leverage.get('required_leverage')}x floor"
     )
     row["Rejected Trade Reason"] = row["Action Reason"]
 
@@ -7157,6 +7207,9 @@ def _run_scanner_impl():
                 result_row
             )
             result_row = _add_stop_viability(
+                result_row
+            )
+            result_row = _add_option_leverage(
                 result_row
             )
             result_row = _add_iv_richness(
