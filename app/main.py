@@ -47,7 +47,8 @@ from app.risk.stop_viability import enforce_stop_viability, evaluate_stop_viabil
 from app.gates import (
     build_entry_gate_diagnostics,
     EntryGateConfig,
-    evaluate_entry_gate
+    evaluate_entry_gate,
+    scanner_entry_gate_config
 )
 from app.gates.setup_quality import MIN_SETUP_BASE, setup_percent_from_row
 from app.indicators.technical_indicators import (
@@ -232,26 +233,16 @@ def _regression_market_snapshot(df_5m, df_15m, df_1h):
 # below which a row is not a setup at all, while this is the scanner's own bar
 # for putting a candidate forward. It is now nameable and tunable instead of
 # being a literal buried in module scope.
-SCANNER_ENTRY_GATE_CONFIG = EntryGateConfig(
-    min_rr=get_float_env("SCANNER_GATE_MIN_RR", 2.0),
-    min_setup_percent=get_float_env("SCANNER_GATE_MIN_SETUP", 70.0),
-    min_option_quality=get_float_env(
-        "OPTION_MIN_QUALITY_SCORE",
-        65.0,
-    ),
-    # 6.0, not 10.0, because that is what app/config/settings.py has defaulted
-    # this same variable to all along. Restating the name here but not the
-    # default is the identical defect the comment above describes, one layer
-    # down: where the variable is unset the two disagree, and rule_evaluation
-    # shows which one won -- 1,337 ENTRY evaluations recorded required_value
-    # 10.0, through 2026-08-05, against a configuration that says 6.
-    #
-    # It is not cosmetic. 947 contracts passed this gate and 202 of them (21%)
-    # were wider than 6%, admitted only by this default. At a measured round
-    # trip of 3.40 points against 8.59 points per R, a contract quoted 10% wide
-    # has to travel more than 1R before it is worth owning.
-    max_spread_pct=get_float_env("OPTION_MAX_SPREAD_PCT", 6.0),
-)
+# Built by `scanner_entry_gate_config()` beside the dataclass, not restated
+# here, because the gate audit needs the same thresholds and had no way to
+# reach them: `build_rule_evaluations` fell back to a bare `EntryGateConfig()`
+# and wrote *its* defaults into rule_evaluation. Two copies is how the spread
+# ceiling came to be enforced at one value and recorded at another.
+#
+# `min_setup_percent` stays above MIN_SETUP_BASE deliberately: 62 is the floor
+# below which a row is not a setup at all, while this is the scanner's own bar
+# for putting a candidate forward.
+SCANNER_ENTRY_GATE_CONFIG = scanner_entry_gate_config()
 
 
 def _add_holding_profiles(df):

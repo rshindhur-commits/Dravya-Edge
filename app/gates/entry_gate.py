@@ -29,6 +29,37 @@ class EntryGateConfig:
     max_spread_pct: float = 10.0
 
 
+def scanner_entry_gate_config():
+    """The thresholds the scanner actually enforces, read from configuration.
+
+    The dataclass defaults above are a floor for callers with no configuration,
+    not the deployed bar, and the two differ: `max_spread_pct` defaults to 10.0
+    here while `OPTION_MAX_SPREAD_PCT` has been 6 since 2026-07-30.
+
+    This lives beside the dataclass rather than in app/main.py because the gate
+    *audit* needs it too. `build_rule_evaluations` had no config to pass and so
+    constructed a bare `EntryGateConfig()`, which meant every persisted
+    `Option Spread` row recorded `required_value 10.0` regardless of what the
+    worker enforced -- on 2026-08-10 that was 50 of 50 rows, alongside 733
+    `RR` rows at the 1.8 default sitting next to 801 at the real 2.0. An audit
+    that reports its own defaults cannot answer "what did the gate enforce",
+    which is the one question it exists to answer, and the research cycles in
+    docs/DELIVERY_PLAN.md read exactly that column.
+
+    A function rather than a module constant so a changed variable takes effect
+    without a reimport; every lookup is a dict read.
+    """
+
+    from app.config.settings import get_float_env
+
+    return EntryGateConfig(
+        min_rr=get_float_env("SCANNER_GATE_MIN_RR", 2.0),
+        min_setup_percent=get_float_env("SCANNER_GATE_MIN_SETUP", 70.0),
+        min_option_quality=get_float_env("OPTION_MIN_QUALITY_SCORE", 65.0),
+        max_spread_pct=get_float_env("OPTION_MAX_SPREAD_PCT", 6.0),
+    )
+
+
 def _row_get(row, *names, default=None):
 
     for name in names:
