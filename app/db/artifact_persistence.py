@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.db.candidate_snapshot_repository import CandidateSnapshotRepository
 from app.db.decision_waterfall_repository import DecisionWaterfallRepository
 from app.db.persistence import record_gate_decisions, record_scanner_run_finish
+from app.runtime.config_snapshot import config_snapshot
 from app.runtime.process_memory import memory_snapshot
 from app.db.rule_evaluation_repository import RuleEvaluationRepository
 from app.db.scanner_snapshot_repository import ScannerSnapshotRepository
@@ -58,6 +59,11 @@ def persist_scan_artifacts(records, trading_day, scan_id, health_payload, output
             # heartbeat cannot carry this: it upserts on owner, so it only ever
             # holds the last value, and a leak is only visible as a slope.
             **memory_snapshot(),
+            # The thresholds this scan enforced. Settings live in Render, which
+            # is not in git, so a change to one used to leave no record anywhere
+            # -- the spread ceiling moved from 6 to 2 and cost a session's
+            # investigation to establish. Now it is a query.
+            **config_snapshot(),
         },
     )
 

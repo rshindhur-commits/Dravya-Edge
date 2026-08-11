@@ -1,8 +1,8 @@
 from app.gates.rule_evaluation import build_rule_evaluations
 
 
-def test_build_rule_evaluations_records_actual_thresholds():
-    evaluations = build_rule_evaluations({
+def _row(**overrides):
+    row = {
         "Symbol": "NVDA",
         "Entry": "EMA_PULLBACK",
         "Action Status": "ENTER_PAPER",
@@ -16,17 +16,55 @@ def test_build_rule_evaluations_records_actual_thresholds():
         "Candidate Entry Price": 100,
         "Candidate Stop Price": 98,
         "Candidate Target Price": 104,
-    }, "scan-1")
+    }
+    row.update(overrides)
+    return row
 
-    by_name = {item.rule_name: item for item in evaluations}
+
+def test_build_rule_evaluations_records_actual_thresholds(monkeypatch):
+    """The recorded bar is the deployed one, not the dataclass default.
+
+    Pinned through the environment rather than left to whatever .env the run
+    picks up, so this asserts a value it controls.
+    """
+
+    monkeypatch.setenv("SCANNER_GATE_MIN_RR", "2.0")
+    monkeypatch.setenv("SCANNER_GATE_MIN_SETUP", "70.0")
+
+    by_name = {item.rule_name: item for item in build_rule_evaluations(_row(), "scan-1")}
+
     assert by_name["RR"].actual_value == 1.74
-    assert by_name["RR"].required_value == 1.8
+    assert by_name["RR"].required_value == 2.0
     assert not by_name["RR"].passed
     assert by_name["RR"].blocked_trade
     assert by_name["Quote Freshness"].actual_value == "STALE_QUOTE"
     assert not by_name["Quote Freshness"].passed
     assert by_name["Quote Freshness"].evaluation_phase == "ENTRY"
     assert by_name["Quote Freshness"].to_record()["evaluation_phase"] == "ENTRY"
+
+
+def test_the_audit_never_falls_back_to_the_dataclass_default(monkeypatch):
+    """Regression: a persisted audit that reports its own defaults is unfalsifiable.
+
+    `build_rule_evaluations` is called with no config by all five of its callers,
+    and every one of them persists what it builds. While it constructed a bare
+    `EntryGateConfig()` the spread ceiling was recorded as 10.0 no matter what
+    the worker enforced -- 50 of 50 rows on 2026-08-10 against a deployed 6 --
+    so "what did the gate require" could not be answered from the audit that
+    exists to answer it.
+    """
+
+    monkeypatch.setenv("OPTION_MAX_SPREAD_PCT", "3.0")
+
+    spread = {
+        item.rule_name: item
+        for item in build_rule_evaluations(_row(**{"Option Spread %": 7.5}), "scan-1")
+    }["Option Spread"]
+
+    # 7.5 clears the 10.0 dataclass default and fails the deployed 3.0. Which
+    # number the audit used is therefore visible in `passed`, not just recorded.
+    assert spread.required_value == 3.0
+    assert not spread.passed
 
 
 def _candidate_without_a_contract():

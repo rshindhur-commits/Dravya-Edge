@@ -8,6 +8,7 @@ from app.gates.entry_gate import (
 	has_active_symbol_trade,
 	is_symbol_in_cooldown,
 	price_geometry_error,
+	scanner_entry_gate_config,
 	symbol_trade_count_today,
 	validate_price_geometry
 )
@@ -23,6 +24,7 @@ __all__ = [
 	"has_active_symbol_trade",
 	"is_symbol_in_cooldown",
 	"price_geometry_error",
+	"scanner_entry_gate_config",
 	"symbol_trade_count_today",
 	"validate_price_geometry"
 ]

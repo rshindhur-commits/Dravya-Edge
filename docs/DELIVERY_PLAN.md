@@ -1,5 +1,12 @@
 # Delivery plan — every step from here to subscribers
 
+> **Superseded on 2026-08-10 by [OPTIONS_QUALITY_PLAN.md](OPTIONS_QUALITY_PLAN.md).**
+> Gate 1 (S11) was reached four weeks early and **answered no**: all three
+> research cycles were rejected on the holdout. Track work in the new plan.
+>
+> This file is kept as the record of what was tried and why, which is the reason
+> the new plan looks the way it does. Steps below are not being worked.
+
 Single tracked checklist. The last step is adding subscribers back to the
 Telegram channel. Reasoning behind the phases is in [ROADMAP.md](ROADMAP.md);
 this file is state — tick a box only when evidence says so, and name the
@@ -56,8 +63,22 @@ the comparison. No quota.*
 - [ ] **S09** Cycle 2 — regime conditioning on SMH/XLK/XLF/XLE/VIXY (already fetched, barely used; `market_regime` today comes from the symbol's own bars)
 - [ ] **S10** Cycle 3 — event exclusion and time-of-day as measured factors (neither is a factor at all today)
 
-### ▶ GATE 1 · Mon 7 Sep — **this gate can answer no**
-- [ ] **S11** Does any candidate reach **≥ +0.155% captured move per trade on the holdout split**, with the comparison count recorded?
+### ▶ GATE 1 · reached Mon 10 Aug, four weeks early — **ANSWERED NO**
+- [x] **S11** Does any candidate reach **≥ +0.155% captured move per trade on the holdout split**, with the comparison count recorded?
+  * **Answer: no.** Five arms in `research/comparisons.jsonl`. S08a (remove the
+    entry trigger) was better on train at every horizon and worse on holdout at
+    every horizon — the overfit shape. S08 (cross-sectional rank) and S09 (regime
+    conditioning on SPY/QQQ) mostly preferred *no filter at all* on train, so the
+    features do not separate winners from losers even in sample. Where a threshold
+    was chosen the holdout delta was +0.02% to +0.06% with an interval spanning
+    zero. Both arms miss the bar at every tradeable horizon, with the trigger or
+    without it.
+  * **S10 was not run.** The pre-agreed rule below is explicit that three failed
+    cycles is not a reason for a fourth on the same feature set.
+  * *Note:* one arm returned CONFIRMED at 234 bars and was spurious — holdout longs
+    paid +1.48% and shorts −0.15%, market drift rather than signal. A drift guard
+    now downgrades that to `DRIFT_NOT_EDGE`; 234 bars is also ~3 sessions, which
+    285 of 291 archived trades could never hold.
   * **Pass** → S12.
   * **Fail** → stop research. Decide between: change the instrument (shares need ~2bp of edge, not 6bp), change the universe (26 megacaps is the hardest possible pond), or stop. **Agreed in advance: three failed cycles is information, not bad luck, and not a reason for a fourth on the same feature set.**
 
@@ -99,6 +120,56 @@ the comparison. No quota.*
 
 ## ▶ The last step
 - [ ] **S28** **Add subscribers back to the Telegram channel**
+
+---
+
+## Daily log
+
+One line a working day: what moved, what is blocked, on or behind timeline.
+Newest first. A day with no movement gets an entry saying so — a silent gap is
+indistinguishable from a day nobody looked.
+
+### Mon 10 Aug — **Gate 1 answered no; this plan is superseded**
+The August dates in this file were wrong by a day — "Mon 11 Aug" is a Tuesday —
+so Phase 0 ran today, not tomorrow.
+
+* **S01 failed.** `rss_mb` is not flat: 231 → 752 MB across the session,
+  +23 MB/h premarket rising to +63 MB/h in session. The instrumentation works;
+  the answer it gives is "not fixed".
+* **S02 passed.** 115 scans, 04:06 → 16:16 ET, zero failures, zero exceptions,
+  no gaps, no orphaned positions. `tools/daily_report.py`: "nothing to flag".
+* **S03 was unanswerable as written** and is now answerable. `required_value` on
+  the spread rule recorded `EntryGateConfig` defaults, not the deployed bar —
+  50 of 50 rows at 10.0 against a configuration saying 6. Fixed in `d2fb9c6`.
+* **S08a, S08, S09 all rejected.** See Gate 1 above.
+* **Cause of the trade collapse found**, and it was not a code change:
+  `OPTION_MAX_SPREAD_PCT` moved 6 → 2 in Render between 5 and 10 Aug, capping
+  every accepted contract at exactly 2.00% and cutting acceptances 122 → 24.
+  Recorded in [CONFIG_CHANGELOG.md](../CONFIG_CHANGELOG.md).
+* **Two sessions lost.** 6 and 7 Aug have no rows in any table; the worker was
+  down and no deploy occurred in that window.
+
+Work continues in [OPTIONS_QUALITY_PLAN.md](OPTIONS_QUALITY_PLAN.md).
+
+### Sun 9 Aug — **on timeline**
+Pushed and deployed (branch `Claude_POA`, merged to `main`). **Production
+behaviour is unchanged** — every flag added this weekend is inert at its default
+and the research package is not imported by the scanner.
+
+* **Done:** S04 (dataset, 5,590 rows, 100% label coverage), S05 (out-of-sample
+  framework, split fixed and committed before anything was evaluated), S05a
+  (null model).
+* **Found:** entry timing is **worse than random** by 0.12–0.31 points, 20/20
+  draws at every horizon, train and holdout agreeing within 0.06. See
+  TRADE_QUALITY_PLAN §2.2h.
+* **Consequence:** a Cycle 0 is added ahead of S08 — *remove* the entry trigger
+  and keep the direction call. If the trigger costs a quarter of a point,
+  deleting it is worth more than any feature currently planned, and the harness
+  can already answer it.
+* **Withdrawn:** the "+14.43% captured, signal works" claim from earlier the
+  same day. It was 5 trades of 331.
+
+- [ ] **S08a** Cycle 0 — does removing the entry trigger beat keeping it? *(added 9 Aug, runs first in Phase 1)*
 
 ---
 

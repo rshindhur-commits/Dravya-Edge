@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-from app.gates.entry_gate import EntryGateConfig, build_entry_gate_rule_evaluations
+from app.gates.entry_gate import (
+    EntryGateConfig,
+    build_entry_gate_rule_evaluations,
+    scanner_entry_gate_config,
+)
 
 
 OPERATIONAL_RULE_GROUPS = {"TELEGRAM", "PAPER", "REVIEW", "TRADE LIFECYCLE", "REPLAY"}
@@ -66,7 +70,10 @@ def _evaluation(scan_id, row, name, group, actual, required, passed, priority=10
 def build_rule_evaluations(row, scan_id, config=None):
     """Create a uniform, queryable gate audit from an already-scored scanner row."""
     row = row or {}
-    evaluations = build_entry_gate_rule_evaluations(row, config or EntryGateConfig(), scan_id)
+    # Falls back to the *deployed* thresholds, never to the dataclass defaults.
+    # Every caller here persists what it builds, so a bare EntryGateConfig() put
+    # its own defaults into the audit and made the recorded bar unfalsifiable.
+    evaluations = build_entry_gate_rule_evaluations(row, config or scanner_entry_gate_config(), scan_id)
     telegram = row.get("Telegram Eligibility")
     if telegram is not None:
         evaluations.append(_evaluation(scan_id, row, "Telegram", "Telegram", telegram, "ELIGIBLE", str(telegram).upper() in {"ELIGIBLE", "SENT"}, 60))
