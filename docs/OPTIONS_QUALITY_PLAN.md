@@ -39,10 +39,56 @@ roughly nothing. That is the whole problem in two lines.
   *Evidence:* `scanner_runs.payload->'config'`, `app/runtime/config_snapshot.py`
 - [x] **S-A2** Record contract leverage on every priced contract
   *Evidence:* `app/risk/option_leverage.py`, off by default, records regardless
-- [ ] **S-A3** Capture full chain quality per candidate — best available spread, OI,
+- [x] **S-A3** Capture full chain quality per candidate — best available spread, OI,
   delta and cost, not only the contract selected
-  *Done when:* a session can answer "what was the best contract available for NVDA
-  at 10:15, and why was it not taken?"
+  *Evidence:* `app/options/chain_quality.py`, `CHAIN_*` fields on every row.
+
+  **Capture was already complete** and this is worth recording, because it was
+  not what the step assumed. Since `6af092e`/`65361cb` every attempt carries 21
+  fields — strike, dte, open interest, volume, bid, ask, delta, iv, cost, quote
+  status, threshold — durably in `scanner_snapshot.decision_payload`. It is
+  stored there as a **JSON string inside JSONB**, so Postgres cannot see into
+  it and each question needed a 233 MB table pulled and parsed in Python. The
+  gap was accessibility, not capture, and `summarize_chain` closes it.
+
+### ▶ Finding, 2026-08-10 — the constraint is not what the rejection counts say
+
+Of **247** candidates on 10 Aug that took no contract, **244 (99%) had a
+contract quoted at ≤3% spread available.** What refused that tightest contract:
+
+| refused the best contract by | n | share |
+| --- | --- | --- |
+| `OPTION_TOO_EXPENSIVE` | 82 | **34%** |
+| `LOW_OPEN_INTEREST` | 70 | 29% |
+| `LOW_VOLUME` | 63 | 26% |
+| `LOW_OPTION_QUALITY` | 18 | 7% |
+| `WIDE_SPREAD` | 8 | **3%** |
+
+The spread ceiling is almost never what stops the best available contract. By
+raw attempt counts `LOW_OPEN_INTEREST` dominates at 11,048 of 18,775 — but
+those are the far-OTM strikes the selector walks past. **The contract you would
+actually want is refused for price.**
+
+And it cannot be bought by raising the cap. Those 82 tight contracts cost
+**median $3,825**, min $600, max $9,185:
+
+```
+cap $500   admits  0 of 82        cap $1500  admits  6 of 82
+cap $1000  admits  3 of 82        cap $2000  admits 18 of 82
+```
+
+A $3,825 contract is 77% of a $5,000 account in one position.
+
+**This is the vice, stated exactly:** on 26 megacaps at $5,000 of capital, tight
+spreads and affordability are mutually exclusive. Near-ATM contracts are liquid
+and cost thousands; contracts under $500 are far OTM, wide and thin. The app has
+been choosing the only thing it can afford, and that thing is structurally
+unprofitable.
+
+It sharpens S-C: the universe filter is not "tight spreads" but **"tight spreads
+at a premium this account can hold"**, which points at lower-priced liquid
+underlyings rather than megacaps. One session; needs confirming across the
+archive before the 17 Aug decision, per rule 1.
 
 ## Phase 1 — The ceiling test · Fri 14 Aug · **this gate can answer no**
 *Offline, existing data, no quota.*
@@ -87,19 +133,45 @@ it is what decides whether the edge that exists at the ceiling is reachable.
 ## Phase 2 — Cut the toll · Mon 17 Aug → Fri 28 Aug
 *Only if Gate 1 passes. This is the half of the arithmetic we can actually move.*
 
-- [ ] **S-C** Universe by option quality, not market cap. Median spread over 21
-  sessions, measured 2026-08-10, spans **14×** across the current 26:
+- [~] **S-C** Universe by **joint** contract viability, not by spread and not by
+  market cap. Instrument built: `tools/universe_quality.py`. Decision Mon 17 Aug.
 
-  | keep | median spread | | drop | median spread |
+  ⚠️ **The keep/drop list previously written here was wrong and is withdrawn.**
+  It ranked symbols by *median spread across all contracts examined*, which
+  measures the strikes the selector walks past rather than the contract it could
+  have bought. On that basis ORCL was proposed for dropping. Measured on the
+  joint constraint, **ORCL has the highest viable rate in the universe.**
+
+  *Viable* = at least one contract, at the same moment, that is both **≤3%
+  spread and ≤ the cost cap**. Either half alone misleads: reading spread says
+  the chain was fine, reading rejection counts says open interest, and the
+  binding constraint is neither.
+
+  First read — 3 sessions (08-04, 08-05, 08-10); four earlier days excluded
+  because their attempts predate the `65361cb` evidence fix:
+
+  | symbol | n | viable % | best spread | cheapest tight contract |
   | --- | --- | --- | --- | --- |
-  | TSLA | 1.87% | | AMD | 10.63% |
-  | QQQ | 1.92% | | AVGO | 12.50% |
-  | NVDA | 2.13% | | AMAT | 15.18% |
-  | NFLX | 2.72% | | PANW | 18.23% |
-  | AMZN | 3.10% | | SMH | 26.41% |
+  | ORCL | 46 | **65%** | 1.15% | $912 |
+  | TSLA | 46 | 24% | 0.89% | $1,345 |
+  | CRWD | 25 | 12% | 1.88% | $850 |
+  | AVGO / MSFT / AMD / MU | 21–90 | 2–5% | 1.2–2.4% | $1,400–2,445 |
+  | AMAT, META, MRVL, PANW, SMH, TSM, ARM | 20–72 | **0%** | 1.1–3.4% | $1,825–12,715 |
 
-  *Target:* mean spread paid per trade **≤ 2.5%**, from 3.4% today.
-  *Side effect:* roughly half the option-chain API work disappears.
+  Seven symbols returned **zero viable contracts across three sessions**. They
+  cannot be traded by this account at any threshold setting, and no spread
+  ranking would have said so.
+
+  *Not yet ranked, too few moments:* NVDA (12), GOOGL (16), PLTR (10), AAPL (9),
+  SPCX (4), NFLX (2), AMZN (2), QQQ (0) — which is most of the old keep-list.
+
+  *Open question for 17 Aug,* raised by the cap sweep: viability across the
+  universe runs 13.5% at $500, 20.4% at $1,000, 48.6% at $2,000. Cost is
+  clearly a lever on *availability* — but $2,000 is 40% of the account in one
+  position, and a larger cap was already measured not to change the loss rate.
+  Availability and sizing have to be decided together.
+
+  *Target unchanged:* mean spread paid per trade **≤ 2.5%**, from 3.4% today.
 
 - [ ] **S-D** Set the spread ceiling **and** the universe together, never apart.
   A 2% ceiling on a wide universe produces one trade a day (10 Aug). A 3% ceiling
