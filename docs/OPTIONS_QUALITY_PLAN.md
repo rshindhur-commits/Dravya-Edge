@@ -47,17 +47,42 @@ roughly nothing. That is the whole problem in two lines.
 ## Phase 1 — The ceiling test · Fri 14 Aug · **this gate can answer no**
 *Offline, existing data, no quota.*
 
-- [ ] **S-B** Perfect-foresight replay. Exit all 291 archived trades at their actual
+- [x] **S-B** Perfect-foresight replay. Exit all 291 archived trades at their actual
   MFE — the best price ever available — net of real spread and theta. Then the same
   at fixed targets, taking the stop whenever MFE and MAE both cleared, because
   intrabar order is unknowable and assuming otherwise manufactures the edge.
+  *Evidence:* `tools/ceiling_test.py`, run 2026-08-10.
 
-### ▶ GATE 1 · Fri 14 Aug
-* **Pass** (a perfect-exit book profits after costs) → Phase 2. The gap between
-  ceiling and actual is what exit and entry work can address.
-* **Fail** → **stop.** If the best exit that ever existed still loses, no entry
-  rule, exit rule or threshold rescues it, and options are the wrong instrument
-  for this signal at this horizon.
+### ▶ GATE 1 · answered Mon 10 Aug — **PASS, and only just**
+
+`premium% = 10.046 x R − 3.221`, correlation **+0.914**. The intercept is the
+toll: **3.22% of premium before the underlying moves**, so break-even needs
+**0.321R**. Mean R is **+0.007**. That is the gap, and it is a factor of ~46.
+
+| policy | mean R | mean % | median % | 95% CI | win% |
+| --- | --- | --- | --- | --- | --- |
+| actual | +0.007 | −3.15 | −4.91 | [−4.09, −2.17] | 20% |
+| **ceiling: exit at MFE** | +0.394 | **+0.74** | **−2.22** | [+0.10, +1.41] | 40% |
+| 75% of MFE | +0.295 | −0.25 | −2.47 | [−0.73, +0.26] | 31% |
+| 50% of MFE | +0.197 | −1.24 | −2.72 | [−1.56, −0.90] | 22% |
+| target 2.0R / stop 1R | −0.004 | −3.26 | −4.35 | [−4.08, −2.42] | 27% |
+| target 1.0R / stop 1R | −0.032 | −3.54 | −4.34 | [−4.25, −2.81] | 29% |
+
+**Pass by the stated criterion** — the ceiling's interval excludes zero — so
+Phase 2 proceeds. Three things must be read alongside it:
+
+1. **The median trade loses even at the ceiling.** −2.22%, selling at the exact
+   peak. The positive mean is carried by a minority of trades.
+2. **Capturing 75% of the maximum favourable excursion on every trade still loses**
+   (−0.25%, interval spanning zero). No real system captures 75% of MFE.
+3. **Every implementable fixed-target policy is worse than what actually happened.**
+   The existing exit engine beats all of them, which is the third independent
+   confirmation that the exit is not the problem.
+
+**What makes Phase 2 worth doing** is that the toll is the term the ceiling is
+most sensitive to. At a 2% toll instead of 3.22%, the same 75%-of-MFE exit
+returns **+0.96%** rather than −0.25%. Cutting cost does not create an edge, but
+it is what decides whether the edge that exists at the ceiling is reachable.
 
 ## Phase 2 — Cut the toll · Mon 17 Aug → Fri 28 Aug
 *Only if Gate 1 passes. This is the half of the arithmetic we can actually move.*
