@@ -80,6 +80,7 @@ from app.indicators.technical_indicators import (
     get_polygon_data
 )
 
+from app.options.chain_quality import summarize_chain
 from app.options.options_filter import (
     ATTEMPT_EVIDENCE_FIELDS,
     evaluate_option_liquidity
@@ -7094,6 +7095,13 @@ def _run_scanner_impl():
                     if option_liquidity_attempts
                     else None
                 ),
+
+                # The same attempts, read into fields Postgres can see. The list
+                # above is a JSON string inside a JSONB column, so answering
+                # "what was the best contract on offer, and what refused it?"
+                # otherwise means pulling a 233MB table across the wire and
+                # parsing it in Python, every time it is asked.
+                **summarize_chain(option_liquidity_attempts),
 
                 "Realtime Ready": realtime_ready,
 

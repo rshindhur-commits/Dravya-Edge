@@ -39,10 +39,56 @@ roughly nothing. That is the whole problem in two lines.
   *Evidence:* `scanner_runs.payload->'config'`, `app/runtime/config_snapshot.py`
 - [x] **S-A2** Record contract leverage on every priced contract
   *Evidence:* `app/risk/option_leverage.py`, off by default, records regardless
-- [ ] **S-A3** Capture full chain quality per candidate — best available spread, OI,
+- [x] **S-A3** Capture full chain quality per candidate — best available spread, OI,
   delta and cost, not only the contract selected
-  *Done when:* a session can answer "what was the best contract available for NVDA
-  at 10:15, and why was it not taken?"
+  *Evidence:* `app/options/chain_quality.py`, `CHAIN_*` fields on every row.
+
+  **Capture was already complete** and this is worth recording, because it was
+  not what the step assumed. Since `6af092e`/`65361cb` every attempt carries 21
+  fields — strike, dte, open interest, volume, bid, ask, delta, iv, cost, quote
+  status, threshold — durably in `scanner_snapshot.decision_payload`. It is
+  stored there as a **JSON string inside JSONB**, so Postgres cannot see into
+  it and each question needed a 233 MB table pulled and parsed in Python. The
+  gap was accessibility, not capture, and `summarize_chain` closes it.
+
+### ▶ Finding, 2026-08-10 — the constraint is not what the rejection counts say
+
+Of **247** candidates on 10 Aug that took no contract, **244 (99%) had a
+contract quoted at ≤3% spread available.** What refused that tightest contract:
+
+| refused the best contract by | n | share |
+| --- | --- | --- |
+| `OPTION_TOO_EXPENSIVE` | 82 | **34%** |
+| `LOW_OPEN_INTEREST` | 70 | 29% |
+| `LOW_VOLUME` | 63 | 26% |
+| `LOW_OPTION_QUALITY` | 18 | 7% |
+| `WIDE_SPREAD` | 8 | **3%** |
+
+The spread ceiling is almost never what stops the best available contract. By
+raw attempt counts `LOW_OPEN_INTEREST` dominates at 11,048 of 18,775 — but
+those are the far-OTM strikes the selector walks past. **The contract you would
+actually want is refused for price.**
+
+And it cannot be bought by raising the cap. Those 82 tight contracts cost
+**median $3,825**, min $600, max $9,185:
+
+```
+cap $500   admits  0 of 82        cap $1500  admits  6 of 82
+cap $1000  admits  3 of 82        cap $2000  admits 18 of 82
+```
+
+A $3,825 contract is 77% of a $5,000 account in one position.
+
+**This is the vice, stated exactly:** on 26 megacaps at $5,000 of capital, tight
+spreads and affordability are mutually exclusive. Near-ATM contracts are liquid
+and cost thousands; contracts under $500 are far OTM, wide and thin. The app has
+been choosing the only thing it can afford, and that thing is structurally
+unprofitable.
+
+It sharpens S-C: the universe filter is not "tight spreads" but **"tight spreads
+at a premium this account can hold"**, which points at lower-priced liquid
+underlyings rather than megacaps. One session; needs confirming across the
+archive before the 17 Aug decision, per rule 1.
 
 ## Phase 1 — The ceiling test · Fri 14 Aug · **this gate can answer no**
 *Offline, existing data, no quota.*
