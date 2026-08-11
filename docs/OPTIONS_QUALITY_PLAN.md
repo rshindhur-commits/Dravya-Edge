@@ -133,19 +133,45 @@ it is what decides whether the edge that exists at the ceiling is reachable.
 ## Phase 2 — Cut the toll · Mon 17 Aug → Fri 28 Aug
 *Only if Gate 1 passes. This is the half of the arithmetic we can actually move.*
 
-- [ ] **S-C** Universe by option quality, not market cap. Median spread over 21
-  sessions, measured 2026-08-10, spans **14×** across the current 26:
+- [~] **S-C** Universe by **joint** contract viability, not by spread and not by
+  market cap. Instrument built: `tools/universe_quality.py`. Decision Mon 17 Aug.
 
-  | keep | median spread | | drop | median spread |
+  ⚠️ **The keep/drop list previously written here was wrong and is withdrawn.**
+  It ranked symbols by *median spread across all contracts examined*, which
+  measures the strikes the selector walks past rather than the contract it could
+  have bought. On that basis ORCL was proposed for dropping. Measured on the
+  joint constraint, **ORCL has the highest viable rate in the universe.**
+
+  *Viable* = at least one contract, at the same moment, that is both **≤3%
+  spread and ≤ the cost cap**. Either half alone misleads: reading spread says
+  the chain was fine, reading rejection counts says open interest, and the
+  binding constraint is neither.
+
+  First read — 3 sessions (08-04, 08-05, 08-10); four earlier days excluded
+  because their attempts predate the `65361cb` evidence fix:
+
+  | symbol | n | viable % | best spread | cheapest tight contract |
   | --- | --- | --- | --- | --- |
-  | TSLA | 1.87% | | AMD | 10.63% |
-  | QQQ | 1.92% | | AVGO | 12.50% |
-  | NVDA | 2.13% | | AMAT | 15.18% |
-  | NFLX | 2.72% | | PANW | 18.23% |
-  | AMZN | 3.10% | | SMH | 26.41% |
+  | ORCL | 46 | **65%** | 1.15% | $912 |
+  | TSLA | 46 | 24% | 0.89% | $1,345 |
+  | CRWD | 25 | 12% | 1.88% | $850 |
+  | AVGO / MSFT / AMD / MU | 21–90 | 2–5% | 1.2–2.4% | $1,400–2,445 |
+  | AMAT, META, MRVL, PANW, SMH, TSM, ARM | 20–72 | **0%** | 1.1–3.4% | $1,825–12,715 |
 
-  *Target:* mean spread paid per trade **≤ 2.5%**, from 3.4% today.
-  *Side effect:* roughly half the option-chain API work disappears.
+  Seven symbols returned **zero viable contracts across three sessions**. They
+  cannot be traded by this account at any threshold setting, and no spread
+  ranking would have said so.
+
+  *Not yet ranked, too few moments:* NVDA (12), GOOGL (16), PLTR (10), AAPL (9),
+  SPCX (4), NFLX (2), AMZN (2), QQQ (0) — which is most of the old keep-list.
+
+  *Open question for 17 Aug,* raised by the cap sweep: viability across the
+  universe runs 13.5% at $500, 20.4% at $1,000, 48.6% at $2,000. Cost is
+  clearly a lever on *availability* — but $2,000 is 40% of the account in one
+  position, and a larger cap was already measured not to change the loss rate.
+  Availability and sizing have to be decided together.
+
+  *Target unchanged:* mean spread paid per trade **≤ 2.5%**, from 3.4% today.
 
 - [ ] **S-D** Set the spread ceiling **and** the universe together, never apart.
   A 2% ceiling on a wide universe produces one trade a day (10 Aug). A 3% ceiling
