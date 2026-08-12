@@ -163,6 +163,29 @@ def _maybe_resolve_outcomes():
         print(f"[SCAN LOOP WARNING] outcome resolution failed: {exc}")
 
 
+def _maybe_replay_option_legs():
+    """Price the option leg for the last session. Never breaks the loop.
+
+    Post-market only and separately gated: it reconstructs a whole chain per
+    candidate, and option quotes are not cached, so it is the one daily job
+    whose Polygon quota is worth protecting the session from.
+    """
+
+    try:
+        from app.runtime.outcome_scheduler import maybe_replay_option_legs
+
+        summary = maybe_replay_option_legs(datetime.now(ET), idle_reason_value="IDLE")
+
+        if summary:
+            print(
+                f"[SCAN LOOP] priced {summary['legs']} option legs across "
+                f"{len(summary['days'])} session(s)."
+            )
+
+    except Exception as exc:
+        print(f"[SCAN LOOP WARNING] option leg replay failed: {exc}")
+
+
 def _report_database_state():
     """Say once, at startup, whether this container can reach Postgres.
 
@@ -401,6 +424,8 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
             # bars that followed each decision, so it can only run once the
             # session it is scoring has finished -- which is exactly here.
             _maybe_resolve_outcomes()
+            # After resolution: it prices only candidates that resolved.
+            _maybe_replay_option_legs()
             print(f"[SCAN LOOP] {idle}; sleeping {wait}s without scanning.")
             _sleep(wait)
             continue

@@ -111,5 +111,64 @@ class MarkerTests(unittest.TestCase):
             self.assertIsNone(outcome_scheduler.last_run_day())
 
 
+class OptionLegTests(unittest.TestCase):
+    """The quota-heavy pass. Gated separately, and post-market only."""
+
+    def test_it_does_not_run_during_a_session(self):
+        """Option quotes are not cached; this is the job to keep off the session."""
+
+        with patch.object(outcome_scheduler, "option_leg_last_run_day", return_value=None):
+            self.assertFalse(
+                outcome_scheduler.option_leg_due(NOW, idle_reason_value=None)
+            )
+
+    def test_it_runs_once_per_et_date_when_idle(self):
+
+        with patch.object(outcome_scheduler, "option_leg_last_run_day", return_value="2026-08-11"):
+            self.assertTrue(outcome_scheduler.option_leg_due(NOW, "IDLE"))
+
+        with patch.object(outcome_scheduler, "option_leg_last_run_day", return_value="2026-08-12"):
+            self.assertFalse(outcome_scheduler.option_leg_due(NOW, "IDLE"))
+
+    def test_its_marker_is_independent_of_resolution(self):
+        """A quota failure here must not make resolution look unrun, or vice versa."""
+
+        self.assertNotEqual(
+            outcome_scheduler._marker_path(),
+            outcome_scheduler._option_leg_marker_path(),
+        )
+
+    def test_it_prices_only_the_most_recent_session(self):
+        """Resolution affords a 3-day window; ~150 requests per candidate does not."""
+
+        legs = [{"option_return_pct": -4.0}, {"option_return_pct": 2.0}]
+
+        with patch.object(outcome_scheduler, "option_leg_due", return_value=True), \
+             patch.object(outcome_scheduler, "_days_to_resolve", return_value=["2026-08-11", "2026-08-10", "2026-08-05"]), \
+             patch.object(outcome_scheduler, "_write_marker"), \
+             patch("tools.replay_option_leg.run_day", return_value=(legs, {}, 71.0)) as run_day:
+
+            summary = outcome_scheduler.maybe_replay_option_legs(NOW, "IDLE")
+
+        run_day.assert_called_once_with("2026-08-11")
+        self.assertEqual(summary["legs"], 2)
+        self.assertEqual(summary["days"]["2026-08-11"]["mean_option_return_pct"], -1.0)
+
+    def test_a_failure_returns_none_rather_than_raising(self):
+
+        with patch.object(outcome_scheduler, "option_leg_due", return_value=True), \
+             patch.object(outcome_scheduler, "_days_to_resolve", side_effect=RuntimeError("quota")):
+
+            self.assertIsNone(outcome_scheduler.maybe_replay_option_legs(NOW, "IDLE"))
+
+
+    def test_an_unreadable_option_leg_marker_reads_as_never_run(self):
+
+        with patch.object(
+            outcome_scheduler, "_option_leg_marker_path", side_effect=OSError("gone")
+        ):
+            self.assertIsNone(outcome_scheduler.option_leg_last_run_day())
+
+
 if __name__ == "__main__":
     unittest.main()
