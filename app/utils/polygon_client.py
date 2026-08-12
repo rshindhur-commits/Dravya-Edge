@@ -280,6 +280,11 @@ def get_metrics():
             if snapshot["cache_read_count"] > 0
             else None
         )
+        # Recorded so "is the leak fixed" has an answer other than reading the
+        # Render memory graph by eye. This should sit at or below the cap
+        # forever; a number that tracks scan count is the leak having returned.
+        snapshot["cache_entries"] = len(_cache)
+        snapshot["cache_max_entries"] = _CACHE_MAX_ENTRIES
         return snapshot
 
 
@@ -315,8 +320,27 @@ def suggest_rate_from_history(safety_margin: float = 0.8) -> Optional[int]:
     return suggested
 
 
-# Simple in-memory TTL cache for identical aggregate requests
+# Simple in-memory TTL cache for identical aggregate requests.
+#
+# The TTL alone does not bound this. Eviction used to happen only inside
+# `_cache_get`, for the single key being read, once it had expired -- and the key
+# is `(symbol, multiplier, timespan, from_, to, limit)`, whose `from_`/`to` are
+# epoch bounds that advance every scan. A stale entry is therefore never asked
+# for again, so it was never evicted: each scan minted a fresh set of keys and
+# left the previous set in the dict holding up to `limit` OHLCV bars apiece.
+#
+# Measured on the worker 2026-08-11: RSS climbed 241MB -> 1330MB across 113
+# scans, +9.6MB per scan, monotonic and never reclaimed, with scan duration
+# degrading 5s -> 150s as every miss walked a dict of tens of thousands of dead
+# entries. 26 symbols x ~4 timeframes x ~90KB is ~9.4MB a scan, which is the
+# growth almost exactly. The day before leaked half as fast, so it was also
+# getting worse.
+#
+# So insert sweeps. The cap is what actually bounds memory; the TTL only decides
+# what is worth keeping. A scan touches ~104 keys, so 512 leaves several scans of
+# headroom while holding the cache to a few MB.
 _CACHE_TTL = float(os.getenv("POLYGON_CACHE_TTL", "2"))
+_CACHE_MAX_ENTRIES = int(os.getenv("POLYGON_CACHE_MAX_ENTRIES", "512"))
 _cache: dict = {}
 
 
@@ -331,8 +355,31 @@ def _cache_get(key):
     return val
 
 
+def _sweep_cache():
+    """Drop expired entries, then oldest-first until the cap is respected.
+
+    Only called when the cap is already exceeded, so the common insert stays a
+    plain dict write rather than paying a scan of the whole cache every time.
+    """
+    now = time.monotonic()
+
+    for key in [k for k, (ts, _) in list(_cache.items()) if now - ts > _CACHE_TTL]:
+        _cache.pop(key, None)
+
+    excess = len(_cache) - _CACHE_MAX_ENTRIES
+    if excess <= 0:
+        return
+
+    # Everything left is unexpired, so age is the only fair thing to drop on.
+    oldest = sorted(_cache.items(), key=lambda item: item[1][0])[:excess]
+    for key, _ in oldest:
+        _cache.pop(key, None)
+
+
 def _cache_set(key, val):
     _cache[key] = (time.monotonic(), val)
+    if len(_cache) > _CACHE_MAX_ENTRIES:
+        _sweep_cache()
 
 
 def get_aggs_cached(symbol: str, multiplier: int, timespan: str, from_: int, to: int, limit: int = 200, force_refresh: bool = False):
