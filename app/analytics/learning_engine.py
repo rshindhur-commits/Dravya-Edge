@@ -27,10 +27,58 @@ def build_feedback_loop(candidate_evidence, refresh_events, evidence_days=0, com
             calibration.append({"bucket": str(bucket), "candidates": int(len(group)), "winner_rate": round(float(winners.mean() * 100), 1) if winners.notna().any() else None})
     roi = []
     if not evidence.empty:
+        # Only rows whose outcome is actually known may be scored. `winner` is
+        # false both for "was measured and lost" and for "was never resolved",
+        # and counting the second as a prevented loss is what made every rule
+        # look perfect: before this, LOW_RR ranked first at ROI 1000 on 1,000
+        # rows of which **zero** had been resolved, on the day it refused every
+        # trade. Coverage is reported beside the score so a rule with nothing
+        # measured reads as unknown rather than as flawless.
+        # A known winner is resolved whatever else is recorded: the bridge sets
+        # `winner` and `target_first` together, but a caller supplying only
+        # `winner` still knows the outcome and must not be discarded as unknown.
+        resolved_mask = (
+            evidence.get("target_first", pd.Series(False, index=evidence.index)).astype(bool)
+            | evidence.get("stop_first", pd.Series(False, index=evidence.index)).astype(bool)
+            | evidence.get("winner", pd.Series(False, index=evidence.index)).fillna(False).astype(bool)
+        )
+        # Zero coverage has two very different meanings and they must not print
+        # the same. A rule firing *before* the scanner picks a side has no
+        # direction, entry, stop or target on any of its candidates -- there is
+        # no trade to replay, and "would it have won" is undefined rather than
+        # pending. Measured 2026-08-12: LOW_RR, RISK_REJECTED,
+        # NO_DIRECTIONAL_EDGE, NO_ENTRY_TRIGGER and STALE_MARKET_DATA carry 0
+        # directional candidates between them, while every row that does have a
+        # direction has a full triplet (1,585 of 1,585). So `scoreable` splits
+        # "cannot be scored, by construction" from "has a thesis, not yet
+        # replayed", and an unscoreable rule reports roi None instead of a
+        # flattering number built from its own block count.
+        # A dataset with no `direction` column at all says nothing about whether
+        # a thesis existed, so it must not be read as "no thesis". Only an
+        # explicit non-directional value marks a rule unscoreable.
+        if "direction" in evidence.columns:
+            directional = evidence["direction"].astype(str).str.upper().isin(
+                {"CALL", "PUT", "BULLISH", "BEARISH", "LONG", "SHORT"}
+            )
+        else:
+            directional = pd.Series(True, index=evidence.index)
         for rule, group in evidence.groupby(evidence.get("rule_evaluation", pd.Series("UNKNOWN", index=evidence.index)).fillna("UNKNOWN")):
-            winners = group.get("winner", pd.Series(False, index=group.index)).astype(bool)
+            scored = group[resolved_mask.reindex(group.index, fill_value=False)]
+            with_thesis = int(directional.reindex(group.index, fill_value=False).sum())
+            winners = scored.get("winner", pd.Series(False, index=scored.index)).astype(bool)
             blocked_winners = int(winners.sum()); prevented = int((~winners).sum())
-            roi.append({"rule": str(rule), "losses_prevented": prevented, "winners_blocked": blocked_winners, "roi": prevented - blocked_winners})
+            scoreable = with_thesis > 0
+            roi.append({
+                "rule": str(rule),
+                "losses_prevented": prevented,
+                "winners_blocked": blocked_winners,
+                "roi": (prevented - blocked_winners) if scoreable else None,
+                "candidates": int(len(group)),
+                "directional": with_thesis,
+                "scoreable": scoreable,
+                "resolved": int(len(scored)),
+                "coverage_pct": round(100 * len(scored) / with_thesis, 1) if with_thesis else None,
+            })
     success = refresh.get("outcome", pd.Series(dtype=object)).astype(str).tail(50).eq("LIVE_QUOTE")
     confidence = min(95, round(15 + min(35, evidence_days * 33 / 19) + min(42, completed_trades), 1))
     lift = None
@@ -38,7 +86,7 @@ def build_feedback_loop(candidate_evidence, refresh_events, evidence_days=0, com
     for name in ["Entry Timing", "Trade Ranking", "Exit Confidence", "Grace Zone"]:
         status, reason = evaluate_promotion(completed_trades, lift, confidence)
         features.append({"feature_name": name, "shadow_days": evidence_days, "completed_trades": completed_trades, "improvement_pct": lift, "confidence": confidence, "status": status, "recommended_action": reason})
-    return {"refresh_success_rate_last_50": round(float(success.mean() * 100), 1) if len(success) else None, "tqs_calibration": calibration, "rule_roi": sorted(roi, key=lambda row: row["roi"], reverse=True), "feature_promotion": features}
+    return {"refresh_success_rate_last_50": round(float(success.mean() * 100), 1) if len(success) else None, "tqs_calibration": calibration, "rule_roi": sorted(roi, key=lambda row: (row["scoreable"], row["resolved"], row["roi"] or 0), reverse=True), "feature_promotion": features}
 
 
 def _number_mean(frame, column):
