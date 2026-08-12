@@ -9,7 +9,16 @@ tried; this one is what is being tried now.
 **Status key:** `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blocked
 · `[-]` dropped, with a reason
 
-**Last updated:** 2026-08-11
+**Last updated:** 2026-08-12
+
+**How the app is measured now.** Trade-outcome metrics cannot work here: 0–1
+trades a day leaves `daily_engine_summary` a table of nulls. The daily reading is
+instead the **candidate resolution** — 30–40 refused candidates a session,
+scored against the bars that followed, written nightly by the scan loop. Read
+target-first % against the **29.3%** baseline, then per-rule `winners_blocked`
+against the same. A gate materially below base rate is discriminating; at base
+rate it is only removing volume. `roi: None` means the rule fires before a thesis
+exists and cannot be scored at all.
 
 ---
 
@@ -58,12 +67,22 @@ roughly nothing. That is the whole problem in two lines.
   it and each question needed a 233 MB table pulled and parsed in Python. The
   gap was accessibility, not capture, and `summarize_chain` closes it.
 
-- [ ] **S-A4** Resolve outcomes for candidates that were never entered.
-  `candidate_outcome` records 888 rows all `became_neutral` and stopped on 31
-  July; `candidate_evidence.winner` is false on all 2,600. Opened 11 Aug — see
-  the finding below. **Blocks every observe-only experiment**, S-E and the RR
-  shadow included, because a shadow that writes into this store records nothing.
-  Phase 0 is therefore *not* complete.
+- [x] **S-A4** Resolve outcomes for candidates that were never entered.
+  *Evidence:* `tools/resolve_candidate_outcomes.py`, `app/runtime/outcome_scheduler.py`
+
+  Opened and closed 11–12 Aug. The cause was one line: `Replay Outcome` is
+  computed only where `risk_setup["trade_allowed"]` is true, so a candidate a
+  gate rejected never had an outcome derived — **NO_REPLAY on 16,614 of 16,614
+  scanner_snapshot rows, every row ever written.**
+
+  Refused candidates are now replayed against the bars that followed. 239
+  resolved across 9 sessions and bridged into `candidate_evidence`, whose
+  `winner` went 0 → 70. Runs nightly from the scan loop's idle branch, so it
+  does not depend on anyone remembering a command.
+
+  Intrabar ties resolve to the stop, as `ceiling_test.py` does. It cost nothing:
+  **zero** of the 239 resolved on a bar touching both levels, so the figure is
+  the same under either convention.
 
 ### ▶ Finding, 2026-08-10 — the constraint is not what the rejection counts say
 
@@ -185,6 +204,59 @@ data only for trades that were entered. Every loosening proposal is therefore a
 forward experiment, never a backtest, until this is repaired. That is a
 precondition for the observe-only pattern S-E already relies on: shadowing a
 threshold into a store that resolves everything to neutral records nothing.
+
+### ▶ Finding, 2026-08-12 — the candidate pool has no edge, and no gate discriminates
+
+The refused candidates, replayed on the app's own target/stop geometry:
+
+```
+win rate            29.3%   (70 of 239, 95% Wilson CI [23.9, 35.3])
+mean RR on winners   2.42
+break-even at 2.42  29.3%
+
+GROSS expectancy    0.000 R
+less the toll      -0.321 R
+```
+
+**Exactly zero, gross.** Not a small edge eaten by cost — no edge. And it
+reproduces Gate 1 from disjoint data by a different method: the ceiling test put
+`target 2.0R / stop 1R` at −0.004R over 291 *accepted* trades; this is 0.000R
+over 239 *refused* candidates.
+
+Per gate, of what each one blocks:
+
+| gate | resolved | winners blocked | rate |
+| --- | --- | --- | --- |
+| `OPTION_REJECTED` | 120 | 33 | 27.5% |
+| `DELAYED_DATA_CONFIRM_LIVE` | 35 | 10 | 28.6% |
+| `RR_BELOW_THRESHOLD` | 32 | 10 | 31.2% |
+| **base rate** | **239** | **70** | **29.3%** |
+
+**Every gate blocks winners at the rate winners occur.** None of them
+discriminate; they remove volume, not losers. That is why no profitable subset
+was ever found across 601 trades — there is no subset to find, and it is the
+mechanism behind "the cap changes the stake, not the rate".
+
+Two corrections this forced:
+
+* `learning_engine` counted *unresolved* as *not a winner*, so `losses_prevented`
+  was the block count and every rule scored positively. `LOW_RR` ranked first at
+  ROI 1000 across 1,000 rows of which **zero** were resolved — on the day it
+  refused every trade. Rules are now scored on resolved rows only.
+* `LOW_RR` and `RR_BELOW_THRESHOLD` are different rules and were conflated here
+  earlier. `LOW_RR` fires **before a direction is chosen** and can never be
+  scored: its candidates carry no direction, entry, stop or target. Every row
+  that does have a direction has a full triplet — 1,585 of 1,585 — so the split
+  is structural, and unscoreable rules now report `roi: None` rather than a
+  flattering number. The 2.0 gate the plan actually argues about is
+  `RR_BELOW_THRESHOLD`, and it is measurable: 31.2% against a 29.3% base.
+
+**What this means for Phase 2.** Cutting the toll moves −0.321R toward 0.000R.
+That is worth having — it stops the bleeding — but its ceiling is break-even, and
+Gate 2 as written can pass on both criteria with expectancy still at zero. The
+question worth carrying into 17 Aug is not whether cost fell but whether **any
+subset of this pool beats 29.3%**, which is Phase 3's question and is now
+answerable nightly without risking money or waiting for trades.
 
 ## Phase 1 — The ceiling test · Fri 14 Aug · **this gate can answer no**
 *Offline, existing data, no quota.*
@@ -369,7 +441,12 @@ documented reason to pay **before** it is tested.
 
 | decision | state |
 | --- | --- |
-| `OPTION_MAX_SPREAD_PCT` currently **2** | **The one still open.** Live and throttling everything to ~1 trade/day, and to 0 on 11 Aug. Holds until S-C lands; changing it alone restores volume at bad quality. |
+| `OPTION_MAX_SPREAD_PCT` currently **2** | Live and throttling everything to ~1 trade/day, and to 0 on 11 Aug. Holds until S-C lands; changing it alone restores volume at bad quality. |
+| **Is Phase 2 worth its eleven days?** | Opened 12 Aug. Its ceiling is break-even: the candidate pool is 0.000R gross, so perfect cost reduction reaches zero and no further. Decide on **Mon 17 Aug** alongside S-C, deliberately rather than by default. |
+| `daily_engine_summary.v1_trades` reports 0 | On all 7 days that had trades, 19 in total. A number that says 0 when it means 19 sits in a table something may later trust. Fix or delete the join. |
+| `avg_exit_confidence` stopped after 07-31 | Six values recorded 07-24 to 07-31, none since, while entry efficiency and trend capture kept going. Looks stopped rather than starved. Cause unverified. |
+| V2 has never been scored | `trades_compared` is 0.0 on all 15 shadow days and its own promotion engine reads `INSUFFICIENT_SAMPLE`. It is markedly more permissive than V1 — 17 shadow trades on the day V1 took none. Now testable against the 239 resolved outcomes; still untested. |
+| Reports are dormant, not live | Two artifacts in six weeks (one validation 07-06, one post-market 07-30), generated by a dashboard button while `Project_state.md` describes them as live infrastructure. Decide whether they are dormant or dead. |
 | ~~Local `.env` held `OPTION_MAX_SPREAD_PCT=6`~~ | **Closed 11 Aug** — corrected to 2. It had produced a false "45 recoverable contracts" that day. All 15 threshold keys were then diffed against `scanner_runs.payload->config`; this was the only drift. Re-run that diff whenever a local result surprises you. |
 | ~~Six commits on `Claude_POA`~~ | **Closed** — merged to `main` in PR #139 and live. The proof is S-A1 recording config for 113 runs on 11 Aug, which undeployed code cannot do. |
 | ~~Credentials exported 2026-08-10~~ | **Closed 11 Aug** — rotated. |
@@ -437,3 +514,23 @@ Asked whether to drop the RR bar 2.0 → 1.8. **No, not yet, and not blind** —
 reasoning is under S-F/S-E; the short version is that Gate 1 already measured
 lower targets as monotonically worse, and the bar should fall out of a reduced
 toll rather than be set by hand ahead of it. Shadow it once S-A4 lands.
+
+### Wed 12 Aug
+S-A4 closed the day after it opened, and it changed the question. Refused
+candidates are now replayed against the bars that followed — 239 resolved, 70
+target-first — and the pool turns out to be **0.000R gross**, with every gate
+blocking winners at the base rate. The finding is above; the short version is
+that nothing here discriminates, and Phase 2's ceiling is break-even.
+
+Two measurement defects fell out of it, both the same error at different depths:
+`learning_engine` scored rules by counting unresolved candidates as prevented
+losses, and zero coverage printed identically whether a rule had never been
+replayed or could never be replayed at all. Both fixed; `LOW_RR` no longer ranks
+first for having blocked a thousand things nobody measured.
+
+Resolution now runs nightly from the scan loop rather than from a command
+someone has to remember. **This is the daily measurement from 13 Aug onward** —
+see the header. Still open: the `v1_trades` join, the exit-confidence stop, V2
+never having been scored, and whether Phase 2 earns its eleven days.
+
+Not done today: nothing deployed — four commits sit unpushed on `Claude_POA`.
