@@ -33,6 +33,30 @@ class IntervalTests(unittest.TestCase):
         }
         self.assertEqual(min(intervals, key=intervals.get), "OPENING_RANGE")
 
+    def test_premarket_is_sparse_because_it_cannot_price_a_contract(self):
+        """Premarket scans priced 0 contracts on 2026-08-11 and carried chain
+        evidence on 4 of 728 rows. Options do not trade before 09:30 and the
+        entry window opens at 09:45, so a dense premarket cadence buys nothing
+        and holds the database awake to buy it."""
+
+        self.assertGreaterEqual(scan_loop.interval_for_session("PREMARKET"), 1800)
+
+    def test_a_sparse_session_outsleeps_the_database_idle_timer(self):
+        """Neon suspends compute after 300s idle and a scan writes for ~5s.
+
+        Any session claiming to be sparse has to leave a gap wider than that or
+        it pays for continuous uptime while doing nothing.
+        """
+
+        neon_idle_timeout = 300
+        burst = 5
+
+        for session in ("PREMARKET", "AFTERHOURS", "CLOSED"):
+
+            with self.subTest(session=session):
+                gap = scan_loop.interval_for_session(session) - burst
+                self.assertGreater(gap, neon_idle_timeout)
+
     def test_override_wins_and_is_floored(self):
 
         self.assertEqual(scan_loop.interval_for_session("REGULAR", 60), 60)
