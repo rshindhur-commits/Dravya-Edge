@@ -136,6 +136,33 @@ def _maybe_prune():
         print(f"[SCAN LOOP WARNING] retention failed: {exc}")
 
 
+def _maybe_resolve_outcomes():
+    """Daily pass resolving refused candidates. Never allowed to break the loop.
+
+    This is the only measurement that works on a session with no trades, which
+    is most of them: it scores the candidates the gates refused against the bars
+    that followed. Left to a manual command it would stop the first evening
+    anyone forgot.
+    """
+
+    try:
+        from app.runtime.outcome_scheduler import maybe_resolve_outcomes
+
+        summary = maybe_resolve_outcomes(datetime.now(ET), idle_reason_value="IDLE")
+
+        if summary:
+            resolved = summary["target_first"] + summary["stop_first"]
+            print(
+                f"[SCAN LOOP] resolved {resolved} refused candidates "
+                f"({summary['target_first']} reached target first) across "
+                f"{len(summary['days'])} session(s); "
+                f"bridged {summary.get('bridged', 0)} into candidate_evidence."
+            )
+
+    except Exception as exc:
+        print(f"[SCAN LOOP WARNING] outcome resolution failed: {exc}")
+
+
 def _report_database_state():
     """Say once, at startup, whether this container can reach Postgres.
 
@@ -370,6 +397,10 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
             # the scans writing to the same tables. Self-gated to once per ET
             # date, so this branch looping all weekend runs it once a day.
             _maybe_prune()
+            # Same window and the same once-a-day gate. Resolution reads the
+            # bars that followed each decision, so it can only run once the
+            # session it is scoring has finished -- which is exactly here.
+            _maybe_resolve_outcomes()
             print(f"[SCAN LOOP] {idle}; sleeping {wait}s without scanning.")
             _sleep(wait)
             continue
