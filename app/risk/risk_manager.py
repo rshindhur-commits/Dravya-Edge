@@ -473,9 +473,45 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING", htf=None):
 
     elif entry_type == "EMA_PULLBACK" or structure_stops:
 
-        # A structure-anchored stop must not be widened back to a full ATR;
-        # doing so is what collapsed breakout/breakdown RR below the 1.5 floor.
-        minimum_stop_distance = atr * 0.25
+        # Was a flat `atr * 0.25`, on the reasoning that widening a
+        # structure-anchored stop to a full ATR collapsed breakout RR below the
+        # 1.5 floor. True, and it optimised the wrong thing: RR is only worth
+        # protecting if the stop survives long enough to collect it.
+        #
+        # 2026-08-12 is the case that broke the argument. SMCI was flagged CALL
+        # five times on an EMA_PULLBACK, RR up to 8.02, on a day it moved 18.86%.
+        # Its stop sat 0.50% below entry -- a quarter-ATR on a name whose session
+        # range was 12.4% -- and price took it out at 11:00 before running to
+        # 38.15. At a full ATR the stop held and the same trade reached its
+        # target, at RR 2.06.
+        #
+        # Measured over 181 archived candidates, widening this is the single
+        # largest improvement available to the stop geometry:
+        #
+        #     x0.25  23.4% win  -0.170R      x1.50  40.4% win  -0.078R
+        #     x1.00  29.3% win  -0.169R      x3.00  58.4% win  -0.037R
+        #
+        # None of those are positive, so this does not make the strategy work --
+        # it stops one specific way of losing. Note also that a wider stop lowers
+        # RR on the same target, so the RR gate has to be recalibrated with it:
+        # at x1.50 the break-even RR is about 1.47, not 2.0. Changing this alone
+        # trades stop-outs for RR-gate rejections.
+        #
+        # **Default deliberately left at 0.25.** Raising it here does not fix
+        # SMCI: its 0.81% stop was structure-anchored, already wider than both
+        # this floor (0.47%) and the price floor (0.50%), so a floor change would
+        # not have reached it. Only a floor above the structure level does, and
+        # that means overriding structure everywhere -- which is what
+        # `test_ema_pullback_does_not_force_full_atr_stop_floor` exists to
+        # prevent, and it breaks replay parity, the one instrument available for
+        # judging whether the change was right.
+        #
+        # So this is a switch, not a decision. Set the variable to run the
+        # experiment against archived days; leave it alone and behaviour is
+        # exactly as before.
+        minimum_stop_distance = atr * get_float_env(
+            "EMA_PULLBACK_ATR_STOP_MULT", 0.25
+        )
 
     # Absolute floor on stop distance, as a fraction of price.
     #
