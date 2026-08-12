@@ -138,21 +138,50 @@ class OptionLegTests(unittest.TestCase):
             outcome_scheduler._option_leg_marker_path(),
         )
 
-    def test_it_prices_only_the_most_recent_session(self):
-        """Resolution affords a 3-day window; ~150 requests per candidate does not."""
+    def test_it_prices_yesterday_then_works_the_backlog(self):
+        """Yesterday first, then oldest unpriced, bounded.
+
+        It priced only the most recent session until 2026-08-12, which left the
+        rest of the archive measured on the underlying alone -- and the two
+        disagree: SPCX reached its target and returned +22.26% while NVDA reached
+        its stop and returned -19.83%. A backlog that never drains means every
+        conclusion keeps being drawn from the wrong number.
+        """
 
         legs = [{"option_return_pct": -4.0}, {"option_return_pct": 2.0}]
 
         with patch.object(outcome_scheduler, "option_leg_due", return_value=True), \
-             patch.object(outcome_scheduler, "_days_to_resolve", return_value=["2026-08-11", "2026-08-10", "2026-08-05"]), \
+             patch.object(outcome_scheduler, "_days_to_resolve", return_value=["2026-08-11", "2026-08-10"]), \
              patch.object(outcome_scheduler, "_write_marker"), \
+             patch("tools.replay_option_leg.unpriced_days", return_value=["2026-07-29", "2026-07-30"]), \
+             patch("tools.replay_option_leg.persist") as persist, \
              patch("tools.replay_option_leg.run_day", return_value=(legs, {}, 71.0)) as run_day:
 
             summary = outcome_scheduler.maybe_replay_option_legs(NOW, "IDLE")
 
-        run_day.assert_called_once_with("2026-08-11")
-        self.assertEqual(summary["legs"], 2)
-        self.assertEqual(summary["days"]["2026-08-11"]["mean_option_return_pct"], -1.0)
+        priced = [call.args[0] for call in run_day.call_args_list]
+
+        self.assertEqual(priced[0], "2026-08-11", "yesterday is priced first")
+        self.assertEqual(sorted(priced[1:]), ["2026-07-29", "2026-07-30"])
+        self.assertEqual(persist.call_count, len(priced),
+                         "computing without persisting is the original defect")
+        self.assertEqual(summary["legs"], 2 * len(priced))
+
+    def test_the_backlog_never_re_prices_a_day_already_queued(self):
+        """A day in both lists must be priced once, not twice."""
+
+        with patch.object(outcome_scheduler, "option_leg_due", return_value=True), \
+             patch.object(outcome_scheduler, "_days_to_resolve", return_value=["2026-08-11"]), \
+             patch.object(outcome_scheduler, "_write_marker"), \
+             patch("tools.replay_option_leg.unpriced_days", return_value=["2026-08-11", "2026-07-29"]), \
+             patch("tools.replay_option_leg.persist"), \
+             patch("tools.replay_option_leg.run_day", return_value=([], {}, 1.0)) as run_day:
+
+            outcome_scheduler.maybe_replay_option_legs(NOW, "IDLE")
+
+        priced = [call.args[0] for call in run_day.call_args_list]
+
+        self.assertEqual(priced.count("2026-08-11"), 1)
 
     def test_a_failure_returns_none_rather_than_raising(self):
 

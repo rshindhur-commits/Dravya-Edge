@@ -94,6 +94,41 @@ def price_leg(candidate, verdict, resolved_at):
     }
 
 
+def unpriced_days(limit_days=None):
+    """Archived days holding resolved candidates whose option leg is unpriced.
+
+    Oldest first. The underlying verdict is cheap and runs nightly; pricing the
+    contract is not, so it ran for one session and the rest of the archive stayed
+    unmeasured. That is how every conclusion drawn on 2026-08-12 came to be
+    measured on the underlying while the strategy buys options -- SPCX reached
+    its target *and* returned +22.26%, but NVDA reached its stop and returned
+    -19.83%, and only the second number is the one the account feels.
+
+    So the backlog is worked through a few days a night until it is gone.
+    """
+
+    from sqlalchemy import text
+
+    from app.db.connection import get_engine
+
+    with get_engine().begin() as connection:
+
+        rows = connection.execute(text("""
+            SELECT DISTINCT s.trading_day
+            FROM scanner_snapshot s
+            WHERE s.decision_payload ->> 'Candidate Entry Price' IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM option_leg_replay o
+                  WHERE o.trading_day = s.trading_day
+              )
+            ORDER BY s.trading_day
+        """)).fetchall()
+
+    days = [str(row[0]) for row in rows]
+
+    return days[:limit_days] if limit_days else days
+
+
 def run_day(day, limit=None):
 
     candidates = load_candidates(day)
