@@ -39,10 +39,28 @@ ET = ZoneInfo("America/New_York")
 
 # Cadence per market session, in seconds. Denser through the regular session where
 # intraday setups form and resolve; sparse when nothing actionable can happen.
+#
+# These also decide the database bill, which is not obvious from here. Neon
+# suspends compute after 300s idle and bills CU-hours while awake, and a scan
+# writes its rows in a burst of about 5 seconds. So an interval of 300 leaves a
+# ~295s gap and the compute never once suspends; an interval above ~310 lets it
+# sleep every cycle. REGULAR sits on the wrong side of that line by seconds.
+#
+# PREMARKET was 600. Measured 2026-08-11: its 28 scans priced **zero** contracts
+# and carried chain evidence on 4 of 728 rows, against 231 of 2,210 in session --
+# options do not trade before 09:30, and the entry window does not open until
+# 09:45, so nothing before it can produce an entry either. It was holding the
+# database awake roughly two hours a day to learn 1.7% of the day's evidence.
+# 1800 keeps ~11 premarket scans for context and gap detection.
+#
+# REGULAR is deliberately left at 300. Moving it to 360 would suspend compute
+# every cycle and cut the session's DB cost by about 15%, but the scan cadence
+# through the session is a trading decision, not a hosting one, and it is not
+# being made here as a side effect of saving a few dollars.
 SESSION_INTERVALS = {
     "OPENING_RANGE": 120,
     "REGULAR": 300,
-    "PREMARKET": 600,
+    "PREMARKET": 1800,
     "AFTERHOURS": 900,
     "CLOSED": 1800,
 }
