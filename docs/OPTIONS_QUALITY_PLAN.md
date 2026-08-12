@@ -9,7 +9,7 @@ tried; this one is what is being tried now.
 **Status key:** `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blocked
 · `[-]` dropped, with a reason
 
-**Last updated:** 2026-08-10
+**Last updated:** 2026-08-11
 
 ---
 
@@ -37,6 +37,13 @@ roughly nothing. That is the whole problem in two lines.
 
 - [x] **S-A1** Record the thresholds each scan enforced
   *Evidence:* `scanner_runs.payload->'config'`, `app/runtime/config_snapshot.py`
+
+  **First produced data 2026-08-11**, confirmed live: non-null for all 113 runs
+  that day and null for every session before it. Merged on 10 Aug is not the
+  same as recording, and only the second of those can be checked. It paid for
+  itself immediately — see the 11 Aug finding, where it is the reason today's
+  rejections could be graded against the 2.0% ceiling that actually ran rather
+  than the 6.0% sitting in a local `.env`.
 - [x] **S-A2** Record contract leverage on every priced contract
   *Evidence:* `app/risk/option_leverage.py`, off by default, records regardless
 - [x] **S-A3** Capture full chain quality per candidate — best available spread, OI,
@@ -50,6 +57,13 @@ roughly nothing. That is the whole problem in two lines.
   stored there as a **JSON string inside JSONB**, so Postgres cannot see into
   it and each question needed a 233 MB table pulled and parsed in Python. The
   gap was accessibility, not capture, and `summarize_chain` closes it.
+
+- [ ] **S-A4** Resolve outcomes for candidates that were never entered.
+  `candidate_outcome` records 888 rows all `became_neutral` and stopped on 31
+  July; `candidate_evidence.winner` is false on all 2,600. Opened 11 Aug — see
+  the finding below. **Blocks every observe-only experiment**, S-E and the RR
+  shadow included, because a shadow that writes into this store records nothing.
+  Phase 0 is therefore *not* complete.
 
 ### ▶ Finding, 2026-08-10 — the constraint is not what the rejection counts say
 
@@ -89,6 +103,88 @@ It sharpens S-C: the universe filter is not "tight spreads" but **"tight spreads
 at a premium this account can hold"**, which points at lower-priced liquid
 underlyings rather than megacaps. One session; needs confirming across the
 archive before the 17 Aug decision, per rule 1.
+
+### ▶ Finding, 2026-08-11 — the same constraint, confirmed by a second method
+
+The 10 Aug read above came from asking what refused the *best available*
+contract. 11 Aug asks the opposite question — of the contracts that were
+refused, how many would trading actually recover — and lands in the same place.
+Two methods, two sessions, one answer. This satisfies the "needs confirming
+across the archive" caveat on S-C for a second session.
+
+`evaluate_option_liquidity` is a **short-circuit chain** — OI → volume → spread →
+DTE → quality → **cost, last** — so a rejection code is only an attempt's *first*
+failure. A contract stamped `LOW_OPEN_INTEREST` was never measured against the
+bars after it, which is precisely why OI dominates the raw counts and means
+nothing. Re-testing every other bar, on 13,846 attempts:
+
+| relax the OI floor to | recovered by label | **actually tradeable** |
+| --- | --- | --- |
+| 250 | 1,982 across 18 symbols | **0, across 0 symbols** |
+| 100 | 4,090 across 18 symbols | **0, across 0 symbols** |
+
+Not one. They failed cost (1,797), spread (1,764) and volume (1,284) as well.
+**The open interest floor cannot be the constraint at any setting.** Meanwhile
+558 contracts were refused on cost *having already cleared every other bar* —
+cost being last in the chain makes that count exact rather than indicative.
+
+Five symbols carried a fully-qualified contract within $65 of the cap: PLTR
+$505, TSLA $515, NVDA $525, ORCL $555, SPCX $565. That is a much narrower miss
+than the $3,825 median of 10 Aug, and it is what pulled NVDA and PLTR into the
+S-C ranking below.
+
+`tools/option_rejection_report.py` was fixed to print a joint-tested `tradeable`
+column beside `by label`; reading the old column is what made the OI floor look
+worth relaxing. For `OPTION_TOO_EXPENSIVE` the two columns agree exactly, which
+is a standing self-check that the chain order still holds.
+
+### ▶ Finding, 2026-08-11 — RR, not cost, is what refuses the final step
+
+The finding above is about which *contract* gets bought. This one is a layer up,
+and it changes what Phase 2 has to prove.
+
+On 11 Aug the chain delivered: **63 candidate-moments carried a contract at ≤2%
+spread and ≤$500 — at the live ceiling, not a hypothetical one** — and 25 cleared
+every liquidity, cost and quality bar. Every one of the 24 that reached a
+decision was refused for the same reason: **RR below 2.0**.
+
+```
+NFLX 1.88    PLTR 1.82    NVDA 1.60    TSLA 1.59
+```
+
+It is not a one-day artefact. Of candidates that got an option priced:
+
+| session | RR-blocked | option-blocked | entered |
+| --- | --- | --- | --- |
+| 08-03 | 90 | 97 | 3 |
+| 08-04 | 123 | 23 | 5 |
+| 08-05 | 109 | 32 | 3 |
+| 08-10 | 312 | 224 | 1 |
+| 08-11 | **274** | 194 | **0** |
+
+**RR refuses more than options on four of five sessions.** Both findings are
+true and they are not in conflict — cost decides which contract is buyable, RR
+decides whether the candidate is taken at all — but only the second one is
+currently gating trade count.
+
+*Config note:* `AUTO_PAPER_MIN_RR=1.8` is dead on the live path. The scanner
+gate's 2.0 wins by design (`app/runtime/paper_automation_support.py`, the
+`ENTRY_GATE_MIN_RR` fallback). NFLX at 1.88 and PLTR at 1.82 both clear the
+configured 1.8 and were refused anyway. Anyone tuning that knob will measure
+nothing and conclude the wrong thing.
+
+### ▶ Finding, 2026-08-11 — no outcome exists for candidates never entered
+
+`candidate_outcome` holds 888 rows, **every one `became_neutral`, zero
+`target_hit`, zero `stop_hit`**, and nothing written since 31 July.
+`candidate_evidence.winner` is false on all 2,600 rows.
+
+So the question "would a looser bar have admitted winners?" **cannot be answered
+from the archive for any threshold** — RR, spread, OI or cost. There is outcome
+data only for trades that were entered. Every loosening proposal is therefore a
+forward experiment, never a backtest, until this is repaired. That is a
+precondition for the observe-only pattern S-E already relies on: shadowing a
+threshold into a store that resolves everything to neutral records nothing.
 
 ## Phase 1 — The ceiling test · Fri 14 Aug · **this gate can answer no**
 *Offline, existing data, no quota.*
@@ -147,26 +243,38 @@ it is what decides whether the edge that exists at the ceiling is reachable.
   the chain was fine, reading rejection counts says open interest, and the
   binding constraint is neither.
 
-  First read — 3 sessions (08-04, 08-05, 08-10); four earlier days excluded
-  because their attempts predate the `65361cb` evidence fix:
+  Second read — **4 sessions** (08-04, 08-05, 08-10, 08-11); four earlier days
+  excluded because their attempts predate the `65361cb` evidence fix:
 
   | symbol | n | viable % | best spread | cheapest tight contract |
   | --- | --- | --- | --- | --- |
-  | ORCL | 46 | **65%** | 1.15% | $912 |
-  | TSLA | 46 | 24% | 0.89% | $1,345 |
-  | CRWD | 25 | 12% | 1.88% | $850 |
-  | AVGO / MSFT / AMD / MU | 21–90 | 2–5% | 1.2–2.4% | $1,400–2,445 |
-  | AMAT, META, MRVL, PANW, SMH, TSM, ARM | 20–72 | **0%** | 1.1–3.4% | $1,825–12,715 |
+  | **NVDA** | 20 | **100%** | 0.92% | — |
+  | **PLTR** | 28 | **100%** | 0.61% | — |
+  | ORCL | 56 | **66%** | 1.15% | $720 |
+  | TSLA | 54 | 35% | 0.90% | $1,345 |
+  | CRWD | 49 | 22% | 2.08% | $1,365 |
+  | MSFT / AMD / META / AVGO / MU | 22–121 | 2–9% | 1.1–2.3% | $1,400–2,445 |
+  | AMAT, MRVL, PANW, SMH, TSM, ARM | 40–83 | **0%** | 1.7–3.4% | $2,020–11,625 |
 
-  Seven symbols returned **zero viable contracts across three sessions**. They
+  Six symbols returned **zero viable contracts across four sessions**. They
   cannot be traded by this account at any threshold setting, and no spread
-  ranking would have said so.
+  ranking would have said so. META left that group on a single viable moment
+  (4%), which is noise, not a promotion.
 
-  *Not yet ranked, too few moments:* NVDA (12), GOOGL (16), PLTR (10), AAPL (9),
-  SPCX (4), NFLX (2), AMZN (2), QQQ (0) — which is most of the old keep-list.
+  **The 11 Aug session moved this ranking**, and it is the first movement that
+  points somewhere better than ORCL. NVDA (12→20) and PLTR (10→28) crossed the
+  20-moment bar and both read **100% viable** — the two cheapest tight contracts
+  of the day were theirs, at $525 and $505. Per rule 1 this is *worth testing*,
+  not a keep-list: 20 and 28 moments are thin, and a rate of exactly 100% is the
+  shape small samples produce most easily. It does mean the 17 Aug decision
+  should not be framed as "ORCL or nothing".
+
+  *Not yet ranked, too few moments:* GOOGL (16), NFLX (16), SPCX (14), AAPL (9),
+  AMZN (6), XOM (2), JPM (1), SMCI (1), QQQ (0).
 
   *Open question for 17 Aug,* raised by the cap sweep: viability across the
-  universe runs 13.5% at $500, 20.4% at $1,000, 48.6% at $2,000. Cost is
+  universe runs **19.3% at $500, 25.7% at $1,000, 49.9% at $2,000** (was 13.5 /
+  20.4 / 48.6 on three sessions — the floor rose, the ceiling did not). Cost is
   clearly a lever on *availability* — but $2,000 is 40% of the account in one
   position, and a larger cap was already measured not to change the loss rate.
   Availability and sizing have to be decided together.
@@ -174,20 +282,50 @@ it is what decides whether the edge that exists at the ceiling is reachable.
   *Target unchanged:* mean spread paid per trade **≤ 2.5%**, from 3.4% today.
 
 - [ ] **S-D** Set the spread ceiling **and** the universe together, never apart.
-  A 2% ceiling on a wide universe produces one trade a day (10 Aug). A 3% ceiling
-  on the S-C universe passes 46–81% of contracts. They are one decision.
+  A 2% ceiling on a wide universe produces one trade a day (10 Aug) — and **zero
+  on 11 Aug**, from a clean 113-scan session with no failures. Two sessions now
+  read 1 and 0. A 3% ceiling on the S-C universe passes 46–81% of contracts.
+  They are one decision.
   *Proposed:* ceiling **3**, with S-C, not before it.
+
+  Note for Gate 2: its floor is ≥3 trades per session. The ceiling alone is not
+  drifting toward that number, it is drifting away from it.
 
 - [ ] **S-E** `OPTION_MIN_LEVERAGE=25` observe-only, then enforce if it holds live.
   Built and holdout-confirmed (+0.28%/trade, CI [+0.02, +0.62] — a marginal pass).
 
 - [ ] **S-F** Re-derive `MIN_STOP_SPREAD_MULTIPLE`. It sits at **1.0**, which admits
   a trade whose round-trip spread eats the entire stop. Arithmetic says 3–5.
-  Blocked on S-A3: no archive records spread and delta together.
+
+  ~~Blocked on S-A3: no archive records spread and delta together.~~
+  **Not blocked — the blocker was never true after S-A3.** Measured 2026-08-11,
+  every attempt carries both fields: 100% of 14,264 attempts on 08-11, 100% of
+  18,775 on 08-10, 74% of 4,597 on 08-05. That is ~33k paired observations
+  already sitting in `scanner_snapshot`. The note was written before S-A3 turned
+  out to be complete and was never revised against it.
+
+  **This is now the cheapest live item on the board** — offline, no quota, no
+  behaviour change, and it targets the toll term directly.
 
 ### ▶ GATE 2 · Fri 28 Aug
 * Mean spread paid ≤ 2.5% **and** ≥ 3 trades per session under S-C + S-D.
+* **State the RR bar the new toll justifies, and measure the trade count at that
+  bar** — not at 2.0. Break-even RR *is* the toll: 0.321R at 3.22% today. If the
+  toll falls to 2%, the bar that a trade must clear to be worth taking falls with
+  it, and that is what should release trade count. Amended 11 Aug.
 * **Fail** → cost was not the binding constraint. Reassess before Phase 3.
+
+  ⚠️ **Read the two criteria separately.** They fail independently and the
+  second one is not gated by cost. RR refused more candidates than options on
+  four of five sessions to 11 Aug, so the plausible bad outcome is: the toll is
+  cut successfully, spread comes in under 2.5%, trade count stays at 0–1 because
+  the RR bar never moved, and the gate reads *fail* on volume. The stated
+  inference — "cost was not the binding constraint" — would then be wrong. Cost
+  would have been cut exactly as intended and the scoreboard misread.
+
+  This is the same error as the open-interest counterfactual of 11 Aug, one
+  level up: **the loudest blocker is not the binding one.** Before concluding
+  anything from Gate 2, check which gate actually refused the marginal candidate.
 
 ## Phase 3 — Attack the edge · Mon 31 Aug → Fri 18 Sep
 *Only if Gate 2 passes. Mechanism first — no more feature ranking.*
@@ -231,9 +369,10 @@ documented reason to pay **before** it is tested.
 
 | decision | state |
 | --- | --- |
-| `OPTION_MAX_SPREAD_PCT` currently **2** | Live and throttling everything to ~1 trade/day. Holds until S-C lands; changing it alone restores volume at bad quality. |
-| Six commits on `Claude_POA` | Unpushed. Nothing recorded until deployed. |
-| Credentials exported 2026-08-10 | Rotate — Neon, Polygon, OpenAI, Telegram, AlphaVantage. |
+| `OPTION_MAX_SPREAD_PCT` currently **2** | **The one still open.** Live and throttling everything to ~1 trade/day, and to 0 on 11 Aug. Holds until S-C lands; changing it alone restores volume at bad quality. |
+| ~~Local `.env` held `OPTION_MAX_SPREAD_PCT=6`~~ | **Closed 11 Aug** — corrected to 2. It had produced a false "45 recoverable contracts" that day. All 15 threshold keys were then diffed against `scanner_runs.payload->config`; this was the only drift. Re-run that diff whenever a local result surprises you. |
+| ~~Six commits on `Claude_POA`~~ | **Closed** — merged to `main` in PR #139 and live. The proof is S-A1 recording config for 113 runs on 11 Aug, which undeployed code cannot do. |
+| ~~Credentials exported 2026-08-10~~ | **Closed 11 Aug** — rotated. |
 
 ## Timeline at a glance
 
@@ -261,3 +400,40 @@ holdout. Cause of the trade collapse established — `OPTION_MAX_SPREAD_PCT` mov
 cutting acceptances 122 → 24. Two sessions (6 and 7 Aug) lost to a worker outage.
 Shipped: gate audit records enforced thresholds, incremental activity trace,
 leverage recorder, config snapshot, config changelog. This plan opened.
+
+### Tue 11 Aug
+A clean session that took no trade: 113 scans, 0 failures, health 95–100,
+2,938 rows over 26 symbols, **0 entries** and nothing held overnight. Nobody
+missed a signal — subscribers have been paused since 8 Aug.
+
+S-A1 produced its first data (above). The 10 Aug constraint finding was
+confirmed by a second and independent method: relaxing the OI floor to 250, or
+to 100, recovers **zero** tradeable contracts, because the liquidity filter
+short-circuits and OI is its first gate. Cost is last, so its 558 refusals are
+exact. `tools/option_rejection_report.py` was fixed to report joint-tested
+recovery — its previous output would have justified an OI change worth nothing.
+
+S-C gained a 4th session and its ranking moved for the first time: NVDA and
+PLTR crossed the sample bar at 100% viable. Universe viability at the $500 cap
+rose 13.5% → 19.3%. Six symbols remain at 0% across all four sessions.
+
+S-F found to be unblocked and mis-labelled since 10 Aug; ~33k paired
+spread/delta observations were already in hand. It is the next thing to do.
+
+Closed today: the six `Claude_POA` commits were merged to `main` in PR #139 and
+are live — **today's session is itself the proof**, since S-A1 could not have
+recorded config for 113 runs on undeployed code. Credentials rotated. The local
+`.env` spread ceiling corrected 6 → 2, closing the analysis trap the same day it
+was found.
+
+Two findings that change the aim, both above: **RR, not cost, refuses the final
+step** on four of five sessions, and **no outcome exists for any candidate that
+was never entered**, which makes every loosening proposal a forward experiment
+rather than a backtest. Gate 2 amended to state its RR bar and to read its two
+criteria separately. S-A4 opened, so Phase 0 is *not* complete after all —
+correcting the claim made earlier in this entry.
+
+Asked whether to drop the RR bar 2.0 → 1.8. **No, not yet, and not blind** — the
+reasoning is under S-F/S-E; the short version is that Gate 1 already measured
+lower targets as monotonically worse, and the bar should fall out of a reduced
+toll rather than be set by hand ahead of it. Shadow it once S-A4 lands.
