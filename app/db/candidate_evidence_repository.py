@@ -73,11 +73,39 @@ class CandidateEvidenceRepository(BestEffortRepository):
                 decision_history = EXCLUDED.decision_history,
                 suggestion_status = EXCLUDED.suggestion_status,
                 paper_trade_status = EXCLUDED.paper_trade_status,
-                replay_outcome = EXCLUDED.replay_outcome,
-                target_first = EXCLUDED.target_first,
-                stop_first = EXCLUDED.stop_first,
-                winner = EXCLUDED.winner,
-                missed_winner = EXCLUDED.missed_winner,
+                -- The five outcome columns keep a resolved verdict rather than
+                -- taking whatever the rebuild carries. This builder reads them
+                -- from `Replay Outcome`, which is NO_REPLAY on every scanner row
+                -- ever written, so an unguarded rebuild resolves them all to
+                -- false and silently erases what
+                -- `tools/resolve_candidate_outcomes.py` established by replaying
+                -- the bars. Incoming wins only when it actually resolved
+                -- something; otherwise the stored verdict stands.
+                replay_outcome = CASE
+                    WHEN EXCLUDED.target_first OR EXCLUDED.stop_first
+                    THEN EXCLUDED.replay_outcome
+                    ELSE COALESCE(candidate_evidence.replay_outcome, EXCLUDED.replay_outcome)
+                END,
+                target_first = CASE
+                    WHEN EXCLUDED.target_first OR EXCLUDED.stop_first
+                    THEN EXCLUDED.target_first
+                    ELSE candidate_evidence.target_first
+                END,
+                stop_first = CASE
+                    WHEN EXCLUDED.target_first OR EXCLUDED.stop_first
+                    THEN EXCLUDED.stop_first
+                    ELSE candidate_evidence.stop_first
+                END,
+                winner = CASE
+                    WHEN EXCLUDED.target_first OR EXCLUDED.stop_first
+                    THEN EXCLUDED.winner
+                    ELSE candidate_evidence.winner
+                END,
+                missed_winner = CASE
+                    WHEN EXCLUDED.target_first OR EXCLUDED.stop_first
+                    THEN EXCLUDED.missed_winner
+                    ELSE candidate_evidence.missed_winner
+                END,
                 trend_capture = EXCLUDED.trend_capture,
                 tes = EXCLUDED.tes,
                 engineering_root_cause = EXCLUDED.engineering_root_cause,

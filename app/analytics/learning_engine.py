@@ -27,10 +27,30 @@ def build_feedback_loop(candidate_evidence, refresh_events, evidence_days=0, com
             calibration.append({"bucket": str(bucket), "candidates": int(len(group)), "winner_rate": round(float(winners.mean() * 100), 1) if winners.notna().any() else None})
     roi = []
     if not evidence.empty:
+        # Only rows whose outcome is actually known may be scored. `winner` is
+        # false both for "was measured and lost" and for "was never resolved",
+        # and counting the second as a prevented loss is what made every rule
+        # look perfect: before this, LOW_RR ranked first at ROI 1000 on 1,000
+        # rows of which **zero** had been resolved, on the day it refused every
+        # trade. Coverage is reported beside the score so a rule with nothing
+        # measured reads as unknown rather than as flawless.
+        resolved_mask = (
+            evidence.get("target_first", pd.Series(False, index=evidence.index)).astype(bool)
+            | evidence.get("stop_first", pd.Series(False, index=evidence.index)).astype(bool)
+        )
         for rule, group in evidence.groupby(evidence.get("rule_evaluation", pd.Series("UNKNOWN", index=evidence.index)).fillna("UNKNOWN")):
-            winners = group.get("winner", pd.Series(False, index=group.index)).astype(bool)
+            scored = group[resolved_mask.reindex(group.index, fill_value=False)]
+            winners = scored.get("winner", pd.Series(False, index=scored.index)).astype(bool)
             blocked_winners = int(winners.sum()); prevented = int((~winners).sum())
-            roi.append({"rule": str(rule), "losses_prevented": prevented, "winners_blocked": blocked_winners, "roi": prevented - blocked_winners})
+            roi.append({
+                "rule": str(rule),
+                "losses_prevented": prevented,
+                "winners_blocked": blocked_winners,
+                "roi": prevented - blocked_winners,
+                "candidates": int(len(group)),
+                "resolved": int(len(scored)),
+                "coverage_pct": round(100 * len(scored) / len(group), 1) if len(group) else 0.0,
+            })
     success = refresh.get("outcome", pd.Series(dtype=object)).astype(str).tail(50).eq("LIVE_QUOTE")
     confidence = min(95, round(15 + min(35, evidence_days * 33 / 19) + min(42, completed_trades), 1))
     lift = None

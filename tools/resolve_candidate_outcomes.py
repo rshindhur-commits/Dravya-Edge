@@ -279,6 +279,45 @@ def run_day(day, write=False):
     return rows
 
 
+BRIDGE = """
+UPDATE candidate_evidence e
+SET replay_outcome = o.payload ->> 'verdict',
+    target_first = o.target_hit,
+    stop_first = o.stop_hit,
+    winner = o.became_winner,
+    missed_winner = o.became_winner AND NOT o.entered,
+    evidence_updated_at = now()
+FROM candidate_outcome o
+WHERE o.candidate_id = e.candidate_id
+  AND (o.target_hit OR o.stop_hit)
+  AND (e.winner IS DISTINCT FROM o.became_winner
+       OR e.target_first IS DISTINCT FROM o.target_hit
+       OR e.stop_first IS DISTINCT FROM o.stop_hit)
+"""
+
+
+def bridge_to_evidence():
+    """Carry resolved verdicts into `candidate_evidence`, which is what reads them.
+
+    Writing `candidate_outcome` alone changes nothing anyone looks at.
+    `learning_engine.build_feedback_loop` computes `winners_blocked` from
+    `candidate_evidence.winner`; `candidate_intelligence` reads `target_first`
+    and `stop_first` from the same table; the V2 comparison and the validation
+    report follow those. All of them were reading a column that no resolved
+    outcome ever reached.
+
+    `replay_outcome` is set to the verdict string rather than left at NO_REPLAY
+    so the daily rebuild agrees with the columns: it derives `target_first` as
+    `"TARGET" in replay_outcome`, which is true of TARGET_FIRST and false of
+    STOP_FIRST, so a regenerated row lands on the same answer instead of
+    fighting the guard in the repository.
+    """
+
+    with get_engine().begin() as connection:
+
+        return connection.execute(text(BRIDGE)).rowcount
+
+
 def archived_days():
 
     with get_engine().begin() as connection:
@@ -341,6 +380,15 @@ def main():
                 f"refused candidates that reached target first: "
                 f"{total['target'] / resolved:.0%} of {resolved} resolved"
             )
+
+    if args.write:
+
+        bridged = bridge_to_evidence()
+        print(
+            f"\nbridged {bridged} verdict(s) into candidate_evidence "
+            f"-- rule ROI, candidate intelligence and the V2 comparison read "
+            f"that table, not candidate_outcome"
+        )
 
 
 if __name__ == "__main__":
