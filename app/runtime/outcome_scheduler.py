@@ -38,29 +38,37 @@ from app.storage.daily_paths import live_path
 logger = logging.getLogger(__name__)
 
 MARKER_FILENAME = "outcome_resolution_state.json"
+OPTION_LEG_MARKER_FILENAME = "option_leg_replay_state.json"
 
 # How many recent sessions to re-resolve on each run. Wide enough to catch up
 # after a few days of outage, far short of the 21-day snapshot retention.
 LOOKBACK_DAYS = 3
+
+# The option leg is priced for the most recent session only. Resolution is cheap
+# and idempotent so it can afford a window; this reconstructs and prices a whole
+# chain per candidate -- roughly 150 requests, and option quotes are not cached
+# -- at about 70-100 seconds a session. A window here would multiply Polygon
+# quota for days already measured.
+OPTION_LEG_LOOKBACK_DAYS = 1
 
 
 def _marker_path():
     return live_path(MARKER_FILENAME)
 
 
-def last_run_day():
+def _read_marker(path):
 
     try:
-        payload = json.loads(_marker_path().read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
         return str(payload.get("last_run_day") or "") or None
     except Exception:
         return None
 
 
-def _record_run(day, summary):
+def _write_marker(path, day, summary, label):
 
     try:
-        _marker_path().write_text(
+        path.write_text(
             json.dumps(
                 {"last_run_day": day, "summary": summary},
                 indent=2,
@@ -69,11 +77,33 @@ def _record_run(day, summary):
             encoding="utf-8",
         )
     except Exception:
-        logger.warning("could not write outcome resolution marker", exc_info=True)
+        logger.warning("could not write %s marker", label, exc_info=True)
+
+
+def last_run_day():
+
+    # Resolving the path is inside the guard, not outside it. Reading a missing
+    # or corrupt marker and failing to locate one at all both mean the same
+    # thing here -- "no record of a run" -- and neither may raise into the loop.
+    try:
+        return _read_marker(_marker_path())
+    except Exception:
+        return None
+
+
+def _record_run(day, summary):
+
+    _write_marker(_marker_path(), day, summary, "outcome resolution")
 
 
 def due(now, idle_reason_value):
-    """True when resolution should run on this pass."""
+    """True when resolution should run on this pass.
+
+    `idle_reason_value` is the post-market gate. `idle_reason` returns None while
+    the loop is scanning -- premarket included -- so a truthy value means the
+    session is over, which is both when the bars exist and when nothing else
+    wants the quota.
+    """
 
     if not idle_reason_value:
         return False
@@ -151,4 +181,84 @@ def maybe_resolve_outcomes(now, idle_reason_value):
     except Exception:
 
         logger.warning("outcome resolution failed", exc_info=True)
+        return None
+
+
+def _option_leg_marker_path():
+    return live_path(OPTION_LEG_MARKER_FILENAME)
+
+
+def option_leg_last_run_day():
+
+    try:
+        return _read_marker(_option_leg_marker_path())
+    except Exception:
+        return None
+
+
+def option_leg_due(now, idle_reason_value):
+    """True when the option leg should be priced on this pass.
+
+    Its own marker, deliberately. Sharing resolution's would mean a Polygon
+    quota failure here left the day looking unresolved and re-ran the cheap job
+    too, and worse, a resolution failure would suppress pricing that could have
+    run. They fail for unrelated reasons so they are gated separately.
+    """
+
+    if not idle_reason_value:
+        return False
+
+    return option_leg_last_run_day() != now.date().isoformat()
+
+
+def maybe_replay_option_legs(now, idle_reason_value):
+    """Price the option leg for the last session. Post-market only.
+
+    The underlying replay says whether a refused candidate reached its target.
+    It cannot say whether buying the option would have made money, and on
+    2026-08-10 the single candidate that did reach its target returned **-4.00%**
+    on the contract once the spread was paid at both ends. That gap is the whole
+    subject of the plan, and it was a constant fitted once across 291 trades
+    until this measured it per candidate.
+
+    Never allowed to raise, for the reason resolution is not: a scanner that
+    stops is worse than a measurement that is a day late.
+    """
+
+    if not option_leg_due(now, idle_reason_value):
+        return None
+
+    day = now.date().isoformat()
+
+    try:
+
+        from tools.replay_option_leg import run_day
+
+        days = _days_to_resolve(now)[:OPTION_LEG_LOOKBACK_DAYS]
+        summary = {"days": {}, "legs": 0}
+
+        for trading_day in days:
+
+            priced, skips, elapsed = run_day(trading_day)
+
+            summary["days"][trading_day] = {
+                "legs": len(priced),
+                "elapsed_sec": round(elapsed, 1),
+                "skips": dict(skips),
+                "mean_option_return_pct": (
+                    round(
+                        sum(leg["option_return_pct"] for leg in priced) / len(priced), 2
+                    )
+                    if priced else None
+                ),
+            }
+            summary["legs"] += len(priced)
+
+        _write_marker(_option_leg_marker_path(), day, summary, "option leg replay")
+
+        return summary
+
+    except Exception:
+
+        logger.warning("option leg replay failed", exc_info=True)
         return None
