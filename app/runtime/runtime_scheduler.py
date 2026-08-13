@@ -13,6 +13,25 @@ from app.runtime.runtime_performance import write_runtime_state
 from app.runtime.runtime_priority import Priority
 
 
+_TERMINAL_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELED"})
+
+# Finished records are history: `_metrics_locked` counts only QUEUED and
+# RUNNING, `wait_for` waits on the same two, and `cancel_old_jobs` looks at
+# QUEUED. Nothing reads a terminal record, and nothing deleted one either, so
+# `_records` grew for the life of the process.
+#
+# Measured 2026-08-13 by replaying run_scanner() against two symbols: exactly
+# +11 records a scan, all COMPLETED, never falling. On the worker that is
+# 113 scans x 11 = ~1,240 live records a session, each pinning its job's
+# arguments -- and the scan's finalize job is handed `df_results.copy()`, a
+# frame covering the full 26-symbol watchlist. RSS climbed 241MB -> 1330MB on
+# 2026-08-11 and only ever reset on deploy, which is the shape this produces.
+#
+# The cap bounds the history rather than removing it, because a terminal record
+# is still what you read when asking why a job failed an hour ago.
+_MAX_TERMINAL_RECORDS = 200
+
+
 @dataclass
 class _JobRecord:
 
@@ -190,6 +209,16 @@ class RuntimeScheduler:
                         queue_wait=time.perf_counter() - record.submitted_at,
                         status="CANCELED",
                     )
+
+                    # A cancelled job never ran, so nothing has dropped its
+                    # arguments. `cancel_old_jobs` fires on every scan against
+                    # the previous scan's queue, so this is the common path for
+                    # anything that falls behind -- not a rare one.
+                    with self._lock:
+
+                        self._release_payload(record.job)
+                        self._prune_terminal_locked()
+
                     continue
 
                 with self._lock:
@@ -216,6 +245,8 @@ class RuntimeScheduler:
 
                         record.status = status
                         record.finished_at = finished_at
+                        self._release_payload(record.job)
+                        self._prune_terminal_locked()
                         self._write_state_locked()
 
                     append_runtime_metric(
@@ -229,6 +260,47 @@ class RuntimeScheduler:
             finally:
 
                 self._queue.task_done()
+
+    @staticmethod
+    def _release_payload(job: RuntimeJob):
+        """Drop a finished job's arguments; the record itself stays.
+
+        This is the part that frees the memory. Waiting for the record to be
+        evicted would hold a 26-symbol DataFrame for however long the cap
+        allows, and the arguments are of no use once the job has run -- only
+        `name`, `priority` and the timings are ever read afterwards.
+        """
+
+        job.args = ()
+        job.kwargs = {}
+
+    def _prune_terminal_locked(self):
+        """Keep the newest `_MAX_TERMINAL_RECORDS` finished records.
+
+        Bounding this matters twice over. `_metrics_locked` walks every record
+        and runs on each submit and each status change, so an unbounded dict
+        makes a session's bookkeeping quadratic as well as heavy.
+
+        Caller must hold `self._lock`.
+        """
+
+        terminal = [
+            (record.finished_at or record.submitted_at, job_id)
+            for job_id, record in self._records.items()
+            if record.status in _TERMINAL_STATUSES
+        ]
+
+        excess = len(terminal) - _MAX_TERMINAL_RECORDS
+
+        if excess <= 0:
+            return 0
+
+        terminal.sort()
+
+        for _finished_at, job_id in terminal[:excess]:
+            self._records.pop(job_id, None)
+
+        return excess
 
     def _metrics_locked(self):
 
