@@ -547,7 +547,46 @@ def apply_regime_entry_thresholds(row, config: EntryGateConfig):
         min_setup = max(min_setup, MIN_SETUP_ELEVATED)
         min_rr = max(min_rr, 2.0)
 
+    # The setup score does not predict outcomes, so it no longer blocks.
+    #
+    # Measured 2026-08-12 over 244 resolved candidates, banded by the score this
+    # gate reads:
+    #
+    #     setup <50   n=136   33.8% win   +0.233R
+    #     setup 50-70 n= 47   29.8% win   -0.171R
+    #     setup 70+   n= 61   21.3% win   -0.300R
+    #
+    # It is inverted -- the candidates the app rates worst win most -- at
+    # z = 1.89, p = 0.059. The obvious confound is ruled out: median RR is flat
+    # across the bands (1.98 / 1.81 / 1.99), so it is not that high-scoring
+    # candidates carry further targets.
+    #
+    # What it costs is not theoretical. On 2026-08-12 SPCX was flagged CALL five
+    # times on an EMA_PULLBACK, refused at setup 68 against a bar of 81, and the
+    # contract it would have bought returned **+22.26%**. SMCI was refused the
+    # same way at setup 40 on a day it moved 18.86%. Meanwhile the RR gate that
+    # evening refused NVDA at 1.87 (-19.83%) and PLTR at 1.97 (-4.00%) -- so the
+    # RR bar earned its keep on the same funnel where this one did harm.
+    #
+    # Ranking on the score is untouched and the threshold is still returned and
+    # recorded, so the bar remains measurable; only the refusal is removed, at
+    # the two enforcement sites below. Set SETUP_GATE_ENABLED=true to restore
+    # blocking, and note the escalation above only ever tightens, so restoring it
+    # brings the 81-85 bar back with it.
     return min_setup, min_rr, max_spread
+
+
+def setup_gate_blocks():
+    """Whether a setup score below the bar should refuse the trade.
+
+    Off by default -- see the evidence above `return` in
+    `apply_regime_entry_thresholds`. Read at call time rather than import so the
+    switch can be flipped without a restart, and so tests can exercise both.
+    """
+
+    from app.config.settings import get_bool_env
+
+    return get_bool_env("SETUP_GATE_ENABLED", False)
 
 
 def evaluate_entry_gate(
@@ -612,7 +651,7 @@ def evaluate_entry_gate(
 
         return False, "RR_BELOW_THRESHOLD"
 
-    if setup < min_setup:
+    if setup < min_setup and setup_gate_blocks():
 
         return False, "SETUP_BELOW_THRESHOLD"
 
@@ -720,7 +759,7 @@ def build_entry_gate_diagnostics(
         result = "FAIL"
         failure = "RR_BELOW_THRESHOLD"
 
-    elif setup < min_setup:
+    elif setup < min_setup and setup_gate_blocks():
 
         result = "FAIL"
         failure = "SETUP_BELOW_THRESHOLD"

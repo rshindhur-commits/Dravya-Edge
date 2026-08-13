@@ -94,6 +94,41 @@ def price_leg(candidate, verdict, resolved_at):
     }
 
 
+def unpriced_days(limit_days=None):
+    """Archived days holding resolved candidates whose option leg is unpriced.
+
+    Oldest first. The underlying verdict is cheap and runs nightly; pricing the
+    contract is not, so it ran for one session and the rest of the archive stayed
+    unmeasured. That is how every conclusion drawn on 2026-08-12 came to be
+    measured on the underlying while the strategy buys options -- SPCX reached
+    its target *and* returned +22.26%, but NVDA reached its stop and returned
+    -19.83%, and only the second number is the one the account feels.
+
+    So the backlog is worked through a few days a night until it is gone.
+    """
+
+    from sqlalchemy import text
+
+    from app.db.connection import get_engine
+
+    with get_engine().begin() as connection:
+
+        rows = connection.execute(text("""
+            SELECT DISTINCT s.trading_day
+            FROM scanner_snapshot s
+            WHERE s.decision_payload ->> 'Candidate Entry Price' IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM option_leg_replay o
+                  WHERE o.trading_day = s.trading_day
+              )
+            ORDER BY s.trading_day
+        """)).fetchall()
+
+    days = [str(row[0]) for row in rows]
+
+    return days[:limit_days] if limit_days else days
+
+
 def run_day(day, limit=None):
 
     candidates = load_candidates(day)
@@ -130,7 +165,18 @@ def run_day(day, limit=None):
             skips[leg["skip"]] += 1
             continue
 
-        leg["symbol"] = symbol
+        leg.update({
+            "candidate_id": candidate["candidate_id"],
+            "trading_day": day,
+            "symbol": symbol,
+            "direction": candidate["direction"],
+            "setup": candidate["setup"],
+            "underlying_rr": (
+                abs(candidate["target"] - candidate["entry"])
+                / max(abs(candidate["entry"] - candidate["stop"]), 1e-9)
+            ),
+            "resolved_at": resolved_at,
+        })
         priced.append(leg)
 
         if limit and len(priced) >= limit:
@@ -138,6 +184,61 @@ def run_day(day, limit=None):
             break
 
     return priced, skips, time.time() - started
+
+
+PERSIST = """
+INSERT INTO option_leg_replay (
+    candidate_id, trading_day, symbol, direction, setup, verdict, option_ticker,
+    entry_fill, exit_fill, option_return_pct, entry_spread_pct, contract_cost,
+    underlying_rr, resolved_at, payload
+) VALUES (
+    :candidate_id, CAST(:trading_day AS DATE), :symbol, :direction, :setup,
+    :verdict, :ticker, :paid, :got, :option_return_pct, :entry_spread_pct,
+    :contract_cost, :underlying_rr, CAST(:resolved_at AS TIMESTAMPTZ),
+    CAST(:payload AS JSONB)
+)
+ON CONFLICT (candidate_id) DO UPDATE SET
+    verdict = EXCLUDED.verdict,
+    option_ticker = EXCLUDED.option_ticker,
+    entry_fill = EXCLUDED.entry_fill,
+    exit_fill = EXCLUDED.exit_fill,
+    option_return_pct = EXCLUDED.option_return_pct,
+    entry_spread_pct = EXCLUDED.entry_spread_pct,
+    contract_cost = EXCLUDED.contract_cost,
+    underlying_rr = EXCLUDED.underlying_rr,
+    resolved_at = EXCLUDED.resolved_at,
+    payload = EXCLUDED.payload
+"""
+
+
+def persist(priced):
+    """Write the legs so the nightly run leaves something behind.
+
+    Without this the job priced contracts, printed a summary to the worker log
+    and wrote a marker onto Render's local disk, which is wiped on deploy. It
+    spent the quota every night and kept nothing.
+    """
+
+    if not priced:
+
+        return 0
+
+    import json
+
+    from sqlalchemy import text
+
+    from app.db.connection import get_engine
+
+    rows = [
+        {**leg, "payload": json.dumps(leg, default=str)}
+        for leg in priced
+    ]
+
+    with get_engine().begin() as connection:
+
+        connection.execute(text(PERSIST), rows)
+
+    return len(rows)
 
 
 def report(day, priced, skips, elapsed):
@@ -187,6 +288,10 @@ def main():
     parser.add_argument("--day", help="trading day, YYYY-MM-DD")
     parser.add_argument("--all", action="store_true", help="every archived day")
     parser.add_argument("--limit", type=int, help="stop after N priced legs per day")
+    parser.add_argument(
+        "--no-write", action="store_true",
+        help="print only; do not persist to option_leg_replay",
+    )
     args = parser.parse_args()
 
     if not args.day and not args.all:
@@ -200,6 +305,11 @@ def main():
 
         priced, skips, elapsed = run_day(day, limit=args.limit)
         report(day, priced, skips, elapsed)
+
+        if not args.no_write:
+
+            print(f"   persisted {persist(priced)} legs to option_leg_replay")
+
         total.extend(priced)
 
     if len(days) > 1 and total:

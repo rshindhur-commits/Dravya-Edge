@@ -51,6 +51,13 @@ LOOKBACK_DAYS = 3
 # quota for days already measured.
 OPTION_LEG_LOOKBACK_DAYS = 1
 
+# Archived days to catch up on per night, beyond yesterday's session. Pricing a
+# session costs 70-105 seconds and thousands of uncached option quotes, so the
+# backlog is worked through slowly rather than in one run -- but it does get
+# worked through, which is the point. At 2 a night a 21-day archive is current
+# inside two weeks and stays that way.
+OPTION_LEG_BACKLOG_DAYS = 2
+
 
 def _marker_path():
     return live_path(MARKER_FILENAME)
@@ -232,14 +239,26 @@ def maybe_replay_option_legs(now, idle_reason_value):
 
     try:
 
-        from tools.replay_option_leg import run_day
+        from tools.replay_option_leg import persist, run_day, unpriced_days
 
+        # Yesterday's session first, then oldest unpriced. Pricing only the most
+        # recent day left the rest of the archive measured on the underlying
+        # alone, which is how a pool of refused candidates came to be called
+        # "no edge" on 2026-08-12 without one contract having been priced.
         days = _days_to_resolve(now)[:OPTION_LEG_LOOKBACK_DAYS]
-        summary = {"days": {}, "legs": 0}
+        backlog = [d for d in unpriced_days(OPTION_LEG_BACKLOG_DAYS) if d not in days]
+        summary = {"days": {}, "legs": 0, "backlog_remaining": max(
+            len(unpriced_days()) - len(backlog), 0
+        )}
 
-        for trading_day in days:
+        for trading_day in days + backlog:
 
             priced, skips, elapsed = run_day(trading_day)
+
+            # `run_day` computes; only `persist` keeps. Calling the first without
+            # the second is exactly how the job spent its quota nightly and left
+            # nothing behind.
+            persist(priced)
 
             summary["days"][trading_day] = {
                 "legs": len(priced),

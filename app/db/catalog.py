@@ -33,6 +33,12 @@ TABLES = (
     ("candidate_outcome", "Scanning", "one per candidate",
      "Whether a candidate was entered and what became of it -- winner, loser, "
      "target hit, stop hit, trend developed."),
+    ("option_leg_replay", "Scanning", "one per resolved candidate",
+     "What the option would have returned on a candidate that was never traded, "
+     "priced at honest fills -- ask to enter, bid to exit. `candidate_outcome` "
+     "says whether the underlying reached its target; only this says whether "
+     "buying the contract would have made money, which is frequently the "
+     "opposite answer."),
     ("activity_trace_event", "Scanning", "one per observed event",
      "The full narrative of a trading day, symbol by symbol, behind the Activity "
      "Feed."),

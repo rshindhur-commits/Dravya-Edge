@@ -40,6 +40,7 @@ import time
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -219,6 +220,27 @@ def _empty_frame():
     return frame
 
 
+def _covers_today(end_day):
+    """True when the requested range runs to today's ET session or beyond.
+
+    ET because that is the session the bars belong to: at 20:00 UTC it is still
+    the same trading day in New York, and a UTC-based check would call the day
+    finished four hours early -- exactly while the market is open.
+    """
+
+    try:
+
+        requested = pd.Timestamp(end_day).date()
+
+    except Exception:
+
+        # An unparseable range is treated as live. Refusing to cache costs a
+        # refetch; caching a partial day costs a wrong answer that persists.
+        return True
+
+    return requested >= datetime.now(ZoneInfo("America/New_York")).date()
+
+
 def fetch_bars(
     ticker,
     start_day,
@@ -239,6 +261,13 @@ def fetch_bars(
     """
 
     cache_file = _cache_path(ticker, multiplier, timespan, start_day, end_day)
+
+    # Skip an existing same-day cache as well as declining to write one: a file
+    # left by a mid-session run before this guard existed is exactly the stale
+    # data the guard is here to prevent.
+    if use_cache and _covers_today(end_day):
+
+        use_cache = False
 
     if use_cache and cache_file.exists():
 
@@ -302,7 +331,18 @@ def fetch_bars(
         ]
         frame = frame.set_index("Datetime").sort_index()
 
-    if use_cache:
+    # A session still in progress must never be cached. The key is the day range,
+    # so a fetch made at 11:10 stores a truncated day under the same name the
+    # completed session would use, and every later read gets those bars forever.
+    #
+    # On 2026-08-12 that turned a real result into a false one: SMCI was cached
+    # mid-session with 87 bars and a 37.18 high, so its 37.25 target read as
+    # never reached. The full session had 173 bars and a 38.15 high -- the target
+    # was hit, and the stock ran 18.86%. The same cache made SPCX's winning trade
+    # read as unresolved, and the nightly resolution wrote both to the database.
+    #
+    # Bars for a finished day never change, so caching those is still free.
+    if use_cache and not _covers_today(end_day):
 
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         frame.to_parquet(cache_file)
