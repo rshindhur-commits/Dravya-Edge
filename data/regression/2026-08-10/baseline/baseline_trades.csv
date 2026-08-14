@@ -1,0 +1,2 @@
+setup,status,symbol,outcome,direction,exit_time,trade_key,entry_time,exit_price,r_multiple,stop_price,entry_price,exit_reason,target_price,option_pnl_pct,exit_option_ask,exit_option_bid,exit_option_mid,holding_profile,entry_option_ask,entry_option_bid,entry_option_mid,option_pnl_pct_net,option_pricing_basis,exit_option_spread_pct,entry_option_spread_pct
+EMA_PULLBACK,CLOSED,ORCL,WIN,CALL,2026-08-10 17:33:26.071598+00:00,ORCL|CALL|EMA_PULLBACK,2026-08-10 16:07:47.297022+00:00,151.82,2.23,149.16,149.91,TARGET_HIT,151.58,,,,,INTRADAY,3.0,2.95,2.975,,unpriced,,1.67

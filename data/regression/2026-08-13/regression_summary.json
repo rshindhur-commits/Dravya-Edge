@@ -1,0 +1,47 @@
+{
+  "trading_day": "2026-08-13",
+  "context": {
+    "trading_day": "2026-08-13",
+    "snapshot_folder": "D:\\Dravya_Trade_Works\\data\\daily\\2026-08-13\\scanner_snapshots",
+    "baseline_folder": "D:\\Dravya_Trade_Works\\data\\regression\\2026-08-13\\baseline",
+    "results_folder": "D:\\Dravya_Trade_Works\\data\\regression\\2026-08-13",
+    "current_strategy_version": "current",
+    "baseline_version": "frozen",
+    "readonly": true
+  },
+  "baseline": {
+    "trades": 3,
+    "wins": 2,
+    "losses": 1,
+    "win_rate": 66.7,
+    "total_r": 3.22,
+    "average_r": 1.07,
+    "profit_factor": 4.22,
+    "priced_trades": 1,
+    "pricing_coverage_pct": 33.3,
+    "net_win_rate": 0.0,
+    "total_option_pnl_pct": -6.67,
+    "average_option_pnl_pct": -6.67
+  },
+  "current": {
+    "trades": 3,
+    "wins": 2,
+    "losses": 1,
+    "win_rate": 66.7,
+    "total_r": 3.22,
+    "average_r": 1.07,
+    "profit_factor": 4.22,
+    "priced_trades": 1,
+    "pricing_coverage_pct": 33.3,
+    "net_win_rate": 0.0,
+    "total_option_pnl_pct": -6.67,
+    "average_option_pnl_pct": -6.67
+  },
+  "comparison": {
+    "new": [],
+    "removed": [],
+    "changed": []
+  },
+  "net_gain_r": 0.0,
+  "verdict": "\u2796 No Material Change"
+}
