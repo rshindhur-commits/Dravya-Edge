@@ -196,6 +196,92 @@ class DuplicatedLimitTests(unittest.TestCase):
             self.assertIn("MAX_TRADES_PER_SYMBOL_PER_DAY", text)
 
 
+class AvoidChasingTests(unittest.TestCase):
+    """Map 1a -- the hard block that decides which candidates can exist.
+
+    A candidate more than 1.2% from its EMA9, or 1.5% from VWAP, is refused
+    outright. These thresholds are hardcoded with no environment variable, so
+    they cannot be A/B'd without a code change. If a knob is ever added, this
+    test should fail and the map's claim that none exists must be updated.
+    """
+
+    def test_it_is_a_hard_refusal_not_a_score_penalty(self):
+
+        from app.risk import risk_manager
+
+        source = inspect.getsource(risk_manager.calculate_risk)
+
+        self.assertIn("avoid_chasing", source)
+        self.assertIn("Avoid chasing extended move", source)
+
+    def test_the_thresholds_are_still_hardcoded(self):
+
+        from app.strategies import entry_engine
+
+        source = inspect.getsource(entry_engine.detect_entry)
+
+        self.assertIn("abs(vwap_distance) > 1.5", source)
+        self.assertIn("abs(ema_distance) > 1.2", source)
+
+        for knob in ("AVOID_CHASING", "MAX_VWAP_DISTANCE", "MAX_EMA_DISTANCE"):
+            self.assertNotIn(
+                knob, source,
+                f"{knob} exists now -- map section 1a says no knob does",
+            )
+
+    def test_it_applies_to_both_directions(self):
+        """It was long-broken for shorts; abs() is what fixed it."""
+
+        from app.strategies import entry_engine
+
+        source = inspect.getsource(entry_engine.detect_entry)
+
+        self.assertIn("abs(vwap_distance)", source)
+        self.assertIn("abs(ema_distance)", source)
+
+
+class SetupRegistryTests(unittest.TestCase):
+    """Map section 2 -- five setups, and one of them ignores the scale."""
+
+    def test_exactly_five_setups_can_be_emitted(self):
+
+        from app.strategies.setup_registry import SETUP_DIRECTIONS
+
+        self.assertEqual(
+            SETUP_DIRECTIONS,
+            {
+                "BREAKOUT": "CALL",
+                "EMA_PULLBACK": "CALL",
+                "BREAKDOWN_SHORT": "PUT",
+                "EMA_REJECTION_SHORT": "PUT",
+                "VWAP_REJECTION": "PUT",
+            },
+        )
+
+    def test_vwap_rejection_ignores_the_distance_scale(self):
+        """So an ATR_DISTANCE_SCALE arm leaves this setup untouched."""
+
+        from app.risk import risk_manager
+
+        source = inspect.getsource(risk_manager.calculate_risk)
+        start = source.index('entry_type == "VWAP_REJECTION"')
+        branch = source[start:start + 600]
+
+        self.assertNotIn(
+            "_distance_scale", branch,
+            "if VWAP_REJECTION starts scaling, the map's table is wrong",
+        )
+
+    def test_structure_stops_are_unreachable_in_production(self):
+        """Every production caller takes the "SWING" default."""
+
+        from app.risk import risk_manager
+
+        source = inspect.getsource(risk_manager.calculate_risk)
+        self.assertIn('stop_anchor="SWING"', source)
+        self.assertIn('== "STRUCTURE"', source)
+
+
 class StopGeometryTests(unittest.TestCase):
     """Map section 2 -- the scale is a weak lever because the bar dominates.
 

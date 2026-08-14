@@ -93,9 +93,74 @@ nothing, so tuning them moves very little. Count *symbols*, not rows.
 
 ---
 
+## 1a. The hard block nobody has a knob for: `avoid_chasing`
+
+**This is the entry-side twin of the stop anchor in §2.2a of TRADE_QUALITY_PLAN,
+and it is a harder constraint.**
+
+`app/strategies/entry_engine.py:190-208` sets `avoid_chasing = True` when either:
+
+```
+|close - VWAP| / VWAP  >  1.5 %
+|close - EMA9| / EMA9  >  1.2 %
+```
+
+`app/risk/risk_manager.py:891-897` then refuses the trade outright:
+
+```python
+if entry_setup.get("avoid_chasing", False):
+    trade_allowed = False
+    reasons.append("Avoid chasing extended move")
+```
+
+**Consequences, stated plainly:**
+
+* A candidate more than **1.2% away from its own EMA9 cannot be traded, at all.**
+  Not down-weighted — refused.
+* This is the mechanism behind the observation that price sits 1.5–2.9 ATR above
+  EMA9 during real trends while the app can only enter near the EMA. It is why a
+  symbol that moved 5.67% (MU) or 7.33% (SMCI) in a session can produce no
+  tradeable candidate.
+* It is a plausible contributor to §2.2h — entry timing measuring **worse than a
+  random minute**. The rule admits only moments when price has *not* moved, which
+  at these horizons is where liquid megacaps mean-revert.
+
+**Both thresholds are hardcoded.** There is no environment variable, so this
+cannot currently be A/B'd without a code change. Adding one is the cheapest way to
+make Phase B's hypotheses testable — and note that changing it invalidates every
+archived candidate set, because it changes which candidates exist at all.
+
+The comment at `entry_engine.py:180-188` records that this block was long-broken
+for shorts, so short setups had no chase protection at all until it was fixed.
+Archived runs from before that fix are not comparable to later ones.
+
+---
+
 ## 2. Stage 3 — Risk: stops, targets, RR
 
 `app/risk/risk_manager.py::calculate_risk`
+
+### The five setups, and which ones the scale reaches
+
+`app/strategies/setup_registry.py` — `detect_entry` emits exactly five. Names
+outside this list (VWAP_RECLAIM, COILED_BREAKOUT, …) appear in the code but their
+detectors are commented out and **cannot occur**.
+
+| setup | direction | stop anchor | `ATR_DISTANCE_SCALE` reaches it? |
+|---|---|---|---|
+| `EMA_PULLBACK` | CALL | `min(Low−atr·0.15s, EMA9−atr·0.10s)` | **yes** |
+| `BREAKOUT` | CALL | `min(recent_low, entry−atr·mult·s)` | yes, via the multiplier |
+| `EMA_REJECTION_SHORT` | PUT | `max(High+atr·0.15s, EMA9+atr·0.10s)` | **yes** |
+| `BREAKDOWN_SHORT` | PUT | `max(recent_high, entry+atr·mult·s)` | yes, via the multiplier |
+| `VWAP_REJECTION` | PUT | `max(VWAP+atr·0.15, High+atr·0.10)` | **no — hardcoded** |
+
+`VWAP_REJECTION` (line 277) applies no scale at all. An arm setting
+`ATR_DISTANCE_SCALE` leaves that setup completely unchanged, which dilutes an
+already weak lever further.
+
+The `structure_stops` branches require `stop_anchor="STRUCTURE"`, which **no
+production caller passes** — every call site uses the `"SWING"` default. Those
+branches are dead in live trading and in replay.
 
 ### Geometry per setup, and what scales
 
@@ -398,6 +463,7 @@ which is why `maybe_freeze_regression_baselines` runs nightly.
 
 | change | also moves | invalidates | already known |
 |---|---|---|---|
+| `avoid_chasing` thresholds (1.2% EMA9 / 1.5% VWAP) | **which candidates exist at all** — it is a hard refusal in `calculate_risk` | every archived candidate set and every funnel count | no knob exists; never A/B'd; §1a |
 | `OPTION_MAX_SPREAD_PCT` | contract selection **and** the entry gate — but **not** the auto-paper gate constant (trap 0.3) | every archived run at a different ceiling | 6→3→2 measured; 2 is best (+2.33sd). A1 says 3 loses on bull |
 | `OPTION_MAX_CONTRACT_COST` | affordability, stage 14 of contract selection | option P&L comparisons | 1200→500 worth ~$187/session at an identical loss *rate* |
 | `SCANNER_GATE_MIN_RR` | stage 5 only; regime can raise it further | every gate-pass count | 2.0 stands — raising and lowering both die on the outlier check |
