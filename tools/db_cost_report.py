@@ -70,12 +70,42 @@ def main():
         except Exception:
             last_prune = None
 
+        # Days of archive actually held, taken from the largest table rather
+        # than from a calendar, so weekends and outages need no special case.
+        snapshot_days = conn.execute(text("""
+            SELECT COUNT(DISTINCT trading_day) FROM scanner_snapshot
+        """)).scalar() or 0
+
+    from app.db.retention import RETENTION_RULES
+
+    keep_days = max(
+        (rule.keep_days for rule in RETENTION_RULES
+         if rule.table == "scanner_snapshot"),
+        default=90,
+    )
+
     storage_cost = total_mb / 1024.0 * STORAGE_USD_PER_GB_MONTH
 
     print(f"\ndatabase size   {fmt_mb(total_mb)}")
     print(f"storage cost    ${storage_cost:,.2f} / month "
           f"(at ${STORAGE_USD_PER_GB_MONTH}/GB-month)")
     print(f"last retention  {last_prune or 'never recorded'}")
+
+    # Today's size is not the bill; the bill is where this settles once every
+    # table is as old as its own retention window. The archive currently holds
+    # far fewer days than it is allowed to keep, so the level is still climbing
+    # and quoting it alone understates the steady state.
+    if snapshot_days and snapshot_days > 1:
+
+        mb_per_day = total_mb / snapshot_days
+        settled_mb = mb_per_day * keep_days
+        settled_cost = settled_mb / 1024.0 * STORAGE_USD_PER_GB_MONTH
+
+        print(f"\ngrowth          {fmt_mb(mb_per_day)} / day "
+              f"over {snapshot_days} days of archive")
+        print(f"settles at      {fmt_mb(settled_mb)} once the archive is "
+              f"{keep_days} days deep")
+        print(f"                = ${settled_cost:,.2f} / month in storage")
 
     print(f"\n{'table':<32}{'size':>12}{'rows':>14}")
     for t in tables:
