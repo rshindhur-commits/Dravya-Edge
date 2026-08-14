@@ -79,6 +79,54 @@ class DefaultOffTests(unittest.TestCase):
         self.assertEqual(baseline["stop_loss"], explicit_off["stop_loss"])
 
 
+class ExtensionCapTests(unittest.TestCase):
+    """The cap is what stops this becoming a tautology.
+
+    Uncapped, the extension sets RR to exactly TARGET_MIN_RR for every
+    candidate that reaches it -- a true RR of 0.95 had its target pushed two
+    full ATR to manufacture 2.0. The gate would then be checking a number the
+    target was just adjusted to satisfy, and the worst geometry would receive
+    the least reachable targets.
+    """
+
+    def _rr(self, df, min_rr, cap):
+        with patch.dict(os.environ, {
+            "TARGET_MIN_RR": str(min_rr),
+            "TARGET_MAX_REWARD_ATR": str(cap),
+        }):
+            return _risk(df)["risk_reward"]
+
+    def test_geometry_far_below_the_bar_is_not_rescued(self):
+        """RR 0.95 must stay refused, not be handed a two-ATR target."""
+
+        df = _frame(Low=96.50, EMA9=97.00, ROLLING_RESISTANCE=100.50)
+
+        off = self._rr(df, 0, 2.5)
+        on = self._rr(df, 2.0, 2.5)
+
+        self.assertLess(off, 1.5, "frame should start well below the bar")
+        self.assertEqual(on, off, "a hopeless setup must not be extended")
+
+    def test_a_modest_shortfall_is_rescued(self):
+        """The NFLX case: RR 1.55 from a stop that widened off the EMA."""
+
+        df = _frame()
+
+        self.assertLess(self._rr(df, 0, 2.5), 2.0)
+        self.assertGreaterEqual(self._rr(df, 2.0, 2.5), 2.0 - 0.01)
+
+    def test_a_wider_cap_admits_more(self):
+        """The cap is the control surface, so it must actually bind."""
+
+        df = _frame(Low=97.50, EMA9=98.00, ROLLING_RESISTANCE=101.50)
+
+        tight = self._rr(df, 2.0, 2.5)
+        loose = self._rr(df, 2.0, 3.0)
+
+        self.assertLess(tight, 2.0, "2.5 ATR should refuse this one")
+        self.assertGreaterEqual(loose, 2.0 - 0.01, "3.0 ATR should admit it")
+
+
 class ExtensionTests(unittest.TestCase):
 
     def test_a_short_target_is_extended_to_the_floor(self):
@@ -88,11 +136,14 @@ class ExtensionTests(unittest.TestCase):
         with patch.dict(os.environ, {"TARGET_MIN_RR": "0"}):
             before = _risk(df)
 
-        with patch.dict(os.environ, {"TARGET_MIN_RR": "2.5"}):
+        # 2.0 rather than 2.5: at the default 2.5-ATR cap this frame needs 5.80
+        # of reward to reach RR 2.5 against a 5.00 ceiling, so the extension
+        # correctly declines. That behaviour is covered in ExtensionCapTests.
+        with patch.dict(os.environ, {"TARGET_MIN_RR": "2.0"}):
             after = _risk(df)
 
         self.assertGreaterEqual(
-            after["risk_reward"], 2.5 - 0.01,
+            after["risk_reward"], 2.0 - 0.01,
             "target was not floored on the risk taken"
         )
         self.assertGreater(
