@@ -803,6 +803,42 @@ reported as unrecoverable rather than estimated. Recovering them needs a Polygon
 fetch of historical chains; a guessed figure would be worse than a missing one,
 because only the missing one is visibly missing.
 
+**2026-08-14 — shares versus options on the same 22 live trades.**
+
+§2.2g ruled out an edge large enough to pay for options and left open "whether a
+smaller, share-sized edge exists". This is the same question asked of the live
+book: for each closed trade, the underlying move it captured beside the option
+return it booked.
+
+| | underlying (shares) | options |
+|---|---|---|
+| mean per trade | **+0.126%** | **−1.01%** |
+| median | −0.104% | −2.84% |
+| mean without top 5 | −0.108% | −4.50% |
+| win rate | **45%** | 23% |
+| mean 95% CI | [−0.086%, +0.373%] | [−4.00%, +2.69%] |
+
+**Two findings, and they must not be collapsed into one.**
+
+**The instrument explains the losses.** Moving the same trades to shares takes the
+mean from −1.01% to +0.126% and nearly doubles the win rate. That is the option
+round trip, charged on every trade, doing what §1a says it does.
+
+**The entry explains the absence of profit.** Shares are *not* a profitable
+strategy here — the mean's interval spans zero, the median trade still loses, and
+stripping the best five turns it negative. Removing options stops the bleeding; it
+does not produce an edge.
+
+**This is the plan's ordering, confirmed on live data.** Phase B fixes entry
+because the instrument decision in Phase C cannot rescue a signal with no edge —
+it can only stop one from being taxed. Switching to shares now would convert a
+losing strategy into a roughly break-even one, which is not a business.
+
+22 trades is a small sample and the intervals are wide; this is directional, and
+Phase B's requirement of **+0.155% of underlying per trade** remains the bar. Note
+the observed +0.126% sits just below it, which is worth watching rather than
+celebrating.
+
 ### 5.6 Standing rules for the period
 
 §3's four gates continue to apply. These are added, each because it was violated:
