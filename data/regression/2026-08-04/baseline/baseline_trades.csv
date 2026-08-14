@@ -1,0 +1,5 @@
+trade_key,symbol,direction,setup,entry_time,entry_price,stop_price,target_price,holding_profile,status,entry_option_bid,entry_option_ask,entry_option_mid,entry_option_spread_pct,exit_time,exit_price,exit_reason,r_multiple,outcome,exit_option_bid,exit_option_ask,exit_option_mid,exit_option_spread_pct,option_pnl_pct,option_pnl_pct_net,option_pricing_basis
+ORCL|CALL|EMA_PULLBACK,ORCL,CALL,EMA_PULLBACK,2026-08-04 14:57:01.771216+00:00,143.8,142.82,146.59,MULTIDAY,CLOSED,7.6,7.85,7.725,3.18,2026-08-04 16:11:57.974444+00:00,146.6,TARGET_HIT,2.85,WIN,,,,,,,unpriced
+AVGO|CALL|EMA_PULLBACK,AVGO,CALL,EMA_PULLBACK,2026-08-04 15:12:00.041840+00:00,411.0,408.65,416.53,INTRADAY,CLOSED,10.85,11.45,11.15,5.24,2026-08-04 17:02:01.135465+00:00,417.13,TARGET_HIT,2.35,WIN,,,,,,,unpriced
+AMZN|CALL|ACTIVE_TRADE,AMZN,CALL,ACTIVE_TRADE,2026-08-04 17:07:03.352308+00:00,278.84,276.18,284.76,MULTIDAY,CLOSED,7.95,8.1,8.025,1.85,2026-08-04 18:37:11.684926+00:00,277.55,TARGET_HIT,2.23,WIN,9.05,9.3,9.175,2.69,14.33,11.73,quoted
+TSLA|CALL|ACTIVE_TRADE,TSLA,CALL,ACTIVE_TRADE,2026-08-04 16:11:57.974444+00:00,325.54,322.53,332.22,INTRADAY,OPEN,10.55,10.7,10.625,1.4,,,,,,,,,,,,

@@ -1,15 +1,26 @@
 """Bounded retention for the diagnostic tables.
 
 Nothing pruned the artifact tables, so they grew without limit. On 2026-08-02 the
-database was 240 MB of a 512 MB Neon free-tier cap, growing about 34 MB per
-active trading day, with `activity_trace_event` and `scanner_snapshot` alone
-accounting for 26 MB of that. At that rate the cap lands in roughly nine trading
-days, and a full database stops writes for the scanner as well as the dashboard.
+database was 240 MB and growing about 34 MB per active trading day, with
+`activity_trace_event` and `scanner_snapshot` alone accounting for 26 MB.
 
-Windows are per-table rather than one global number because a single window that
-is short enough to fit the budget is too short for the tables regression depends
-on. Retaining 14 days of everything is 476 MB, which fits the cap only in the
-sense that 93% is under 100%.
+**The original windows were sized against a 512 MB Neon free-tier cap. That cap
+does not apply.** This project is on Neon Launch, which is usage-priced at about
+$0.35/GB-month with no hard ceiling -- so the binding constraint was never
+storage, and every window here was solving a problem that had already gone away.
+
+What that cost was measurement. On 2026-08-13 the setup score could not be
+evaluated because only 286 resolved candidates existed, and the entry-timing
+finding rested on 122. The advice given at the time -- "revisit near 1,000
+resolved" -- was impossible: `candidate_evidence` was pruned at 21 days and
+accrues roughly 290 rows in 13 trading days, so the sample resets faster than it
+grows and can never approach 1,000. The tables that feed analysis are now kept
+for 90 days for that reason. Roughly: `scanner_snapshot` moves from ~400 MB to
+~1.7 GB, taking the database to about 2 GB, which is under a dollar a month.
+
+Windows stay per-table rather than one global number. `activity_trace_event` is
+a firehose read over days, not a record, and is unchanged at 7. The measurement
+tables are a record and are treated as one.
 
 What is *not* here matters as much as what is. The trading record -- `trade`,
 `paper_trades`, `recommendation_fact`, `trade_exit_analysis` -- is never pruned.
@@ -82,14 +93,15 @@ RETENTION_RULES: tuple[RetentionRule, ...] = (
         "debugging window it is actually read over; it is a firehose, not a record.",
     ),
     RetentionRule(
-        "scanner_snapshot", "trading_day", "date", 21,
-        "Feeds historical replay: tools/regression_ab.py reads distinct "
-        "trading_day from this table and app/regression/historical_scanner.py "
-        "loads it per day. The stop-anchor A/B needs about 10 archived days. "
-        "Windows are calendar days but the data only accrues on trading days, so "
-        "14 calendar days is 10 trading days -- exactly the requirement, and less "
-        "than that in any week with a holiday. 21 calendar days is 15 trading "
-        "days, which is the margin the A/B actually needs.",
+        "scanner_snapshot", "trading_day", "date", 90,
+        "Feeds historical replay and regression: tools/regression_ab.py reads "
+        "distinct trading_day from this table and "
+        "app/regression/historical_scanner.py loads it per day. Was 21, sized "
+        "against a free-tier cap this project is not on. 21 calendar days is 15 "
+        "trading days, which is the bare minimum for a single A/B and leaves "
+        "nothing for a second look -- and a day whose snapshots are pruned can "
+        "never be regressed again, frozen baseline or not. 90 calendar days is "
+        "about 64 trading days, and costs roughly 1.3 GB more.",
     ),
     RetentionRule(
         "event_stream", "occurred_at", "timestamp", 10,
@@ -101,8 +113,18 @@ RETENTION_RULES: tuple[RetentionRule, ...] = (
     RetentionRule("alert_events", "created_at", "timestamp", 21, "Alert audit trail."),
     RetentionRule("gate_decisions", "created_at", "timestamp", 21, "Per-scan gate decisions."),
     RetentionRule("candidate_snapshot", "trading_day", "date", 21, "Per-scan candidate rows."),
-    RetentionRule("candidate_evidence", "trading_day", "date", 21, "Per-day candidate evidence."),
-    RetentionRule("candidate_outcome", "created_at", "timestamp", 21, "Candidate outcome scoring."),
+    RetentionRule(
+        "candidate_evidence", "trading_day", "date", 90,
+        "Per-day candidate evidence, and the table every measurement of this "
+        "strategy is drawn from -- setup score, entry-timing score, RR bands. "
+        "Was 21, which capped the resolved sample near 460 rows and made the "
+        "sample-size problem permanent rather than temporary.",
+    ),
+    RetentionRule(
+        "candidate_outcome", "created_at", "timestamp", 90,
+        "Candidate outcome scoring; the resolution half of candidate_evidence "
+        "and useless kept for a shorter window than the evidence it scores.",
+    ),
     RetentionRule("auto_paper_decision", "trading_day", "date", 21, "Auto-paper decision log."),
     RetentionRule("scanner_runs", "started_at", "timestamp", 21, "Scan run index."),
 )

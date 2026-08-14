@@ -374,8 +374,21 @@ def freeze_baseline(trading_day: str, trades: pd.DataFrame | None = None, baseli
             current_strategy_version="baseline",
             baseline_version=baseline_version,
         )
-        if context.snapshot_folder.exists():
-            trades = reconstruct_trades(context)
+        # Not gated on the local folder existing. `_snapshot_frames` reads
+        # `scanner_snapshot` from Postgres first and only falls back to parquet
+        # on disk, so this guard tested the wrong source: on Render the folder is
+        # ephemeral and never survives a deploy, and this call was therefore
+        # skipped every time. `freeze_baseline` then fell through to
+        # `paper_trade_events.csv`, which is also local, and returned None.
+        #
+        # The visible effect was that regression looked broken while capture was
+        # working perfectly: 12 days and 2,499 rows for 2026-08-13 sat in the
+        # database, and the newest frozen baseline was 2026-07-31. Nothing was
+        # wrong with the data; the entry point could not see it.
+        #
+        # `reconstruct_trades` returns an empty frame when neither source has
+        # anything, which the fallback below already handles.
+        trades = reconstruct_trades(context)
 
         if trades is None or trades.empty:
             events_path = daily_path(trading_day, "paper_trade_events.csv")

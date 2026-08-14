@@ -19,7 +19,7 @@ is the subject whether the loop wakes at 16:30 on the day or 04:00 the morning
 after. Re-resolving a day already done is harmless -- the verdicts are derived
 from settled bars and come out identical, and both upserts refuse to downgrade a
 resolved row -- so a window wider than one day costs a little cached work and
-buys automatic catch-up after an outage. `scanner_snapshot` keeps 21 days; a day
+buys automatic catch-up after an outage. `scanner_snapshot` keeps 90 days; a day
 missed for longer than the window is gone, which is why the window is not 1.
 
 The marker is a file only. A lost marker means one extra pass of idempotent work,
@@ -39,6 +39,12 @@ logger = logging.getLogger(__name__)
 
 MARKER_FILENAME = "outcome_resolution_state.json"
 OPTION_LEG_MARKER_FILENAME = "option_leg_replay_state.json"
+BASELINE_MARKER_FILENAME = "regression_baseline_state.json"
+
+# Sessions to freeze on each run. A frozen baseline is permanent; the snapshots
+# it is built from are not, so anything missed inside this window is missed for
+# good once retention catches up. Three covers a long weekend of outage.
+BASELINE_LOOKBACK_DAYS = 3
 
 # How many recent sessions to re-resolve on each run. Wide enough to catch up
 # after a few days of outage, far short of the 21-day snapshot retention.
@@ -280,4 +286,94 @@ def maybe_replay_option_legs(now, idle_reason_value):
     except Exception:
 
         logger.warning("option leg replay failed", exc_info=True)
+        return None
+
+
+def _baseline_marker_path():
+    return live_path(BASELINE_MARKER_FILENAME)
+
+
+def baseline_last_run_day():
+
+    try:
+        return _read_marker(_baseline_marker_path())
+    except Exception:
+        return None
+
+
+def baseline_due(now, idle_reason_value):
+    """True when regression baselines should be frozen on this pass.
+
+    Its own marker, for the same reason the option leg has one: this job fails
+    on database availability, resolution fails on bar data, and pricing fails on
+    Polygon quota. Sharing a marker would let any one of them suppress the
+    others.
+    """
+
+    if not idle_reason_value:
+        return False
+
+    return baseline_last_run_day() != now.date().isoformat()
+
+
+def maybe_freeze_regression_baselines(now, idle_reason_value):
+    """Freeze each recent session's regression baseline. Post-market only.
+
+    `scanner_snapshot` is pruned on a rolling window; a frozen baseline is not.
+    So a day that is never frozen while its snapshots are alive can never be
+    regressed afterwards, and the loss is silent -- the table simply has fewer
+    old rows each morning.
+
+    That is not hypothetical. The harness was unreachable from 2026-07-31 until
+    2026-08-13 because `freeze_baseline` gated on a local folder while its
+    loader read Postgres, and in that fortnight every expiring day passed
+    unfrozen. Automating this is the difference between the archive being a
+    record and being a moving 90-day window.
+
+    A day with no entries freezes to nothing and returns None; that is a correct
+    outcome, not a failure, and it is not retried into an error.
+
+    Never allowed to raise. A scanner that stops is worse than a baseline that
+    is a day late.
+    """
+
+    if not baseline_due(now, idle_reason_value):
+        return None
+
+    day = now.date().isoformat()
+
+    try:
+
+        from app.regression.historical_scanner import freeze_baseline
+
+        summary = {"frozen": {}, "skipped": [], "days": 0}
+
+        for trading_day in _days_to_resolve(now)[:BASELINE_LOOKBACK_DAYS]:
+
+            try:
+                path = freeze_baseline(trading_day)
+
+            except Exception:
+                logger.warning(
+                    "baseline freeze failed for %s", trading_day, exc_info=True
+                )
+                summary["skipped"].append(trading_day)
+                continue
+
+            if path is None:
+                # No entries that day. Nothing to baseline, and re-attempting it
+                # tomorrow costs a query and finds the same thing.
+                summary["skipped"].append(trading_day)
+                continue
+
+            summary["frozen"][trading_day] = str(path)
+            summary["days"] += 1
+
+        _write_marker(_baseline_marker_path(), day, summary, "regression baseline")
+
+        return summary
+
+    except Exception:
+
+        logger.warning("regression baseline freeze failed", exc_info=True)
         return None

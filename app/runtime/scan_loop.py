@@ -186,6 +186,35 @@ def _maybe_replay_option_legs():
         print(f"[SCAN LOOP WARNING] option leg replay failed: {exc}")
 
 
+def _maybe_freeze_baselines():
+    """Freeze recent sessions' regression baselines. Never breaks the loop.
+
+    Cheap -- a few trades of JSON per day against a database query -- and it has
+    to run here because `scanner_snapshot` is pruned on a rolling window while a
+    frozen baseline is permanent. A day not frozen before its snapshots expire
+    can never be regressed, and nothing announces the loss.
+
+    That is what happened between 2026-07-31 and 2026-08-13: `freeze_baseline`
+    gated on a local folder while its loader read Postgres, so nothing froze for
+    a fortnight and every expiring day went with it.
+    """
+
+    try:
+        from app.runtime.outcome_scheduler import maybe_freeze_regression_baselines
+
+        summary = maybe_freeze_regression_baselines(
+            datetime.now(ET), idle_reason_value="IDLE"
+        )
+
+        if summary and summary.get("days"):
+            print(
+                f"[SCAN LOOP] froze {summary['days']} regression baseline(s)."
+            )
+
+    except Exception as exc:
+        print(f"[SCAN LOOP WARNING] regression baseline freeze failed: {exc}")
+
+
 def _report_database_state():
     """Say once, at startup, whether this container can reach Postgres.
 
@@ -426,6 +455,10 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
             _maybe_resolve_outcomes()
             # After resolution: it prices only candidates that resolved.
             _maybe_replay_option_legs()
+            # Last, and independent of the three above. It reads snapshots
+            # rather than writing them, and a failure in any earlier job must
+            # not stop a day being frozen before its snapshots expire.
+            _maybe_freeze_baselines()
             print(f"[SCAN LOOP] {idle}; sleeping {wait}s without scanning.")
             _sleep(wait)
             continue
