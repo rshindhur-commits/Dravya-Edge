@@ -839,6 +839,100 @@ Phase B's requirement of **+0.155% of underlying per trade** remains the bar. No
 the observed +0.126% sits just below it, which is worth watching rather than
 celebrating.
 
+### 5.7 The three behaviours the operator asked to prioritise — 2026-08-14
+
+Raised after five live trades on 2026-08-14 showed a consistent shape: entries
+arriving ~3% into a move, four of five continuing in the traded direction after
+the exit, and three of five exiting below their own peak. Each was measured
+against the 291-trade archive before being accepted, and **one of the three did
+not survive that.**
+
+#### Issue 1 — entries arrive late. **CONFIRMED, already in flight.**
+
+Four of the five entered after ~3% of the move had run from that session's swing.
+That is not a coincidence of one day: `avoid_chasing` refuses any candidate more
+than 1.2% from EMA9 (§1a of CHANGE_IMPACT_MAP), so the app can only enter once
+price has come *back* to the average — by which time the first leg is over.
+
+**Where it sits:** the switch was built 2026-08-14 and the control/treatment arms
+over 22 sessions are running now. **Gate A, 2026-08-21.**
+
+#### Issue 2 — exiting while the trend continues. **REFUTED.**
+
+The 2026-08-14 observation was real — CRWD ran another 1.84R after we left, TSLA
+1.23R, SPCX 1.05R. Across **202 momentum exits** it does not hold:
+
+```
+continuation   mean +0.878R   median +0.682R    95% CI [+0.751, +1.029]
+reversal       mean +1.029R   median +0.748R
+net            mean -0.151R                     95% CI [-0.387, +0.081]
+kept going our way more than against:  98/202 = 49%
+```
+
+Price does keep moving after a momentum exit — **it just moves against us slightly
+more often than for us.** The net is a coin flip and its interval spans zero. Only
+`Failed breakout` is decisively away from neutral, at **−0.821R**, meaning it
+saves considerably more than it costs.
+
+So the exits are firing at genuinely ambiguous moments, not early. This is the
+same shape as the stop-floor hypothesis, which looked decisive on twelve trades
+and died on 310. **Closed. Do not reopen from a single session.**
+
+Measured by `tools/post_exit_continuation.py`.
+
+#### Issue 3 — profit is given back before the exit fires. **CONFIRMED, and the mechanism is visible.**
+
+Across all 291 archived trades:
+
+```
+mean peak reached (MFE)      +0.394R
+mean booked                  +0.007R
+mean given back              +0.387R
+```
+
+Of the 145 trades that reached +0.10R or better, they kept **24% of their peak**,
+and **40 of 145 (28%) went green and closed red.**
+
+The mechanism is `EXIT_BREAKEVEN_TRIGGER_R`, which is **1.0**. A trade only gets
+its stop pulled to breakeven after reaching +1R — and the trades that get there
+behave completely differently:
+
+| | n | kept of peak | closed red |
+|---|---|---|---|
+| peaked ≥ +1.0R | 38 | **76%** | 2 of 38 |
+| peaked +0.1R to +1.0R | 107 | far less | 38 of 107 |
+
+**Half the book peaks below the level at which any protection engages.** That is
+a specific, mechanical explanation for a specific, measured loss, which neither of
+the other two issues has.
+
+**Not yet a fix.** `phase1_21day_be025.json` already holds a breakeven-at-0.25 arm
+and it moves the right way — giveback 0.387R → 0.328R, retention 24% → 30%,
+green-to-red 28% → 22%. But it took 333 trades against 291, so the arms are not
+on matched days (§3 gate 4), and it is scored in R rather than return on capital
+(§3's primary metric). **Neither number may be quoted until it is re-run properly.**
+
+#### Where issue 3 goes in the timeline
+
+It is an exit change, and §1.6 settled that the momentum exits as a class earn
+their keep — so this is a *protection* change, not an exit-removal change, and
+nothing in §1.2 or §1.6 speaks to it.
+
+**It becomes hypothesis B-v in Phase B, judged at Gate B on 2026-09-18.** Not
+earlier, for two reasons. The standing rule in §5.6 forbids committing another
+switch before the one ahead of it is measured, and Phase A's entry arms are
+mid-flight. And issue 1 and issue 3 interact directly: if the entry boundary
+moves, every MFE distribution behind this measurement changes, and a breakeven
+level fitted to today's distribution would be fitted to a book that no longer
+exists.
+
+**Sequence, therefore:** Gate A (Aug 21) settles the entry boundary → Phase B
+re-measures giveback on whatever entry survives → B-v is A/B'd on matched days in
+return on capital → Gate B (Sep 18) decides.
+
+If Gate A shows the boundary changes nothing, B-v can be brought forward
+immediately, since the MFE distribution would then be stable.
+
 ### 5.6 Standing rules for the period
 
 §3's four gates continue to apply. These are added, each because it was violated:
