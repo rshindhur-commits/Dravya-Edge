@@ -629,7 +629,10 @@ enclosing question is already answered *no*.
 | setting | now | correct | authority |
 |---|---|---|---|
 | `OPTION_MAX_SPREAD_PCT` | 3 | **2** | §1.4b, +2.33sd, holdout positive |
-| contract cost cap | 1200 | **500** | §1.1, ~$187/session at identical loss rate |
+
+`OPTION_MAX_CONTRACT_COST` was checked on 2026-08-13 and is **already 500**;
+§1.1 was applied on 2026-08-09 and needs nothing. An earlier draft of this
+section listed it as still at 1200, which was wrong.
 
 *Instrument repairs — nothing downstream is trustworthy until these land:*
 
