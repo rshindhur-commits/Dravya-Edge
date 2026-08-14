@@ -65,8 +65,8 @@ def main():
         # an old timestamp long before it shows up as a bill.
         try:
             last_prune = conn.execute(text("""
-                SELECT MAX(last_run_at) FROM retention_run_state
-            """)).scalar_one_or_none()
+                SELECT max(ran_on)::text FROM retention_run
+            """)).scalar()
         except Exception:
             last_prune = None
 
