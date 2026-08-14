@@ -589,6 +589,67 @@ def setup_gate_blocks():
     return get_bool_env("SETUP_GATE_ENABLED", False)
 
 
+def timing_gate_blocks():
+    """Whether a high entry-timing score should refuse the trade.
+
+    `evaluate_entry_timing` calls itself observational, and it was never checked
+    against outcomes. Measured over 122 resolved candidates on 2026-08-13 it runs
+    inverted, and unlike the setup score it survives every control:
+
+        score   0-55   n=52   EV -0.099    median RR 1.80
+        score  55-70   n=46   EV -0.251    median RR 2.00
+        score 70-101   n=24   EV -0.521    median RR 2.00
+
+    Median RR is flat across the bands, so this is not target distance. It holds
+    inside both RR bands (-0.105 vs -0.310 below RR 2, -0.082 vs -0.732 above),
+    holds in both directions, and the GOOD grade's bootstrap CI [-1.000, -0.116]
+    excludes zero. Dropping the five best outcomes takes the >=70 band from
+    -0.521 to -1.000 -- it strengthens without its outliers, which no other edge
+    tested on this data does.
+
+    The mechanism is visible in the scoring: 20% of it rewards `trend_age <= 2`
+    and another 20% rewards `pullback_number == 1`, so a top score means a trend
+    two bars old on its first pullback with price still on the EMA. That is a
+    move that has not yet proven anything. PLTR on 2026-08-13 scored 83.66 as
+    FIRST_PULLBACK and was the first green bar of a five-bar slide; it closed
+    -0.44R and would have been -1.00R held.
+
+    Off by default. 122 candidates is enough to act on but not enough to hard-code,
+    and the nightly resolution pass keeps growing it.
+    """
+
+    from app.config.settings import get_bool_env
+
+    return get_bool_env("ENTRY_TIMING_GATE_ENABLED", False)
+
+
+def timing_gate_max_score():
+    """Scores at or above this are refused when the timing gate is on."""
+
+    from app.config.settings import get_float_env
+
+    return get_float_env("ENTRY_TIMING_MAX_SCORE", 70.0)
+
+
+def _timing_score_refused(row):
+    """True when this candidate's entry-timing score is high enough to refuse."""
+
+    if not timing_gate_blocks():
+        return False
+
+    raw = _row_get(row, "Entry Timing Score", "entry_timing_score")
+
+    if raw is None or str(raw).strip().lower() in {"", "nan", "none"}:
+        return False
+
+    score = safe_float(raw, default=None)
+
+    if score is None:
+        return False
+
+    return score >= timing_gate_max_score()
+
+
 def evaluate_entry_gate(
     row,
     config: EntryGateConfig,
@@ -654,6 +715,10 @@ def evaluate_entry_gate(
     if setup < min_setup and setup_gate_blocks():
 
         return False, "SETUP_BELOW_THRESHOLD"
+
+    if _timing_score_refused(row):
+
+        return False, "ENTRY_TIMING_TOO_EARLY"
 
     if option_quality < config.min_option_quality:
 
@@ -763,6 +828,11 @@ def build_entry_gate_diagnostics(
 
         result = "FAIL"
         failure = "SETUP_BELOW_THRESHOLD"
+
+    elif _timing_score_refused(row):
+
+        result = "FAIL"
+        failure = "ENTRY_TIMING_TOO_EARLY"
 
     elif option_quality < config.min_option_quality:
 

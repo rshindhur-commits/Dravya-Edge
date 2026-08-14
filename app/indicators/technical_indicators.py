@@ -47,6 +47,23 @@ MAX_DELAY_REGULAR = 20
 
 MAX_DELAY_EXTENDED = 25
 
+# Timespans whose freshness is meaningfully measured in minutes. The delay test
+# below compares "now" against the last bar's timestamp, which only means
+# something when a bar spans minutes.
+#
+# A daily bar is stamped 00:00 of its own day, so today's bar is already 1,193
+# minutes "late" by 19:53 ET and can never clear a 20-minute threshold. The
+# result was silent and total: on 2026-08-13 every daily fetch returned empty,
+# `Daily Trend` was UNKNOWN on 2,485 of 2,499 scanner rows, 22 of 26 symbols
+# never had it on any scan, and the entry gate's counter-trend penalty --
+# which raises min_setup and min_rr when a candidate fights the daily trend --
+# was inert for the whole session.
+INTRADAY_TIMESPANS = {"minute", "hour", "min", "minutes", "hours"}
+
+# Daily bars are judged in days instead. Wide enough to survive a long weekend
+# plus a holiday, narrow enough that a genuinely dead feed still fails.
+MAX_DAILY_BAR_AGE_DAYS = 5
+
 # =====================================
 # Minimum candles required per interval
 # =====================================
@@ -607,7 +624,11 @@ def get_polygon_data(
             # Delay validation only during LIVE sessions
             # =====================================
 
-            if market_session in ["PREMARKET", "REGULAR", "AFTERHOURS"]:
+            is_intraday = str(timespan or "").lower() in INTRADAY_TIMESPANS
+
+            if is_intraday and market_session in [
+                "PREMARKET", "REGULAR", "AFTERHOURS"
+            ]:
 
                 if market_session == "REGULAR":
                     max_delay = MAX_DELAY_REGULAR
@@ -627,6 +648,23 @@ def get_polygon_data(
 
                     print(
                         f"[STALE LIVE DATA DETECTED] {symbol}"
+                    )
+
+                    return pd.DataFrame()
+
+            elif not is_intraday and not USE_MOCK_MARKET_DATA:
+
+                # Daily and coarser: age in calendar days, not minutes. This
+                # still rejects a dead feed; it just stops rejecting every
+                # daily bar ever fetched during a live session.
+                bar_age_days = (current_et.date() - latest_et.date()).days
+
+                if bar_age_days > MAX_DAILY_BAR_AGE_DAYS:
+
+                    print(
+                        f"[STALE DAILY DATA BLOCKED] "
+                        f"{symbol} last bar {latest_et.date()} "
+                        f"is {bar_age_days}d old"
                     )
 
                     return pd.DataFrame()

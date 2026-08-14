@@ -703,6 +703,70 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING", htf=None):
 
 
     # =========================
+    # Target floor on the risk actually taken
+    # =========================
+
+    # Every target above is an absolute distance -- 1.8 ATR for EMA_PULLBACK,
+    # `target_atr_multiplier` elsewhere -- while the stop floats with structure.
+    # So RR reduces to 1.8 / stop_in_ATR, and clearing a 2.0 bar needs a stop
+    # under 0.9 ATR. That only happens when price is sitting on the EMA, which
+    # is early in a move, before it has proven anything. The strategy is
+    # therefore priced out of joining a trend already underway, by arithmetic
+    # rather than by judgement.
+    #
+    # Measured 2026-08-13: NFLX rallied all afternoon and produced 19 LOW_RR
+    # blocks. Its one setup with geometry recorded was entry 77.29, stop 76.86,
+    # target 77.96 -- risk 1.16 ATR, reward 1.8 ATR, RR 1.55, refused. Price
+    # reached 78.64, so a target set from the risk taken (2.0x -> 78.15,
+    # 2.5x -> 78.36) would also have been reached.
+    #
+    # This extends the target to at least TARGET_MIN_RR times the risk, instead
+    # of a fixed distance that ignores it. It never pulls a target closer.
+    #
+    # Off at 0, which leaves every target exactly as it was. The obvious way for
+    # this to be wrong is a target that satisfies the ratio but is further than
+    # price will travel, converting refusals into stop-outs -- so it wants an
+    # A/B against archived days before it is switched on.
+    # The extension is capped, and the cap is the whole safety of this feature.
+    # Uncapped, it sets RR to exactly TARGET_MIN_RR for every candidate that
+    # reaches it -- measured on synthetic frames at ATR 2.0, a setup with a true
+    # RR of 0.95 had its target pushed 4.00 (two full ATR) to manufacture 2.0.
+    # That turns the RR gate into a tautology: the gate checks a number the
+    # target was just adjusted to satisfy, so it refuses nothing, and the worst
+    # setups receive the least reachable targets.
+    #
+    # Capping the total reward in ATR keeps the fix to its actual purpose --
+    # a stop that widened because price left the EMA, on a move that is still
+    # going -- and leaves genuinely poor geometry to be refused on its merits.
+    target_min_rr = get_float_env("TARGET_MIN_RR", 0.0)
+    # 2.5 rather than 3.0: the EMA_PULLBACK target already starts at 1.8 ATR, so
+    # this permits a ~39% stretch and no more. Measured on the synthetic frames
+    # above, 2.5 rescues the NFLX case (true RR 1.55) while leaving RR 1.29 and
+    # 0.95 refused; 3.0 also admits the 1.29, which is a wider claim than the
+    # evidence supports.
+    target_max_reward_atr = get_float_env("TARGET_MAX_REWARD_ATR", 2.5)
+
+    if (
+        target_min_rr > 0
+        and risk_per_share > 0
+        and take_profit is not None
+        and atr > 0
+    ):
+
+        required_reward = risk_per_share * target_min_rr
+
+        if (
+            abs(take_profit - entry_price) < required_reward
+            and required_reward <= atr * target_max_reward_atr
+        ):
+
+            take_profit = (
+                entry_price + required_reward
+                if take_profit >= entry_price
+                else entry_price - required_reward
+            )
+
+    # =========================
     # Risk Reward Ratio
     # =========================
 
