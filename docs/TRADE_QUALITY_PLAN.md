@@ -773,6 +773,36 @@ paid fell to 1.48% in the §1.4b arm. Carrying that reduction into the live fit
 puts the intercept near −1.7 and break-even near **+0.21R**. That is worth
 recording now precisely so it can be checked later, not quoted as an outcome.
 
+**2026-08-14 — the live book, in cash, for the first time.**
+
+`option_pl_dollars` existed on **2 of 42** closed trades, so every statement about
+this book had been made in R or percent. `tools/backfill_option_cash.py` computes
+it from the two legs already recorded — no fetching — and took coverage to 21.
+
+19 trades, excluding the two corrected ones:
+
+```
+total                $+119.00
+mean per trade       $+6.26        95% CI [-$14.68, +$33.11]   spans zero
+median trade         $-7.00
+cash win rate        5 of 19  =  26%
+best five            $8, $20, $65, $85, $195
+total without them   $-254.00
+```
+
+**The headline is positive and the book is not.** Five trades of nineteen carry
+$373 of a $119 total; the median trade loses $7. Including the two corrected
+trades the total is **−$170.50**.
+
+Same shape as §2.2f found on 331 replayed trades and as §5.6a found in premium.
+Three independent measurements of this book — R, percent and now dollars — agree
+that the mean is carried by a handful of outcomes and the typical trade loses.
+
+**21 trades opened before 2026-07-31 carry no option quotes at all** and are
+reported as unrecoverable rather than estimated. Recovering them needs a Polygon
+fetch of historical chains; a guessed figure would be worse than a missing one,
+because only the missing one is visibly missing.
+
 ### 5.6 Standing rules for the period
 
 §3's four gates continue to apply. These are added, each because it was violated:
