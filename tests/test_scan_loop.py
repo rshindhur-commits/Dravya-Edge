@@ -57,6 +57,38 @@ class IntervalTests(unittest.TestCase):
                 gap = scan_loop.interval_for_session(session) - burst
                 self.assertGreater(gap, neon_idle_timeout)
 
+    def test_the_post_close_tail_is_guarded_by_the_regular_interval(self):
+        """The archive scan survives AFTERHOURS being widened for the DB bill.
+
+        One scan has to land after the bell to write the closing archive. It is
+        scheduled by the iteration before it, which is still REGULAR at 15:59 --
+        so the tail must outlast the REGULAR interval, and AFTERHOURS may be any
+        width. Pinned because the tail's own docstring used to justify itself
+        against AFTERHOURS, which made widening that value look unsafe.
+        """
+
+        from app.runtime.market_calendar import after_close_tail_minutes
+
+        self.assertGreater(
+            after_close_tail_minutes() * 60,
+            scan_loop.interval_for_session("REGULAR"),
+        )
+
+    def test_the_idle_windows_do_not_hold_the_database_awake(self):
+        """AFTERHOURS and CLOSED never scan; every pass writes a heartbeat.
+
+        Each one wakes Neon for the full 300s suspend timer, so their cost is
+        set by how often they fire, not by what they do. Measured 2026-08-13:
+        2.7 of 9.65 compute-hours a day came from these two windows alone.
+        """
+
+        for session in ("AFTERHOURS", "CLOSED"):
+            with self.subTest(session=session):
+                self.assertGreaterEqual(
+                    scan_loop.interval_for_session(session), 1800,
+                    "a window that only heartbeats must not fire twice an hour"
+                )
+
     def test_override_wins_and_is_floored(self):
 
         self.assertEqual(scan_loop.interval_for_session("REGULAR", 60), 60)

@@ -1144,9 +1144,15 @@ python -m app.runtime.scan_loop --interval 300  # fixed 5-minute cadence
 python -m app.runtime.scan_loop --skip-closed   # idle while the session is CLOSED
 ```
 
-Cadence: `OPENING_RANGE` 120s, `REGULAR` 300s, `PREMARKET` 600s, `AFTERHOURS` 900s,
-`CLOSED` 1800s. A failing scan is logged and the loop continues; SIGINT/SIGTERM finish
+Cadence: `OPENING_RANGE` 120s, `REGULAR` 300s, `PREMARKET` 1800s, `AFTERHOURS` 1800s,
+`CLOSED` 3600s. A failing scan is logged and the loop continues; SIGINT/SIGTERM finish
 the current scan and exit.
+
+The three sparse values are set by the Neon bill rather than by the market. None of
+them scans -- `idle_reason` stops scanning 20 minutes after the bell -- so each pass
+only writes a heartbeat, and wakes the compute for the full 300s suspend timer to do
+it. Measured over 2026-08-08..13 the worker burned 9.65 compute-hours a day, 2.7 of
+them in AFTERHOURS and CLOSED.
 
 ### Stop anchoring is measurable but NOT adopted
 
