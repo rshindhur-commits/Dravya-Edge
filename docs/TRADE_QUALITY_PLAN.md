@@ -550,7 +550,12 @@ it today, live trading will not for months.
 
 ---
 
-## 4. Order of work
+## 4. Order of work — **superseded 2026-08-13 by section 5**
+
+Kept as written. Items 1 and 2 were done; item 3 was answered *no* by §2.2e; items
+4, 5 and 8 were closed by §1.2 and §1.6. What this table could not know is
+§2.2h, which arrived after it and moves the whole question upstream of every row
+here. Read section 5 for what is actually being worked on.
 
 | | what | needs | ceiling |
 |---|---|---|---|
@@ -571,3 +576,153 @@ doing because they are cheap and because the ceiling assumes the toll stays at
 
 Subscribers return when a configuration shows positive return on capital across
 a holdout, and a month of sessions captures cleanly. Not before.
+
+---
+
+## 5. The plan to 2026-10-30
+
+Written 2026-08-13. The purpose of this section is to fix, in advance, what will
+be worked on, when it will be judged, and what each answer means — so that no
+single day's trades can change the subject. It runs to end of October and then a
+decision is made either way.
+
+### 5.0 Where the project actually stands
+
+Three doors are closed, each by a measurement in this document:
+
+| | finding | where |
+|---|---|---|
+| entry timing is **worse than random** | −0.12 to −0.31 points; 20/20 random draws beat it in *both* halves; 8–20 sd | §2.2h |
+| an edge big enough to pay the option toll is **ruled out** | needs t = 4.2, observed **t = −0.33** on 792 trades | §2.2g |
+| every remaining lever is **bounded below break-even** | +0.41% at zero toll, +0.20% at perfect exits, −5.64% for larger moves | §2.2e |
+
+One door is open, and this document named it itself:
+
+> *"The question is no longer only 'can a new feature add edge' but 'does
+> removing the entry trigger add edge' — the cheapest experiment available, and
+> one the harness can already answer."* — §2.2h
+
+That experiment has never been run. It is the whole of Phase A.
+
+### 5.0a A correction, recorded because it cost a day
+
+On 2026-08-13 I recommended a boundary A/B — `ATR_DISTANCE_SCALE` and
+`MAX_STOP_DISTANCE_SCALE` at 4 — describing it as "the only untested change with
+a ceiling above break-even." **That was stale on both halves.**
+
+* `tests/test_distance_scale.py::test_the_scale_is_a_weak_lever_because_the_bar_dominates`
+  pins a 4× offset at a **1.53× stop**, because the 15m bar's own low dominates
+  and does not scale. Reaching a 3% stop needs a scale near fourteen.
+* §2.2d already ran the *strong* version of that idea — the 1h swing anchor,
+  median stop **2.27%** — and it lost to theta seven to one.
+
+Two arms were launched on it and were killed unrun. Four more switches were
+committed the same day (entry timing gate, target floor, extension cap, spread
+ceiling 3), all off, none measured, none of which touch §2.2e. **That day is the
+failure mode this section exists to prevent:** tuning inside a system whose
+enclosing question is already answered *no*.
+
+### 5.1 Phase A — clear the board, run the two free experiments · **Aug 14–21**
+
+*Config already proven and currently mis-set — restore first, no measurement needed:*
+
+| setting | now | correct | authority |
+|---|---|---|---|
+| `OPTION_MAX_SPREAD_PCT` | 3 | **2** | §1.4b, +2.33sd, holdout positive |
+| contract cost cap | 1200 | **500** | §1.1, ~$187/session at identical loss rate |
+
+*Instrument repairs — nothing downstream is trustworthy until these land:*
+
+1. **Force-close orphaned intraday positions.** The only item that can lose real
+   money while unfixed; it already cost ~$200 (SMCI, 9 sessions unmanaged).
+2. **Regression evaluator must call `evaluate_exit`.** It reported +3.22R on a
+   day the app booked −0.65R. Fix or retire — a lying instrument is worse than none.
+3. **Option pricing on every closed trade.** 19 of 37 carry cash today, so
+   §3's primary metric is unmeasurable on the live book.
+
+*The two experiments, both on cached bars, both free:*
+
+- **A-i · no entry trigger.** Same universe, same exits, entry at a random
+  qualifying minute. §2.2h predicts this *gains* ~0.25 points.
+- **A-ii · inverted trigger.** Fade instead of follow. §2.2h's mechanism — the
+  setups buy strength at horizons where liquid megacaps mean-revert — predicts
+  this is positive.
+
+**Gate A (Aug 21).** Does either beat the live trigger by more than draw-to-draw
+sd, in both holdout halves? If yes, the trigger is confirmed as a cost and Phase
+B searches for a replacement. If neither does, §2.2h is weaker than it reads and
+Phase B starts from the universe instead of the timing.
+
+### 5.2 Phase B — find a timing signal that beats random, or conclude there is none · **Aug 24 – Sep 18**
+
+**The benchmark is random, never zero** (§2.2h). Every candidate goes through
+`tools/null_model.py`.
+
+**The requirement is already known exactly:** +0.155% of underlying per trade to
+break even at spread ceiling 2, which at ~790 trades is **t = 4.2**. Any
+hypothesis not on a path to that number is not worth a second run.
+
+The hypothesis list is fixed **now**, at four, so it cannot drift as results
+arrive. Each gets one run on the discovery half, and one on the holdout:
+
+| | hypothesis | why it is on the list |
+|---|---|---|
+| B-i | mean-reversion at 1h / 1-session horizons | §2.2h's mechanism, read forwards |
+| B-ii | opening-range break | a different clock from every setup tested so far |
+| B-iii | gap fade | the only regime where a megacap reliably travels multiple percent |
+| B-iv | overnight hold | §2.2d showed the move needs sessions, not hours; this is the version that pays no intraday theta |
+
+**Gate B (Sep 18).** Any hypothesis clearing the requirement on the holdout half,
+with bootstrap CI excluding zero and a positive mean without its top 5 trades
+(§2.2f). Yes → Phase C. No → §5.5.
+
+### 5.3 Phase C — the instrument decision · **Sep 21 – Oct 9**
+
+Only reached with a signal that beats random on the underlying. The question
+becomes whether any instrument can express it profitably.
+
+1. Convert through **12.6 premium points per 1% of underlying** (§2.2d), then
+   subtract theta over the hypothesis's *actual* hold — the term the original
+   §1a model never contained and which reversed §2.2d's result.
+2. If options cannot carry it, test **shares**. A signal worth +0.155% of price
+   is a losing options trade and a viable equity one; that is a product change,
+   not a rewrite.
+
+**Gate C (Oct 9).** A configuration with positive return on capital across a
+holdout — §3's existing bar, unchanged.
+
+### 5.4 Phase D — forward validation, frozen · **Oct 12–30**
+
+Whatever passes Gate C runs live, **untouched**, for 15 sessions.
+
+To be explicit about what this phase is and is not: at 1–3 trades a day it is far
+too small to *discover* edge — that evidence comes from Phase B's several hundred
+replayed trades. Phase D exists to confirm **live behaves like replay**. Parity
+is what has actually been failing: replay and the live book gave opposite answers
+on exits as recently as 2026-08-13.
+
+**Gate D (Oct 30).** Live P&L within tolerance of replay's prediction →
+subscribers may be told something honest. Outside tolerance → the harness is
+wrong, and that is the finding, and it outranks any strategy result.
+
+### 5.5 The failure branch, named in advance
+
+If Gate B fails on 2026-09-18, the honest conclusion is that **this strategy
+family has no timing edge on liquid megacaps.** October is then spent on a
+different universe or a different product, and subscribers do not return in 2026
+on this signal. That is a real outcome with a real date, and it is preferable to
+another quarter of parameter changes inside a refuted frame.
+
+### 5.6 Standing rules for the period
+
+§3's four gates continue to apply. These are added, each because it was violated:
+
+- **Judge against random, not zero.** §2.2h.
+- **Every mean carries a bootstrap CI and a mean-without-top-5.** §2.2f, where
+  5 trades of 331 carried 266% of the total.
+- **No new switch is committed until the previous one is measured.** 2026-08-13
+  produced four unmeasured switches in a day.
+- **No config change during Phase D.** A mid-flight tweak resets the sample to
+  zero, and this is the phase whose entire value is that it was not touched.
+- **Before proposing a lever, check whether this document already closed it.**
+  §5.0a is what skipping that costs.
