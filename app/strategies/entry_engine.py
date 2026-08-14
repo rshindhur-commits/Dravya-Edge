@@ -40,6 +40,35 @@ def _base_score(setup_type):
     )
 
 
+# How far price may sit from its references before the setup counts as chased.
+#
+# These are the boundary of what the app is allowed to trade, and until
+# 2026-08-14 they were two bare constants with no way to vary them. That matters
+# more than an ordinary threshold, because `avoid_chasing` is a hard refusal in
+# `risk_manager.calculate_risk` rather than a score penalty -- so these two
+# numbers decide which candidates come into existence, not merely which ones
+# rank well.
+#
+# Defaults are the previous constants exactly, so nothing moves until a variable
+# is set.
+DEFAULT_MAX_VWAP_DISTANCE_PCT = 1.5
+DEFAULT_MAX_EMA_DISTANCE_PCT = 1.2
+
+
+def max_vwap_distance_pct():
+
+    return get_float_env(
+        "AVOID_CHASING_MAX_VWAP_DISTANCE_PCT", DEFAULT_MAX_VWAP_DISTANCE_PCT
+    )
+
+
+def max_ema_distance_pct():
+
+    return get_float_env(
+        "AVOID_CHASING_MAX_EMA_DISTANCE_PCT", DEFAULT_MAX_EMA_DISTANCE_PCT
+    )
+
+
 def _normalized_market_regime(value):
 
     regime = str(value or "").strip().upper()
@@ -186,8 +215,24 @@ def detect_entry(df, analysis, symbol=None):
     # the entry engine never emits and so only ever filtered BREAKDOWN_SHORT.
     #
     # Thresholds are unchanged; only the direction they can see is.
+    #
+    # The distances became configurable on 2026-08-14, defaults identical to the
+    # constants they replace, because this is the rule that decides *which
+    # candidates can exist* and it had never been measured.
+    #
+    # 1.2% from EMA9 is a narrow band for a liquid megacap in a real trend: on
+    # 2026-08-13 MU travelled 5.67% and SMCI 7.33% and neither produced a
+    # tradeable candidate, because both left the band within minutes of starting
+    # to move. `docs/TRADE_QUALITY_PLAN.md` §2.2a attributes the strategy's
+    # sub-percent ceiling to the stop anchor; this sits upstream of that and is
+    # the harder constraint, since the anchor shapes a trade that this rule has
+    # already refused to allow.
+    #
+    # Widening these does not merely change which candidates pass -- it changes
+    # which candidates are generated at all, so every archived candidate set is
+    # incomparable across a change here. See docs/CHANGE_IMPACT_MAP.md §1a.
 
-    if abs(vwap_distance) > 1.5:
+    if abs(vwap_distance) > max_vwap_distance_pct():
 
         avoid_chasing = True
 
@@ -197,7 +242,7 @@ def detect_entry(df, analysis, symbol=None):
             else "Price extended far below VWAP"
         )
 
-    if abs(ema_distance) > 1.2:
+    if abs(ema_distance) > max_ema_distance_pct():
 
         avoid_chasing = True
 

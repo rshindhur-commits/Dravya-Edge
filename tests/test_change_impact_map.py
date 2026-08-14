@@ -200,9 +200,14 @@ class AvoidChasingTests(unittest.TestCase):
     """Map 1a -- the hard block that decides which candidates can exist.
 
     A candidate more than 1.2% from its EMA9, or 1.5% from VWAP, is refused
-    outright. These thresholds are hardcoded with no environment variable, so
-    they cannot be A/B'd without a code change. If a knob is ever added, this
-    test should fail and the map's claim that none exists must be updated.
+    outright rather than down-weighted.
+
+    This class previously asserted the thresholds were hardcoded. They were made
+    configurable on 2026-08-14 as Phase A's first task, which failed that
+    assertion and is exactly the contract this file is meant to enforce: the
+    repair could not land without the map being updated alongside it. The
+    behavioural guarantees now live in tests/test_avoid_chasing.py; what remains
+    here is the map's structural claim.
     """
 
     def test_it_is_a_hard_refusal_not_a_score_penalty(self):
@@ -214,20 +219,21 @@ class AvoidChasingTests(unittest.TestCase):
         self.assertIn("avoid_chasing", source)
         self.assertIn("Avoid chasing extended move", source)
 
-    def test_the_thresholds_are_still_hardcoded(self):
+    def test_the_thresholds_are_configurable_and_default_unchanged(self):
 
         from app.strategies import entry_engine
 
-        source = inspect.getsource(entry_engine.detect_entry)
+        self.assertEqual(entry_engine.DEFAULT_MAX_VWAP_DISTANCE_PCT, 1.5)
+        self.assertEqual(entry_engine.DEFAULT_MAX_EMA_DISTANCE_PCT, 1.2)
+        self.assertEqual(entry_engine.max_vwap_distance_pct(), 1.5)
+        self.assertEqual(entry_engine.max_ema_distance_pct(), 1.2)
 
-        self.assertIn("abs(vwap_distance) > 1.5", source)
-        self.assertIn("abs(ema_distance) > 1.2", source)
+    def test_the_refusal_has_its_own_switch(self):
+        """Separate from the thresholds: one lifts the block, the other widens it."""
 
-        for knob in ("AVOID_CHASING", "MAX_VWAP_DISTANCE", "MAX_EMA_DISTANCE"):
-            self.assertNotIn(
-                knob, source,
-                f"{knob} exists now -- map section 1a says no knob does",
-            )
+        from app.risk.risk_manager import avoid_chasing_blocks
+
+        self.assertTrue(avoid_chasing_blocks(), "must stay on by default")
 
     def test_it_applies_to_both_directions(self):
         """It was long-broken for shorts; abs() is what fixed it."""

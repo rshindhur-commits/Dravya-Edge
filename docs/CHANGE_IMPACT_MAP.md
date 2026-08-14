@@ -125,10 +125,24 @@ if entry_setup.get("avoid_chasing", False):
   random minute**. The rule admits only moments when price has *not* moved, which
   at these horizons is where liquid megacaps mean-revert.
 
-**Both thresholds are hardcoded.** There is no environment variable, so this
-cannot currently be A/B'd without a code change. Adding one is the cheapest way to
-make Phase B's hypotheses testable — and note that changing it invalidates every
-archived candidate set, because it changes which candidates exist at all.
+**Switched 2026-08-14 (Phase A task 1). Defaults are the old constants exactly,
+so nothing moved.**
+
+| knob | default | effect |
+|---|---|---|
+| `AVOID_CHASING_BLOCKS` | `true` | `false` lifts the refusal; the flag is still computed and archived |
+| `AVOID_CHASING_MAX_EMA_DISTANCE_PCT` | 1.2 | **the binding one** — tighter than the VWAP band |
+| `AVOID_CHASING_MAX_VWAP_DISTANCE_PCT` | 1.5 | |
+
+**The two thresholds refuse independently.** Widening one alone leaves the other
+binding — the failure mode that made three earlier arms identical to their
+control. At 1.4% out, VWAP still permits and EMA9 refuses, so a VWAP-only arm
+reads as a null. Pinned in
+`tests/test_avoid_chasing.py::test_widening_one_band_alone_leaves_the_other_binding`.
+
+**Changing any of them invalidates every archived candidate set**, because it
+changes which candidates *exist*, not merely which ones pass. No archive spans a
+change here.
 
 The comment at `entry_engine.py:180-188` records that this block was long-broken
 for shorts, so short setups had no chase protection at all until it was fixed.
@@ -463,7 +477,7 @@ which is why `maybe_freeze_regression_baselines` runs nightly.
 
 | change | also moves | invalidates | already known |
 |---|---|---|---|
-| `avoid_chasing` thresholds (1.2% EMA9 / 1.5% VWAP) | **which candidates exist at all** — it is a hard refusal in `calculate_risk` | every archived candidate set and every funnel count | no knob exists; never A/B'd; §1a |
+| `AVOID_CHASING_BLOCKS` / `..._MAX_EMA_DISTANCE_PCT` / `..._MAX_VWAP_DISTANCE_PCT` | **which candidates exist at all** — a hard refusal in `calculate_risk` | every archived candidate set and every funnel count | switched 2026-08-14, defaults unchanged, never yet A/B'd; §1a |
 | `OPTION_MAX_SPREAD_PCT` | contract selection **and** the entry gate — but **not** the auto-paper gate constant (trap 0.3) | every archived run at a different ceiling | 6→3→2 measured; 2 is best (+2.33sd). A1 says 3 loses on bull |
 | `OPTION_MAX_CONTRACT_COST` | affordability, stage 14 of contract selection | option P&L comparisons | 1200→500 worth ~$187/session at an identical loss *rate* |
 | `SCANNER_GATE_MIN_RR` | stage 5 only; regime can raise it further | every gate-pass count | 2.0 stands — raising and lowering both die on the outlier check |
