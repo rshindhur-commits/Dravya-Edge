@@ -651,6 +651,20 @@ section listed it as still at 1200, which was wrong.
   setups buy strength at horizons where liquid megacaps mean-revert — predicts
   this is positive.
 
+**A dependency found 2026-08-13, after this section was written.** Neither
+experiment can run as described until `avoid_chasing` has a switch.
+`entry_engine.py:190-208` refuses any candidate more than **1.2% from its EMA9**
+or **1.5% from VWAP**, and `risk_manager.py:891` turns that into an outright
+refusal. So "no entry trigger" is not reachable by removing the setup detectors —
+this block sits behind them and would still veto every entry into a move that had
+already started. Both thresholds are hardcoded. See §1a of
+[CHANGE_IMPACT_MAP.md](CHANGE_IMPACT_MAP.md).
+
+Adding the switch is the first task of Phase A, ahead of the experiments. It is
+also, on its own, the most direct test of §2.2h available: a rule admitting only
+moments when price has *not* moved is exactly the shape that would make entry
+timing measure worse than a random minute.
+
 **Gate A (Aug 21).** Does either beat the live trigger by more than draw-to-draw
 sd, in both holdout halves? If yes, the trigger is confirmed as a cost and Phase
 B searches for a replacement. If neither does, §2.2h is weaker than it reads and
