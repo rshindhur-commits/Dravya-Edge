@@ -435,31 +435,53 @@ convert those three.
 | `tools/replay_option_leg.py` | recorded chains | what the contract returned | the underlying decision |
 | live book (`paper_trades`) | production writes | what actually happened | anything, until every trade has option pricing — currently 19 of 37 |
 
-### Why the regression harness disagrees with the live book
+### How the regression harness scores an exit — **repaired 2026-08-14**
 
-`reconstruct_trades` (`historical_scanner.py:259-316`) closes a trade **only** on a
-stop or target touch:
+It used to close a trade **only** on a stop or target touch, which was optimistic
+twice over: it never applied the exit engine (so it reported the
+hold-to-stop-or-target counterfactual, measured at **−18.6R bull / −23.8R bear**),
+and when a snapshot interval touched both levels it tested `hit_target` first and
+scored a **win**. Together those are the whole of the +3.22R it reported on
+2026-08-13 for a day the book took −0.65R.
 
-```python
-existing["exit_reason"] = "TARGET_HIT" if hit_target else "STOP_HIT"
-```
+Both are fixed:
 
-Two consequences, both flattering:
+| | now |
+|---|---|
+| soft exits | `exit_engine_evaluator` drives the live `evaluate_exit`, rebuilding indicators from the archived `bars_15m` |
+| ambiguous bar | **the stop wins** — intrabar order is unknowable at ~5-minute sampling |
+| R | measured from the price it exited at, not hardcoded −1.0 / full target |
+| priority | hard levels are tested before any soft exit, matching `EXIT_PRIORITY` |
+| missing bars | evaluator returns `None`, caller falls back to stop/target — degrades, never guesses |
 
-1. **It never applies the exit engine.** No momentum exits, no `TIME_EXIT`, no
-   `FORCE_EOD_EXIT`. It reports the hold-to-stop-or-target counterfactual —
-   which replay measured at **−18.6R (bull) / −23.8R (bear)**. That is the whole
-   reason it reported +3.22R on a day the app booked −0.65R.
-2. **When both levels are touched between two snapshots, it scores a win.**
-   `hit_target` is tested first at line 307, and it samples only at snapshot
-   timestamps (~5 min apart) using the scan-time `Price`, so intrabar order is
-   never known. `tools/swing_anchor_geometry.py` deliberately does the opposite
-   and scores such a bar as the stop, because assuming otherwise manufactures
-   the edge being looked for.
+**`exit_evaluator=None` restores the old scoring**, which is a legitimate thing to
+want: §1.6 of TRADE_QUALITY_PLAN measures that counterfactual deliberately. It is
+simply not what the app does, so it is not the default.
 
-**So a regression result is not comparable to a live or `replay_forward` result**
-until the evaluator is replaced. Passing a custom `evaluator=` is supported
-(line 259) and is the intended repair.
+**Regression results produced before 2026-08-14 are not comparable to results
+produced after it**, and neither is comparable to a pre-repair live number.
+
+**Measured immediately after the repair:**
+
+| day | old | new | app booked |
+|---|---|---|---|
+| 2026-08-13 | +2.21R (n=3) | **−0.08R** (n=3) | −0.65R |
+| 2026-08-14 | +6.71R (n=7) | +5.18R (n=12) | +0.10R |
+
+The exit mix is now realistic — 2026-08-13 closes on two EMA exits and one stop,
+where before it closed on two stops and a target — and the 08-13 gap falls from
+2.86R to 0.57R.
+
+**But a second divergence remains, and it is not about exits.** On 2026-08-14 the
+harness opens **12 trades against the app's 5**. `_default_evaluator` calls
+`evaluate_candidate` and never applies the stage-6 book limits — the entry
+window, `MAX_TRADES_PER_SYMBOL_PER_DAY`, `MAX_ACTIVE_PAPER_TRADES`, the cooldown,
+or `ALREADY_HOLDING`. So the harness still answers "what would these signals have
+done" rather than "what would this app have done".
+
+**Until that is closed, regression totals remain incomparable to live totals.**
+Per-trade comparisons and A/B differences between two regression arms are
+unaffected, since the same limits are missing from both.
 
 **The critical one:** `replay_forward.py` contains no reference to `paper_trades`.
 It generates its own trades from bars. So the two corrupted trades of 2026-08-13

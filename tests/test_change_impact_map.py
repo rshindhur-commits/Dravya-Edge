@@ -135,44 +135,48 @@ class ShortCircuitTests(unittest.TestCase):
 
 
 class RegressionEvaluatorTests(unittest.TestCase):
-    """Map section 7 -- why regression disagrees with the live book.
+    """Map section 7 -- how regression scores an exit.
 
-    Both assertions pin a defect. Repairing either is welcome; doing so without
-    updating the map is not, because the map is currently the only place that
-    records *why* a regression number cannot be compared to a live one.
+    Both defects this class used to pin were repaired on 2026-08-14 as Phase A
+    task 3, which failed these assertions and is the contract this file exists
+    for: neither repair could land without the map being corrected alongside it.
+    Behaviour is covered by tests/test_regression_exit_engine.py; the structural
+    claims stay here.
     """
 
-    def test_it_closes_only_on_stop_or_target(self):
+    def test_the_live_exit_engine_is_the_default(self):
 
         from app.regression import historical_scanner
 
-        source = inspect.getsource(historical_scanner.reconstruct_trades)
+        signature = inspect.signature(historical_scanner.reconstruct_trades)
 
-        self.assertIn("TARGET_HIT", source)
-        self.assertIn("STOP_HIT", source)
-        self.assertNotIn(
-            "evaluate_exit", source,
-            "if the exit engine is wired in, map section 7 must be rewritten",
+        self.assertIs(
+            signature.parameters["exit_evaluator"].default,
+            historical_scanner.exit_engine_evaluator,
+        )
+        self.assertIn(
+            "evaluate_exit",
+            inspect.getsource(historical_scanner.exit_engine_evaluator),
         )
 
-    def test_a_bar_touching_both_levels_is_scored_a_win(self):
-        """The optimistic tie-break. swing_anchor_geometry does the opposite."""
+    def test_a_bar_touching_both_levels_is_scored_a_stop(self):
+        """Was the reverse. Intrabar order is unknowable at ~5m sampling."""
 
         from app.regression import historical_scanner
 
         source = inspect.getsource(historical_scanner.reconstruct_trades)
 
-        self.assertIn('"TARGET_HIT" if hit_target else "STOP_HIT"', source)
+        self.assertLess(source.index("if hit_stop:"), source.index("elif hit_target:"))
 
-    def test_it_still_accepts_a_custom_evaluator(self):
-        """The intended repair path, named in the map."""
-
-        signature = None
+    def test_the_old_counterfactual_is_still_reachable(self):
+        """§1.6 measures hold-to-stop-or-target deliberately."""
 
         from app.regression.historical_scanner import reconstruct_trades
 
         signature = inspect.signature(reconstruct_trades)
+
         self.assertIn("evaluator", signature.parameters)
+        self.assertIn("exit_evaluator", signature.parameters)
 
 
 class DuplicatedLimitTests(unittest.TestCase):

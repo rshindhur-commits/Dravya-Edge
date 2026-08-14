@@ -187,6 +187,97 @@ def _trade_identity(symbol, direction, setup):
     return "|".join([str(symbol), str(direction), str(setup)])
 
 
+def _archived_bars(row: dict) -> "pd.DataFrame | None":
+    """The 15m frame this scan saw, rebuilt from the archived market payload.
+
+    `_regression_market_snapshot` stores OHLCV only, so the indicators the exit
+    engine reads have to be recomputed rather than recovered. That is exact
+    rather than approximate: they are pure functions of the bars, and these are
+    the same bars the live scan held.
+    """
+
+    payload = row.get("__Regression Market Snapshot") or {}
+    bars = payload.get("bars_15m") or payload.get("bars_5m")
+
+    if not bars:
+        return None
+
+    frame = pd.DataFrame(bars)
+
+    if frame.empty:
+        return None
+
+    frame.columns = [str(column).title() for column in frame.columns]
+
+    for column in ("Open", "High", "Low", "Close", "Volume"):
+        if column not in frame.columns:
+            return None
+
+    from app.indicators.enrich_indicators import enrich_indicators
+
+    try:
+        return enrich_indicators(frame)
+    except Exception:
+        return None
+
+
+def exit_engine_evaluator(row: dict, trade: dict):
+    """Ask the live exit engine whether this trade closes on this scan.
+
+    The harness used to close a trade only when price touched its stop or its
+    target, which is the hold-to-stop-or-target counterfactual -- measured at
+    **-18.6R (bull) / -23.8R (bear)** against what the app actually books. That
+    is the whole of the +3.22R this tool reported on 2026-08-13 for a day the
+    app booked -0.65R. Momentum exits, TIME_EXIT and the EOD flatten simply did
+    not exist here.
+
+    Returns `(exit_code, exit_price)` or `None` to hold. Returns None when the
+    bars are missing rather than guessing, and the caller falls back to the
+    stop/target rule so a thin archive degrades instead of failing.
+    """
+
+    frame = _archived_bars(row)
+
+    if frame is None or len(frame) < 2:
+        return None
+
+    from app.exit.exit_engine import evaluate_exit
+
+    risk_setup = {
+        "entry_price": trade["entry_price"],
+        "stop_loss": trade["stop_price"],
+        "take_profit": trade["target_price"],
+        "initial_stop_loss": trade["stop_price"],
+    }
+
+    try:
+        decision = evaluate_exit(
+            frame,
+            {"signal": "BEARISH" if trade["direction"] in {"PUT", "SHORT"} else "BULLISH"},
+            risk_setup,
+            entry_setup={"entry_type": trade.get("setup")},
+            trade_state={
+                "entry_type": trade.get("setup"),
+                "initial_stop_loss": trade["stop_price"],
+            },
+        )
+    except Exception:
+        return None
+
+    if not decision or not decision.get("exit_signal"):
+        return None
+
+    diagnostics = decision.get("exit_diagnostics") or []
+    code = diagnostics[0]["code"] if diagnostics else "EXIT"
+
+    price = decision.get("exit_fill_price")
+
+    if price is None:
+        price = float(frame.iloc[-1]["Close"])
+
+    return code, float(price)
+
+
 def _option_quote(row: dict, stage: str) -> dict:
     """Archived option quote at one leg of the trade, prefixed by stage.
 
@@ -256,7 +347,25 @@ def _option_round_trip(trade: dict) -> dict:
     }
 
 
-def reconstruct_trades(context: RegressionContext, evaluator: Callable | None = None) -> pd.DataFrame:
+def reconstruct_trades(
+    context: RegressionContext,
+    evaluator: Callable | None = None,
+    exit_evaluator: Callable | None = exit_engine_evaluator,
+) -> pd.DataFrame:
+    """Replay a day's archived scans into trades.
+
+    `evaluator` decides entries; `exit_evaluator` decides soft exits. The second
+    defaults to the live exit engine as of 2026-08-14. Before that this function
+    closed a trade only on a stop or target touch, which is the
+    hold-to-stop-or-target counterfactual rather than the app's behaviour, and it
+    is why the harness reported +3.22R on a day the book took -0.65R.
+
+    Pass `exit_evaluator=None` to recover the old stop/target-only scoring --
+    which is a legitimate thing to want, since that counterfactual is exactly
+    what §1.6 of docs/TRADE_QUALITY_PLAN.md measures. It is simply not what the
+    app does, and it must not be the default.
+    """
+
     evaluator = evaluator or _default_evaluator
     snapshots = _snapshot_frames(context)
     open_trades: dict[str, dict] = {}
@@ -299,14 +408,52 @@ def reconstruct_trades(context: RegressionContext, evaluator: Callable | None = 
             is_short = direction in {"PUT", "SHORT"}
             hit_target = price <= existing["target_price"] if is_short else price >= existing["target_price"]
             hit_stop = price >= existing["stop_price"] if is_short else price <= existing["stop_price"]
-            if not hit_target and not hit_stop:
+
+            exit_code = None
+            exit_price = price
+
+            if hit_stop:
+                # The stop wins a bar that touched both, and this is not a
+                # tie-break detail. Snapshots are ~5 minutes apart and carry one
+                # price, so intrabar order is unknowable; resolving the ambiguity
+                # in the trade's favour manufactures exactly the edge being
+                # looked for. `tools/swing_anchor_geometry.py` made the same
+                # choice for the same reason. Previously `hit_target` was tested
+                # first, so every such bar scored a WIN.
+                exit_code = "STOP_HIT"
+                exit_price = existing["stop_price"]
+
+            elif hit_target:
+                exit_code = "TARGET_HIT"
+                exit_price = existing["target_price"]
+
+            elif exit_evaluator is not None:
+                # Only consulted once the hard levels are clear, which matches
+                # EXIT_PRIORITY: HARD_STOP 100 and HARD_TARGET 95 outrank every
+                # soft exit, so a momentum rule must never pre-empt them.
+                engine_exit = exit_evaluator(row, existing)
+
+                if engine_exit is not None:
+                    exit_code, exit_price = engine_exit
+
+            if exit_code is None:
                 continue
+
             risk = abs(existing["entry_price"] - existing["stop_price"])
+            move = (
+                existing["entry_price"] - exit_price
+                if is_short
+                else exit_price - existing["entry_price"]
+            )
             existing["exit_time"] = str(timestamp)
-            existing["exit_price"] = price
-            existing["exit_reason"] = "TARGET_HIT" if hit_target else "STOP_HIT"
-            existing["r_multiple"] = round(abs(existing["target_price"] - existing["entry_price"]) / risk, 2) if hit_target else -1.0
-            existing["outcome"] = "WIN" if hit_target else "LOSS"
+            existing["exit_price"] = exit_price
+            existing["exit_reason"] = exit_code
+            # Measured from the price it actually exited at. Hard-coding -1.0 for
+            # a stop and the full target distance for a target was safe only
+            # while those were the sole outcomes; a momentum exit lands anywhere
+            # between them and must be scored where it lands.
+            existing["r_multiple"] = round(move / risk, 2) if risk > 0 else None
+            existing["outcome"] = "WIN" if move > 0 else "LOSS"
             existing["status"] = "CLOSED"
             existing.update(_option_quote(row, "exit"))
             existing.update(_option_round_trip(existing))
