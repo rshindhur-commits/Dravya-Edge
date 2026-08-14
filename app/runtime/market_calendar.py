@@ -122,9 +122,12 @@ def idle_reason(session, now):
     window". They could not open a trade by construction.
 
     The tail is not zero because the last scan of the day writes the closing
-    archive. It defaults wider than one AFTERHOURS interval (900s) so at least one
-    scan always lands after the bell: the final pre-close scan starts at 15:59 at
-    the latest, putting its successor no later than ~16:14.
+    archive. What guarantees one scan lands after the bell is that the tail is
+    wider than the **REGULAR** interval (300s), not the AFTERHOURS one: the
+    successor to the final pre-close scan is scheduled while the session is still
+    REGULAR, so a scan at 15:59 puts one at ~16:04 whatever AFTERHOURS is set to.
+    Stated against REGULAR because AFTERHOURS was widened to 1800s for the
+    database bill and would otherwise appear to have broken this.
 
     Intraday force-close is unaffected -- AUTO_PAPER_EOD_CLOSE fires at 15:55,
     before the bell, so it never depended on a post-close scan.

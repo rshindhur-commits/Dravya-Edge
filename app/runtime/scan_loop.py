@@ -57,12 +57,24 @@ ET = ZoneInfo("America/New_York")
 # every cycle and cut the session's DB cost by about 15%, but the scan cadence
 # through the session is a trading decision, not a hosting one, and it is not
 # being made here as a side effect of saving a few dollars.
+#
+# AFTERHOURS and CLOSED were 900 and 1800 and are now doubled. Neither scans:
+# `idle_reason` stops scanning 20 minutes after the bell, so every pass in both
+# windows takes the idle branch, which writes a heartbeat and wakes the compute
+# for the full 300s suspend timer to do it. The bill measured over 2026-08-08..13
+# was 9.65 compute-hours a day, of which these two windows are 2.7 -- 28% of the
+# spend to publish a heartbeat nobody reads overnight and to give the nightly
+# jobs an idle pass, which they still get eight of.
+#
+# This does not touch the post-close archive scan. That scan is scheduled by the
+# *previous* iteration, which is still REGULAR at 15:59, so it lands ~16:04
+# inside the 20-minute tail no matter what these two values are.
 SESSION_INTERVALS = {
     "OPENING_RANGE": 120,
     "REGULAR": 300,
     "PREMARKET": 1800,
-    "AFTERHOURS": 900,
-    "CLOSED": 1800,
+    "AFTERHOURS": 1800,
+    "CLOSED": 3600,
 }
 DEFAULT_INTERVAL = 300
 

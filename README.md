@@ -13,8 +13,10 @@ so coverage no longer depends on a browser tab being open:
 python -m app.runtime.scan_loop
 ```
 
-Cadence: `OPENING_RANGE` 120s, `REGULAR` 300s, `PREMARKET` 600s, `AFTERHOURS` 900s,
-`CLOSED` 1800s. Use `--interval 300` for a fixed cadence, `--skip-closed` to idle
+Cadence: `OPENING_RANGE` 120s, `REGULAR` 300s, `PREMARKET` 1800s, `AFTERHOURS` 1800s,
+`CLOSED` 3600s. The three sparse values are set by the database bill, not by the
+market -- none of them scans, and each pass wakes Neon for its 300s suspend timer
+to write a heartbeat. Use `--interval 300` for a fixed cadence, `--skip-closed` to idle
 outside market hours, and `--once` for a single scan. A failing scan is logged and the
 loop continues; Ctrl+C finishes the current scan and exits.
 
