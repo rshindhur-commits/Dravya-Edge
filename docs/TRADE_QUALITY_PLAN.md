@@ -730,6 +730,49 @@ different universe or a different product, and subscribers do not return in 2026
 on this signal. That is a real outcome with a real date, and it is preferable to
 another quarter of parameter changes inside a refuted frame.
 
+### 5.6a Validation log
+
+**2026-08-14 — the §1a model reproduces on live trades it was never fitted to.**
+
+22 closed live trades carrying both an R and a net premium, with the two
+corrected trades excluded:
+
+| | fitted on | slope | intercept | R² |
+|---|---|---|---|---|
+| §1a | 601 replay trades | 8.59 | −3.40 | 0.80 |
+| live | 22 live trades | **8.08** | **−2.62** | **0.77** |
+
+A model fitted on replayed candidates predicting the live book to within half a
+point of slope is the strongest evidence so far that replay and production are
+measuring the same system. It also means §1a can be used to forecast live
+outcomes, which is what Phase C's instrument decision depends on.
+
+The lower toll is expected: the spread ceiling has come 6 → 3 since those 601
+trades, and the intercept is the round trip.
+
+**Break-even is now +0.32R** (2.62 / 8.08). The book does not get there — and
+the mean that suggests it might does not survive §2.2f:
+
+```
+mean premium         -1.01%     95% CI [-3.88, +2.55]   spans zero
+mean without top 5   -4.50%
+median trade         -2.84%
+cash win rate        5 of 22  =  23%
+```
+
+Five trades of 22 carry 245% of the total. Same lottery shape as the 601-trade
+replay, so the live book is not a different animal — it is a smaller sample of
+the same one. **Nothing here contradicts §2.2e/§2.2g/§2.2h.**
+
+**One config finding:** mean entry spread paid is **2.37%**, so
+`OPTION_MAX_SPREAD_PCT` is not at the 2 §5.1 calls for. Three of the five trades
+on 2026-08-14 paid above 2%.
+
+**A prediction to test rather than a result:** at a ceiling of 2 the mean spread
+paid fell to 1.48% in the §1.4b arm. Carrying that reduction into the live fit
+puts the intercept near −1.7 and break-even near **+0.21R**. That is worth
+recording now precisely so it can be checked later, not quoted as an outcome.
+
 ### 5.6 Standing rules for the period
 
 §3's four gates continue to apply. These are added, each because it was violated:
