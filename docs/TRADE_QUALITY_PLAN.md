@@ -1007,6 +1007,53 @@ return on capital → Gate B (Sep 18) decides.
 If Gate A shows the boundary changes nothing, B-v can be brought forward
 immediately, since the MFE distribution would then be stable.
 
+### 5.8 Changes shipped during Phase A, and what each invalidates
+
+Kept because this plan is revisited daily and a change that quietly breaks
+comparability is worse than one that never shipped. Every entry names what it
+makes incomparable.
+
+| commit | change | invalidates |
+|---|---|---|
+| `b44a9e3` | `avoid_chasing` made switchable (`AVOID_CHASING_BLOCKS`, `..._MAX_EMA_DISTANCE_PCT`, `..._MAX_VWAP_DISTANCE_PCT`) | nothing — defaults are the previous constants exactly |
+| `2dcc57f` | an intraday position outliving its session is force-closed, stamped `RECONSTRUCTED_AT_FORCE_CLOSE` | nothing forward; **past** live P&L still contains the two corrected trades |
+| `5a55a62` | regression harness drives the real `evaluate_exit`; an ambiguous bar scores a **stop** | **every regression result produced before 2026-08-14** |
+| `0577f66` | `option_pl_dollars` backfilled from recorded legs, 2 → 21 of 42 trades | nothing — it only fills absent values |
+| `966a3ef` | MFE ratchets from the bar's **high/low**, not its close | **every MFE-derived number in this document**, see below |
+
+#### `966a3ef` is the one that needs care
+
+`highest_price`/`lowest_price` were ratcheted from `latest["Close"]`, so the
+recorded peak was the highest *close* and every intrabar excursion was discarded.
+
+**Two consequences, in opposite directions.**
+
+**Backwards:** every MFE figure recorded before this is **understated**. §5.7
+issue 3 reported that trades reaching +0.10R keep 24% of their peak and give back
+0.387R. The direction of that finding is unaffected — a larger true peak means a
+*larger* giveback, not a smaller one — but the magnitudes are floors, not
+estimates. The same applies to the +1R cliff: 16% of trades were recorded booking
+a peak above +1R while 34% actually reach it within an hour, so the population
+sitting below the protection threshold was overstated and the population being
+denied protection was understated.
+
+**Forwards:** `mfe_r` gates `resolve_profit_lock`, the multiday profit rules and
+breakeven-on-peak, so all three now engage earlier and more often. The change is
+one-directional by construction — reading the bar's extremes can only raise the
+peak and lower the trough — so no rule can fire *later* than before. That bound
+is pinned in `tests/test_mfe_uses_bar_extremes.py`.
+
+#### Arm comparability, stated explicitly
+
+`CTRL_default`, `TREAT_nochase` and the running `BE025` arm were all launched
+**before** `966a3ef` reached the working tree (09:27 and 09:27 against a 09:51
+edit), so all three loaded the old MFE code and are **mutually comparable**.
+
+**No arm launched after 2026-08-15 09:51 is comparable to them.** Any future A/B
+needs its own freshly-run control. This is §3 gate 4 — same days both arms — in a
+form the day list alone does not catch, because here the *code* moved rather than
+the calendar.
+
 ### 5.6 Standing rules for the period
 
 §3's four gates continue to apply. These are added, each because it was violated:
@@ -1020,3 +1067,11 @@ immediately, since the MFE distribution would then be stable.
   zero, and this is the phase whose entire value is that it was not touched.
 - **Before proposing a lever, check whether this document already closed it.**
   §5.0a is what skipping that costs.
+- **Re-baseline the control after any change to the exit or risk engines.** §5.8
+  records which arms share which code. A day list alone does not establish
+  comparability once the code has moved underneath it.
+- **State the check that could kill a finding in the same breath as the finding.**
+  Three claims were withdrawn within hours on 2026-08-13/15 — the entry boundary,
+  exits firing early, and "47% of trades never move" — each because the first cut
+  of a number was reported before its obvious confound was tested. The confound
+  was cheap to check every time.
