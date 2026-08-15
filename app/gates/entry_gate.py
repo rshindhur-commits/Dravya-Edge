@@ -624,11 +624,38 @@ def timing_gate_blocks():
 
 
 def timing_gate_max_score():
-    """Scores at or above this are refused when the timing gate is on."""
+    """Scores at or above this are refused when the timing gate is on.
+
+    **55, lowered from 70 on 2026-08-15.** The threshold is a ceiling, not a pass
+    mark: the score predicts inversely, so a high one is a reason to refuse.
+
+    70 was fitted to 122 resolved candidates. Re-measured against **22,954** --
+    every resolved candidate joined to the timing score recorded at its decision
+    -- the cliff is at 55 and not at 70:
+
+        score   0-55   n=10,437   36% win   (35% first half, 36% second)
+        score  55-70   n= 7,190   26% win   (23% / 27%)
+        score 70-101   n= 5,327   25% win   (25% / 25%)
+
+    Monotonic, and stable across both halves, which almost nothing else measured
+    on this project is. Above 55 the win rate is flat at 25-26%; the 55-70 band
+    is no better than the band above it and was being admitted.
+
+    At 70 the gate refused 5,327 of 22,954. At 55 it refuses 12,517 -- about half
+    the book rather than a quarter -- so expect materially fewer trades. That is
+    the trade being made: the 7,190 additional refusals win 26% against 36% for
+    what survives.
+
+    Checked against the eight trades of 2026-08-13/14, which is the sample the
+    operator had been reading from charts: 55 blocks four of the five losers,
+    including PLTR at 83.7 and NFLX at 64.0 -- the two identified as badly placed
+    by hand -- and keeps CRWD at 44.4, the only trade that made money. The one it
+    blocks wrongly on R is SMCI at 57.6, +0.14R, which lost 2.8% in cash.
+    """
 
     from app.config.settings import get_float_env
 
-    return get_float_env("ENTRY_TIMING_MAX_SCORE", 70.0)
+    return get_float_env("ENTRY_TIMING_MAX_SCORE", 55.0)
 
 
 def _timing_score_refused(row):
