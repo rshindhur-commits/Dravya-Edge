@@ -651,8 +651,96 @@ section listed it as still at 1200, which was wrong.
   setups buy strength at horizons where liquid megacaps mean-revert — predicts
   this is positive.
 
-**Gate A (Aug 21).** Does either beat the live trigger by more than draw-to-draw
-sd, in both holdout halves? If yes, the trigger is confirmed as a cost and Phase
+**A dependency found 2026-08-13, after this section was written.** Neither
+experiment can run as described until `avoid_chasing` has a switch.
+`entry_engine.py:190-208` refuses any candidate more than **1.2% from its EMA9**
+or **1.5% from VWAP**, and `risk_manager.py:891` turns that into an outright
+refusal. So "no entry trigger" is not reachable by removing the setup detectors —
+this block sits behind them and would still veto every entry into a move that had
+already started. Both thresholds are hardcoded. See §1a of
+[CHANGE_IMPACT_MAP.md](CHANGE_IMPACT_MAP.md).
+
+Adding the switch is the first task of Phase A, ahead of the experiments. It is
+also, on its own, the most direct test of §2.2h available: a rule admitting only
+moments when price has *not* moved is exactly the shape that would make entry
+timing measure worse than a random minute.
+
+#### GATE A RESULT, 2026-08-15 — **the boundary is protective. Hypothesis refused.**
+
+Control against `AVOID_CHASING_BLOCKS=false`, 22 matched sessions, contracts
+priced at real fills with the spread crossed both ways:
+
+| | control | no-chase | diff |
+|---|---|---|---|
+| trades | 191 | 202 | +11 |
+| **total premium** | **−227.7%** | **−260.6%** | **−32.9** |
+| mean premium | −1.19% | −1.29% | −0.10 |
+| median premium | −3.00% | −3.00% | 0.00 |
+| total R | +13.64 | +12.93 | −0.71 |
+| cash win rate | 28% | 28% | — |
+| mean without top 5 | −2.33% | −2.37% | −0.04 |
+
+The overall difference is inside noise — bootstrap of the mean difference is
+−0.11% with a 95% CI of [−2.04, +1.78]. **What is not inside noise is the trades
+the rule was blocking.** Isolating the 19 trades that exist only in the no-chase
+arm:
+
+```
+mean premium     -3.83%       against -1.19% for the book
+median           -4.71%
+total            -72.7%
+winners           3 of 19  =  16%      against 28% for the book
+```
+
+**`avoid_chasing` blocks candidates that lose roughly three times the book
+average, at little more than half its win rate.** It is doing its job.
+
+#### What this retracts
+
+On 2026-08-13 I recorded `avoid_chasing` as "the entry-side twin of the stop
+anchor and a harder constraint", "the single hardest constraint in the system",
+and the explanation for MU's 5.67% and SMCI's 7.33% producing no candidate.
+**The mechanism was real and the conclusion was wrong.**
+
+Both halves failed:
+
+* **It barely gates anything.** Lifting it entirely sent 86 more candidates to
+  contract selection and produced **2** more contracts. On 11 of 16 logged days
+  the trade count was identical.
+* **What it does gate is worse than what it admits.** See the 19 above.
+
+The observation behind it survives — entries do arrive ~3% into a move (§5.7
+issue 1). The proposed cause does not. Price being far from EMA9 is a *symptom*
+of a move that has run, and buying it is measurably bad; the rule is not what
+stops the app trading MU-shaped moves.
+
+#### What both arms agree is the real constraint
+
+```
+selection attempts    2,478        no liquid contract    2,284
+became trades           191        fill rate              7.7%
+```
+
+**92% of candidates never get a contract**, in both arms, and lifting the entry
+boundary moved that by 0.2 points. This restates §2.2 of
+[CHANGE_IMPACT_MAP.md](CHANGE_IMPACT_MAP.md) and the earlier finding that the
+funnel breaks at contract selection — which was on record and which I failed to
+connect to the entry question for two days.
+
+Read the rejection table with §0.2's short-circuit warning in force: `LOW_VOLUME`
+at 63.3% is a first-failure count for a filter already measured **inert at any
+value including zero**, and `OPTION_TOO_EXPENSIVE` at 5.2% is checked last and so
+is badly undercounted.
+
+**Gate A is therefore answered NO on the boundary, and Phase B must not spend
+time widening entry filters.** The binding constraint is that acceptable
+contracts do not exist for 92% of candidates, and the two levers that touch it —
+the spread ceiling and the cost cap — pull against per-trade economics. That
+tension is the first thing Phase B should measure.
+
+**Gate A (Aug 21) — remaining.** The null-model re-run and the inverted trigger.
+Does either beat the live trigger by more than draw-to-draw sd, in both holdout
+halves? If yes, the trigger is confirmed as a cost and Phase
 B searches for a replacement. If neither does, §2.2h is weaker than it reads and
 Phase B starts from the universe instead of the timing.
 
@@ -715,6 +803,209 @@ family has no timing edge on liquid megacaps.** October is then spent on a
 different universe or a different product, and subscribers do not return in 2026
 on this signal. That is a real outcome with a real date, and it is preferable to
 another quarter of parameter changes inside a refuted frame.
+
+### 5.6a Validation log
+
+**2026-08-14 — the §1a model reproduces on live trades it was never fitted to.**
+
+22 closed live trades carrying both an R and a net premium, with the two
+corrected trades excluded:
+
+| | fitted on | slope | intercept | R² |
+|---|---|---|---|---|
+| §1a | 601 replay trades | 8.59 | −3.40 | 0.80 |
+| live | 22 live trades | **8.08** | **−2.62** | **0.77** |
+
+A model fitted on replayed candidates predicting the live book to within half a
+point of slope is the strongest evidence so far that replay and production are
+measuring the same system. It also means §1a can be used to forecast live
+outcomes, which is what Phase C's instrument decision depends on.
+
+The lower toll is expected: the spread ceiling has come 6 → 3 since those 601
+trades, and the intercept is the round trip.
+
+**Break-even is now +0.32R** (2.62 / 8.08). The book does not get there — and
+the mean that suggests it might does not survive §2.2f:
+
+```
+mean premium         -1.01%     95% CI [-3.88, +2.55]   spans zero
+mean without top 5   -4.50%
+median trade         -2.84%
+cash win rate        5 of 22  =  23%
+```
+
+Five trades of 22 carry 245% of the total. Same lottery shape as the 601-trade
+replay, so the live book is not a different animal — it is a smaller sample of
+the same one. **Nothing here contradicts §2.2e/§2.2g/§2.2h.**
+
+**One config finding:** mean entry spread paid is **2.37%**, so
+`OPTION_MAX_SPREAD_PCT` is not at the 2 §5.1 calls for. Three of the five trades
+on 2026-08-14 paid above 2%.
+
+**A prediction to test rather than a result:** at a ceiling of 2 the mean spread
+paid fell to 1.48% in the §1.4b arm. Carrying that reduction into the live fit
+puts the intercept near −1.7 and break-even near **+0.21R**. That is worth
+recording now precisely so it can be checked later, not quoted as an outcome.
+
+**2026-08-14 — the live book, in cash, for the first time.**
+
+`option_pl_dollars` existed on **2 of 42** closed trades, so every statement about
+this book had been made in R or percent. `tools/backfill_option_cash.py` computes
+it from the two legs already recorded — no fetching — and took coverage to 21.
+
+19 trades, excluding the two corrected ones:
+
+```
+total                $+119.00
+mean per trade       $+6.26        95% CI [-$14.68, +$33.11]   spans zero
+median trade         $-7.00
+cash win rate        5 of 19  =  26%
+best five            $8, $20, $65, $85, $195
+total without them   $-254.00
+```
+
+**The headline is positive and the book is not.** Five trades of nineteen carry
+$373 of a $119 total; the median trade loses $7. Including the two corrected
+trades the total is **−$170.50**.
+
+Same shape as §2.2f found on 331 replayed trades and as §5.6a found in premium.
+Three independent measurements of this book — R, percent and now dollars — agree
+that the mean is carried by a handful of outcomes and the typical trade loses.
+
+**21 trades opened before 2026-07-31 carry no option quotes at all** and are
+reported as unrecoverable rather than estimated. Recovering them needs a Polygon
+fetch of historical chains; a guessed figure would be worse than a missing one,
+because only the missing one is visibly missing.
+
+**2026-08-14 — shares versus options on the same 22 live trades.**
+
+§2.2g ruled out an edge large enough to pay for options and left open "whether a
+smaller, share-sized edge exists". This is the same question asked of the live
+book: for each closed trade, the underlying move it captured beside the option
+return it booked.
+
+| | underlying (shares) | options |
+|---|---|---|
+| mean per trade | **+0.126%** | **−1.01%** |
+| median | −0.104% | −2.84% |
+| mean without top 5 | −0.108% | −4.50% |
+| win rate | **45%** | 23% |
+| mean 95% CI | [−0.086%, +0.373%] | [−4.00%, +2.69%] |
+
+**Two findings, and they must not be collapsed into one.**
+
+**The instrument explains the losses.** Moving the same trades to shares takes the
+mean from −1.01% to +0.126% and nearly doubles the win rate. That is the option
+round trip, charged on every trade, doing what §1a says it does.
+
+**The entry explains the absence of profit.** Shares are *not* a profitable
+strategy here — the mean's interval spans zero, the median trade still loses, and
+stripping the best five turns it negative. Removing options stops the bleeding; it
+does not produce an edge.
+
+**This is the plan's ordering, confirmed on live data.** Phase B fixes entry
+because the instrument decision in Phase C cannot rescue a signal with no edge —
+it can only stop one from being taxed. Switching to shares now would convert a
+losing strategy into a roughly break-even one, which is not a business.
+
+22 trades is a small sample and the intervals are wide; this is directional, and
+Phase B's requirement of **+0.155% of underlying per trade** remains the bar. Note
+the observed +0.126% sits just below it, which is worth watching rather than
+celebrating.
+
+### 5.7 The three behaviours the operator asked to prioritise — 2026-08-14
+
+Raised after five live trades on 2026-08-14 showed a consistent shape: entries
+arriving ~3% into a move, four of five continuing in the traded direction after
+the exit, and three of five exiting below their own peak. Each was measured
+against the 291-trade archive before being accepted, and **one of the three did
+not survive that.**
+
+#### Issue 1 — entries arrive late. **CONFIRMED, already in flight.**
+
+Four of the five entered after ~3% of the move had run from that session's swing.
+That is not a coincidence of one day: `avoid_chasing` refuses any candidate more
+than 1.2% from EMA9 (§1a of CHANGE_IMPACT_MAP), so the app can only enter once
+price has come *back* to the average — by which time the first leg is over.
+
+**Where it sits:** the switch was built 2026-08-14 and the control/treatment arms
+over 22 sessions are running now. **Gate A, 2026-08-21.**
+
+#### Issue 2 — exiting while the trend continues. **REFUTED.**
+
+The 2026-08-14 observation was real — CRWD ran another 1.84R after we left, TSLA
+1.23R, SPCX 1.05R. Across **202 momentum exits** it does not hold:
+
+```
+continuation   mean +0.878R   median +0.682R    95% CI [+0.751, +1.029]
+reversal       mean +1.029R   median +0.748R
+net            mean -0.151R                     95% CI [-0.387, +0.081]
+kept going our way more than against:  98/202 = 49%
+```
+
+Price does keep moving after a momentum exit — **it just moves against us slightly
+more often than for us.** The net is a coin flip and its interval spans zero. Only
+`Failed breakout` is decisively away from neutral, at **−0.821R**, meaning it
+saves considerably more than it costs.
+
+So the exits are firing at genuinely ambiguous moments, not early. This is the
+same shape as the stop-floor hypothesis, which looked decisive on twelve trades
+and died on 310. **Closed. Do not reopen from a single session.**
+
+Measured by `tools/post_exit_continuation.py`.
+
+#### Issue 3 — profit is given back before the exit fires. **CONFIRMED, and the mechanism is visible.**
+
+Across all 291 archived trades:
+
+```
+mean peak reached (MFE)      +0.394R
+mean booked                  +0.007R
+mean given back              +0.387R
+```
+
+Of the 145 trades that reached +0.10R or better, they kept **24% of their peak**,
+and **40 of 145 (28%) went green and closed red.**
+
+The mechanism is `EXIT_BREAKEVEN_TRIGGER_R`, which is **1.0**. A trade only gets
+its stop pulled to breakeven after reaching +1R — and the trades that get there
+behave completely differently:
+
+| | n | kept of peak | closed red |
+|---|---|---|---|
+| peaked ≥ +1.0R | 38 | **76%** | 2 of 38 |
+| peaked +0.1R to +1.0R | 107 | far less | 38 of 107 |
+
+**Half the book peaks below the level at which any protection engages.** That is
+a specific, mechanical explanation for a specific, measured loss, which neither of
+the other two issues has.
+
+**Not yet a fix.** `phase1_21day_be025.json` already holds a breakeven-at-0.25 arm
+and it moves the right way — giveback 0.387R → 0.328R, retention 24% → 30%,
+green-to-red 28% → 22%. But it took 333 trades against 291, so the arms are not
+on matched days (§3 gate 4), and it is scored in R rather than return on capital
+(§3's primary metric). **Neither number may be quoted until it is re-run properly.**
+
+#### Where issue 3 goes in the timeline
+
+It is an exit change, and §1.6 settled that the momentum exits as a class earn
+their keep — so this is a *protection* change, not an exit-removal change, and
+nothing in §1.2 or §1.6 speaks to it.
+
+**It becomes hypothesis B-v in Phase B, judged at Gate B on 2026-09-18.** Not
+earlier, for two reasons. The standing rule in §5.6 forbids committing another
+switch before the one ahead of it is measured, and Phase A's entry arms are
+mid-flight. And issue 1 and issue 3 interact directly: if the entry boundary
+moves, every MFE distribution behind this measurement changes, and a breakeven
+level fitted to today's distribution would be fitted to a book that no longer
+exists.
+
+**Sequence, therefore:** Gate A (Aug 21) settles the entry boundary → Phase B
+re-measures giveback on whatever entry survives → B-v is A/B'd on matched days in
+return on capital → Gate B (Sep 18) decides.
+
+If Gate A shows the boundary changes nothing, B-v can be brought forward
+immediately, since the MFE distribution would then be stable.
 
 ### 5.6 Standing rules for the period
 

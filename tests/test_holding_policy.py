@@ -193,7 +193,18 @@ def test_restore_marks_open_multiday_trade_for_continuation():
     save_state.assert_called_once_with(state)
 
 
-def test_carried_intraday_trade_stays_intraday_with_operational_warning():
+def test_a_carried_intraday_trade_is_closed_and_keeps_its_warning():
+    """Changed 2026-08-14. This test used to assert the trade was *restored*.
+
+    Carrying it is what let an INTRADAY SMCI put run nine days unmanaged and book
+    -1.92% on a 191-hour-old quote when it had really lost -99.5%. The
+    diagnostic fields are still written -- the profile stays INTRADAY, the carry
+    flag and the warning are still there, because they record what happened --
+    but the position is now flattened instead of handed back to the book.
+
+    Close behaviour is covered in detail by tests/test_orphaned_intraday_close.py.
+    """
+
     state = {
         "intraday": {
             "trade_key": "intraday",
@@ -201,20 +212,32 @@ def test_carried_intraday_trade_stays_intraday_with_operational_warning():
             "status": "OPEN",
             "holding_profile": "INTRADAY",
             "opened_at": "2026-07-23 14:30:00",
+            "entry_price": 100.0,
+            "current_price": 98.5,
         }
     }
+    closed = []
+
+    def fake_close(symbol, close_price=None, exit_reason=None, **kwargs):
+        state["intraday"]["status"] = "CLOSED"
+        closed.append((symbol, close_price, exit_reason))
+        return state["intraday"]
+
     with patch(
         "app.state.trade_session_lifecycle.load_paper_trades", return_value=state
     ), patch(
         "app.state.trade_session_lifecycle.save_paper_trades"
-    ) as save_state:
-        restored = restore_carried_intraday_positions("2026-07-24")
+    ) as save_state, patch(
+        "app.state.paper_trade_manager.close_paper_trade", fake_close
+    ):
+        restore_carried_intraday_positions("2026-07-24")
 
-    assert [trade["trade_key"] for trade in restored] == ["intraday"]
+    assert closed == [("NFLX", 98.5, "ORPHANED_INTRADAY_FORCE_CLOSE")]
     assert state["intraday"]["holding_profile"] == "INTRADAY"
     assert state["intraday"]["overnight_transition"] is False
     assert state["intraday"]["overnight_intraday_carry"] is True
     assert "Auto Close Intraday Trades was disabled" in state["intraday"]["overnight_carry_warning"]
+    assert state["intraday"]["option_quote_freshness"] == "RECONSTRUCTED_AT_FORCE_CLOSE"
     save_state.assert_called_once_with(state)
 
 

@@ -28,6 +28,17 @@ def _is_short_entry(entry_type):
     return is_short_setup(entry_type)
 
 
+def avoid_chasing_blocks():
+    """Whether an extended entry should be refused outright.
+
+    On by default: this is a switch for an experiment, not a decision. Read at
+    call time rather than import so an arm can set it without a restart, and so
+    tests can exercise both sides. See the enforcement site for what it costs.
+    """
+
+    return get_bool_env("AVOID_CHASING_BLOCKS", True)
+
+
 def _risk_direction(analysis, entry_type):
 
     if _is_short_entry(entry_type):
@@ -888,7 +899,27 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING", htf=None):
     # Avoid Chasing Filter
     # =========================
 
-    if entry_setup.get("avoid_chasing", False):
+    # The single hardest constraint in the system, and the least examined.
+    # `entry_engine` raises `avoid_chasing` when price sits more than 1.2% from
+    # EMA9 or 1.5% from VWAP, and this converts that into an outright refusal.
+    #
+    # So the app is structurally unable to enter a move already underway. On
+    # 2026-08-13 MU travelled 5.67% and SMCI 7.33% and neither produced a
+    # tradeable candidate. It is also the shape that would make entry timing
+    # measure *worse than a random minute* (§2.2h): a rule admitting only
+    # moments when price has not moved selects precisely the horizon at which
+    # liquid megacaps mean-revert.
+    #
+    # Switched, not changed. Off by default means the behaviour is exactly what
+    # it has always been; `AVOID_CHASING_BLOCKS=false` lifts the refusal while
+    # leaving the flag computed and recorded, so the archive still carries which
+    # candidates *would* have been called chased and the arm remains measurable
+    # against the control. This mirrors `SETUP_GATE_ENABLED`, which removes a
+    # refusal without removing its measurement.
+    #
+    # Lifting it changes which candidates exist, not merely which ones pass, so
+    # no archived candidate set spans a change here. See CHANGE_IMPACT_MAP §1a.
+    if entry_setup.get("avoid_chasing", False) and avoid_chasing_blocks():
 
         trade_allowed = False
 
