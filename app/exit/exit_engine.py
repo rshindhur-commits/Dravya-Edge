@@ -647,13 +647,40 @@ def evaluate_exit(
 
         lowest_price = entry_price
 
+    # Ratcheted from the bar's own extremes, not from its close.
+    #
+    # These two lines used to read `current_price`, which is `latest["Close"]`.
+    # So "highest price" meant "highest close" and every intrabar excursion the
+    # position actually lived through was discarded. On a 5-minute frame that is
+    # most of the excursion: measured over 191 replayed trades on 2026-08-15, the
+    # recorded MFE averaged +0.434R against a true 10-minute peak of +0.524R, and
+    # 73 trades recorded an MFE of exactly zero on bars whose highs were plainly
+    # above the entry.
+    #
+    # It is not only a reporting defect. `mfe_r` gates `resolve_profit_lock`
+    # (PROFIT_LOCK_MIN_MFE_R), the multiday profit rules, and breakeven-on-peak,
+    # so an understated peak means each of those engages later than intended or
+    # not at all. The 2026-08-15 archive shows 16% of trades booking a peak above
+    # +1R while 34% of them actually reach +1R within an hour.
+    #
+    # The correction can only raise the peak and lower the trough, so every rule
+    # reading them can only trigger earlier or protect more -- never later, never
+    # less. That bounds the behaviour change to one direction.
+    #
+    # A stop is a resting order and executes intrabar, so protecting a level
+    # derived from the true high is legitimate: the position genuinely was worth
+    # that much. The locked level is a full giveback-R below the peak in any
+    # case.
+    bar_high = _float_or_none(latest.get("High"))
+    bar_low = _float_or_none(latest.get("Low"))
+
     highest_price = max(
         highest_price,
-        current_price
+        current_price if bar_high is None else max(current_price, bar_high),
     )
     lowest_price = min(
         lowest_price,
-        current_price
+        current_price if bar_low is None else min(current_price, bar_low),
     )
 
     bars_in_trade = _bars_since_entry(
