@@ -665,8 +665,82 @@ also, on its own, the most direct test of §2.2h available: a rule admitting onl
 moments when price has *not* moved is exactly the shape that would make entry
 timing measure worse than a random minute.
 
-**Gate A (Aug 21).** Does either beat the live trigger by more than draw-to-draw
-sd, in both holdout halves? If yes, the trigger is confirmed as a cost and Phase
+#### GATE A RESULT, 2026-08-15 — **the boundary is protective. Hypothesis refused.**
+
+Control against `AVOID_CHASING_BLOCKS=false`, 22 matched sessions, contracts
+priced at real fills with the spread crossed both ways:
+
+| | control | no-chase | diff |
+|---|---|---|---|
+| trades | 191 | 202 | +11 |
+| **total premium** | **−227.7%** | **−260.6%** | **−32.9** |
+| mean premium | −1.19% | −1.29% | −0.10 |
+| median premium | −3.00% | −3.00% | 0.00 |
+| total R | +13.64 | +12.93 | −0.71 |
+| cash win rate | 28% | 28% | — |
+| mean without top 5 | −2.33% | −2.37% | −0.04 |
+
+The overall difference is inside noise — bootstrap of the mean difference is
+−0.11% with a 95% CI of [−2.04, +1.78]. **What is not inside noise is the trades
+the rule was blocking.** Isolating the 19 trades that exist only in the no-chase
+arm:
+
+```
+mean premium     -3.83%       against -1.19% for the book
+median           -4.71%
+total            -72.7%
+winners           3 of 19  =  16%      against 28% for the book
+```
+
+**`avoid_chasing` blocks candidates that lose roughly three times the book
+average, at little more than half its win rate.** It is doing its job.
+
+#### What this retracts
+
+On 2026-08-13 I recorded `avoid_chasing` as "the entry-side twin of the stop
+anchor and a harder constraint", "the single hardest constraint in the system",
+and the explanation for MU's 5.67% and SMCI's 7.33% producing no candidate.
+**The mechanism was real and the conclusion was wrong.**
+
+Both halves failed:
+
+* **It barely gates anything.** Lifting it entirely sent 86 more candidates to
+  contract selection and produced **2** more contracts. On 11 of 16 logged days
+  the trade count was identical.
+* **What it does gate is worse than what it admits.** See the 19 above.
+
+The observation behind it survives — entries do arrive ~3% into a move (§5.7
+issue 1). The proposed cause does not. Price being far from EMA9 is a *symptom*
+of a move that has run, and buying it is measurably bad; the rule is not what
+stops the app trading MU-shaped moves.
+
+#### What both arms agree is the real constraint
+
+```
+selection attempts    2,478        no liquid contract    2,284
+became trades           191        fill rate              7.7%
+```
+
+**92% of candidates never get a contract**, in both arms, and lifting the entry
+boundary moved that by 0.2 points. This restates §2.2 of
+[CHANGE_IMPACT_MAP.md](CHANGE_IMPACT_MAP.md) and the earlier finding that the
+funnel breaks at contract selection — which was on record and which I failed to
+connect to the entry question for two days.
+
+Read the rejection table with §0.2's short-circuit warning in force: `LOW_VOLUME`
+at 63.3% is a first-failure count for a filter already measured **inert at any
+value including zero**, and `OPTION_TOO_EXPENSIVE` at 5.2% is checked last and so
+is badly undercounted.
+
+**Gate A is therefore answered NO on the boundary, and Phase B must not spend
+time widening entry filters.** The binding constraint is that acceptable
+contracts do not exist for 92% of candidates, and the two levers that touch it —
+the spread ceiling and the cost cap — pull against per-trade economics. That
+tension is the first thing Phase B should measure.
+
+**Gate A (Aug 21) — remaining.** The null-model re-run and the inverted trigger.
+Does either beat the live trigger by more than draw-to-draw sd, in both holdout
+halves? If yes, the trigger is confirmed as a cost and Phase
 B searches for a replacement. If neither does, §2.2h is weaker than it reads and
 Phase B starts from the universe instead of the timing.
 
