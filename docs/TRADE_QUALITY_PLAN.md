@@ -1172,3 +1172,40 @@ which nothing measured on 2026-08-15 suggests it can.
   exits firing early, and "47% of trades never move" — each because the first cut
   of a number was reported before its obvious confound was tested. The confound
   was cheap to check every time.
+
+## §5.10 — 2026-08-15 validation replay: the deployed changes land, and lose
+
+Old settings against new, sequentially, 10 sessions (2026-07-31 to 2026-08-13),
+real chains and real fills. `tools/replay_forward.py`.
+
+```
+                trades   mean opt   median   total    win    R mean   days
+old settings        91     -1.54%   -3.11%  -140.0%   29%    +0.113    10
+new settings       127     -1.69%   -2.74%  -214.1%   24%    +0.038    10
+
+old CI by day  [-3.13, +0.37]   -top5 -3.05%
+new CI by day  [-2.44, -0.90]   -top5 -2.50%
+```
+
+**The changes did what they were designed to do.** Contract DTE moved 9 → 16,
+into the 14-25 band. Contract cost moved $298 → $820, so the raised cap is
+reaching contracts it previously refused. Moneyness moved +2.5% OTM → −0.2%.
+Selection attempts fell 1,187 → 636, which is the timing ceiling at 55 refusing
+candidates as intended, while the fill rate rose 7.7% → 20% as the cost cap
+predicted.
+
+**And the result is worse.** Per trade the two are within noise of each other, but
+the new arm takes 40% more trades at that rate, so the total loss grows by half.
+The new arm's interval **excludes zero**; the old arm's does not. On this evidence
+the change is reliably negative rather than merely unproven.
+
+Two things it did not achieve. Moneyness landed at −0.2%, which is at the money,
+not the ITM the sweep measured as best (< −2%). And **spread was never a
+selection criterion in either arm** — see `REBUILD_PLAN.md` §13, where the
+tightest contract in a chain runs 1.70% against 2.18% for what the app accepts.
+The lever that matters most to per-trade economics is the one neither arm pulled.
+
+**Recommendation:** do not treat Monday as a test of these settings on their own.
+The comparison to make is against a selector that ranks by spread, which is
+cheaper to build than either change already deployed and is the only one with a
+measured effect on break-even.
