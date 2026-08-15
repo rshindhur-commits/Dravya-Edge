@@ -227,6 +227,31 @@ def _maybe_freeze_baselines():
         print(f"[SCAN LOOP WARNING] regression baseline freeze failed: {exc}")
 
 
+def _maybe_review_trades():
+    """Diagnose each recent trade into `trade_review`. Never breaks the loop.
+
+    Needs the bars that came after each exit, so it belongs post-market beside
+    outcome resolution. Cached bars only; no Polygon spend beyond the cache.
+
+    It exists so questions about the book are a GROUP BY rather than another
+    throwaway script. Every such script was a fresh chance to get the derivation
+    wrong, and on the day this shipped two were caught -- a placement percentage
+    running past 100, and a counterfactual scoring the best price after the exit
+    rather than what holding would really have paid.
+    """
+
+    try:
+        from app.runtime.outcome_scheduler import maybe_review_trades
+
+        summary = maybe_review_trades(datetime.now(ET), idle_reason_value="IDLE")
+
+        if summary and summary.get("reviewed"):
+            print(f"[SCAN LOOP] reviewed {summary['reviewed']} trade(s).")
+
+    except Exception as exc:
+        print(f"[SCAN LOOP WARNING] trade review failed: {exc}")
+
+
 def _report_database_state():
     """Say once, at startup, whether this container can reach Postgres.
 
@@ -471,6 +496,9 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
             # rather than writing them, and a failure in any earlier job must
             # not stop a day being frozen before its snapshots expire.
             _maybe_freeze_baselines()
+            # Last, and after resolution: it reads the bars that followed each
+            # exit, and a failure here must not stop a day being frozen.
+            _maybe_review_trades()
             print(f"[SCAN LOOP] {idle}; sleeping {wait}s without scanning.")
             _sleep(wait)
             continue

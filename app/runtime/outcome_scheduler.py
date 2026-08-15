@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 MARKER_FILENAME = "outcome_resolution_state.json"
 OPTION_LEG_MARKER_FILENAME = "option_leg_replay_state.json"
 BASELINE_MARKER_FILENAME = "regression_baseline_state.json"
+TRADE_REVIEW_MARKER_FILENAME = "trade_review_state.json"
+
+# Sessions to re-review each night. Re-reviewing is idempotent -- the diagnostics
+# come from settled bars and upsert on the trade -- so a window wider than one
+# buys automatic catch-up after an outage for the cost of a few cached reads.
+TRADE_REVIEW_LOOKBACK_DAYS = 3
 
 # Sessions to freeze on each run. A frozen baseline is permanent; the snapshots
 # it is built from are not, so anything missed inside this window is missed for
@@ -286,6 +292,77 @@ def maybe_replay_option_legs(now, idle_reason_value):
     except Exception:
 
         logger.warning("option leg replay failed", exc_info=True)
+        return None
+
+
+def _trade_review_marker_path():
+    return live_path(TRADE_REVIEW_MARKER_FILENAME)
+
+
+def trade_review_last_run_day():
+
+    try:
+        return _read_marker(_trade_review_marker_path())
+    except Exception:
+        return None
+
+
+def trade_review_due(now, idle_reason_value):
+    """True when the per-trade review should run on this pass.
+
+    Its own marker, like the three jobs above, because it fails on different
+    things than they do: this needs bars after each exit, so it fails on the bar
+    cache where resolution fails on outcome data and pricing fails on Polygon
+    quota.
+    """
+
+    if not idle_reason_value:
+        return False
+
+    return trade_review_last_run_day() != now.date().isoformat()
+
+
+def maybe_review_trades(now, idle_reason_value):
+    """Diagnose each recent trade and store it. Post-market only.
+
+    Reviewing a trade needs the bars that came *after* its exit, so it can only
+    run once the session is over -- the same constraint outcome resolution has,
+    and the reason both live in this idle branch.
+
+    Before `trade_review` existed, every question about the book was answered by
+    re-deriving these numbers from bars in a throwaway script, and each
+    derivation was a fresh chance to get it wrong. Two were caught on the day
+    this shipped: a placement percentage that ran past 100 and averaged 287%, and
+    a hold-to-close counterfactual that scored the best price after the exit and
+    valued the book at +33.65R against a booked +0.76R. Deriving it once, in one
+    place, is the point.
+
+    Never allowed to raise. A stopped scanner is worse than a late diagnostic.
+    """
+
+    if not trade_review_due(now, idle_reason_value):
+        return None
+
+    day = now.date().isoformat()
+
+    try:
+
+        from tools.daily_trade_review import review_days
+
+        rows = review_days(days=TRADE_REVIEW_LOOKBACK_DAYS, write=True)
+
+        summary = {
+            "reviewed": len(rows),
+            "days": sorted({r["trading_day"] for r in rows}),
+        }
+
+        _write_marker(_trade_review_marker_path(), day, summary, "trade review")
+
+        return summary
+
+    except Exception:
+
+        logger.warning("trade review failed", exc_info=True)
         return None
 
 

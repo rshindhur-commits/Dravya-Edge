@@ -140,6 +140,17 @@ def review(trade):
     after = frame[frame.index > (exit_at or frame.index[-1])]
 
     result = {
+        # Identity, so a re-run overwrites rather than duplicates. `trade_key`
+        # from the row where it exists, otherwise reconstructed from the fields
+        # that make a trade unique.
+        "trade_key": (
+            payload.get("trade_key")
+            or f"{trade['symbol']}|{payload.get('option_ticker') or 'NO_CONTRACT'}"
+               f"|{pd.Timestamp(opened).isoformat()}"
+        ),
+        "trading_day": day,
+        "opened_at_utc": opened,
+        "closed_at_utc": closed,
         "symbol": trade["symbol"],
         "direction": "PUT" if is_short else "CALL",
         "setup": payload.get("entry_type"),
@@ -151,11 +162,19 @@ def review(trade):
     }
 
     # PLACEMENT -- a put wants to be sold high in the range, a call bought low.
+    #
+    # Clamped to 0-100. An entry can sit outside the range seen so far -- a put
+    # sold above the session high scores past 100 unclamped -- and while that is
+    # genuinely the best end, letting it run free makes the average meaningless:
+    # the first version of this averaged **287%** because a handful of entries
+    # were far outside their prior range. Being 30% above the high is not three
+    # times better placed than being at the high.
     if len(before) > 5:
         low, high = before["Low"].min(), before["High"].max()
         if high > low:
             position = (entry - low) / (high - low) * 100
-            result["placement"] = position if is_short else 100 - position
+            score = position if is_short else 100 - position
+            result["placement"] = max(0.0, min(100.0, score))
 
     # DRIFT -- which way price was going as we entered.
     window = before[before.index >= entry_at - pd.Timedelta(minutes=DRIFT_WINDOW_MINUTES)]
@@ -173,19 +192,46 @@ def review(trade):
         if result.get("r") is not None:
             result["giveback_r"] = result["mfe_r"] - result["r"]
 
-    # COUNTERFACTUAL -- what holding to the close would have done.
+    # COUNTERFACTUAL -- what holding would actually have produced.
+    #
+    # Walked bar by bar rather than taken from the extremes, because whichever
+    # level is reached *first* ends the trade. The first version of this scored
+    # the best price seen after the exit, which is not holding -- it is holding
+    # plus perfect timing, and it valued the book at +33.65R against a booked
+    # +0.76R. A bar that touches both levels scores the stop, since intrabar
+    # order is unknowable and resolving it in the trade's favour manufactures
+    # exactly the edge being measured.
     if len(after):
-        favourable = (entry - after["Low"].min()) if is_short else (after["High"].max() - entry)
-        result["available_after_r"] = favourable / risk
-        result["stop_would_hit"] = bool(
-            after["High"].max() >= stop if is_short else after["Low"].min() <= stop
-        )
-        result["target_would_hit"] = bool(
-            after["Low"].min() <= target if is_short else after["High"].max() >= target
-        )
-        # Holding is scored honestly: a stop reached first ends the trade at -1R
-        # whatever the day did afterwards.
-        result["held_r"] = -1.0 if result["stop_would_hit"] else result["available_after_r"]
+
+        best = (entry - after["Low"].min()) if is_short else (after["High"].max() - entry)
+        result["available_after_r"] = best / risk
+
+        held_r = None
+        hit_stop = hit_target = False
+
+        for _ts, bar in after.iterrows():
+
+            touched_stop = bar["High"] >= stop if is_short else bar["Low"] <= stop
+            touched_target = bar["Low"] <= target if is_short else bar["High"] >= target
+
+            if touched_stop:
+                hit_stop = True
+                held_r = -1.0
+                break
+
+            if touched_target:
+                hit_target = True
+                held_r = abs(target - entry) / risk
+                break
+
+        if held_r is None:
+            # Survived to the bell: marked at the closing price.
+            close = float(after["Close"].iloc[-1])
+            held_r = ((entry - close) if is_short else (close - entry)) / risk
+
+        result["held_r"] = held_r
+        result["stop_would_hit"] = hit_stop
+        result["target_would_hit"] = hit_target
 
     # TARGET REACHABILITY -- was the target inside the day's range at all.
     span = frame["High"].max() - frame["Low"].min()
@@ -200,6 +246,115 @@ def review(trade):
         result["cash_pct"] = (bid - ask) / ask * 100
 
     return result
+
+
+def persist(rows):
+    """Upsert reviews into `trade_review`. Returns the number written.
+
+    Keyed on the trade, not the day, so re-running a session overwrites rather
+    than duplicates -- the diagnostics are derived from settled bars and come out
+    identical, which makes the job safe to re-run after an outage.
+    """
+
+    if not rows:
+        return 0
+
+    import json
+
+    def native(value):
+        """pandas hands back numpy scalars; psycopg2 will not bind them."""
+
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if hasattr(value, "item"):          # np.float64, np.bool_, np.int64
+            value = value.item()
+        if isinstance(value, float) and value != value:
+            return None
+        return value
+
+    with get_engine().begin() as connection:
+
+        for row in rows:
+
+            connection.execute(text("""
+                INSERT INTO trade_review (
+                    trade_key, trading_day, symbol, direction, setup,
+                    opened_at, closed_at, exit_reason,
+                    r_multiple, cash, cash_pct,
+                    placement_pct, drift, traded_with_drift,
+                    mfe_r, mae_r, giveback_r,
+                    held_r, stop_would_hit, target_would_hit,
+                    target_vs_day_range, risk_pct, payload, reviewed_at
+                ) VALUES (
+                    :trade_key, CAST(:trading_day AS DATE), :symbol, :direction, :setup,
+                    :opened_at, :closed_at, :exit_reason,
+                    :r_multiple, :cash, :cash_pct,
+                    :placement_pct, :drift, :traded_with_drift,
+                    :mfe_r, :mae_r, :giveback_r,
+                    :held_r, :stop_would_hit, :target_would_hit,
+                    :target_vs_day_range, :risk_pct, CAST(:payload AS JSONB), now()
+                )
+                ON CONFLICT (trade_key) DO UPDATE SET
+                    r_multiple = EXCLUDED.r_multiple,
+                    cash = EXCLUDED.cash,
+                    cash_pct = EXCLUDED.cash_pct,
+                    placement_pct = EXCLUDED.placement_pct,
+                    drift = EXCLUDED.drift,
+                    traded_with_drift = EXCLUDED.traded_with_drift,
+                    mfe_r = EXCLUDED.mfe_r,
+                    mae_r = EXCLUDED.mae_r,
+                    giveback_r = EXCLUDED.giveback_r,
+                    held_r = EXCLUDED.held_r,
+                    stop_would_hit = EXCLUDED.stop_would_hit,
+                    target_would_hit = EXCLUDED.target_would_hit,
+                    target_vs_day_range = EXCLUDED.target_vs_day_range,
+                    risk_pct = EXCLUDED.risk_pct,
+                    payload = EXCLUDED.payload,
+                    reviewed_at = now()
+            """), {
+                "trade_key": row["trade_key"],
+                "trading_day": row["trading_day"],
+                "symbol": row["symbol"],
+                "direction": row["direction"],
+                "setup": row.get("setup"),
+                "opened_at": row.get("opened_at_utc"),
+                "closed_at": row.get("closed_at_utc"),
+                "exit_reason": row.get("reason"),
+                "r_multiple": native(row.get("r")),
+                "cash": native(row.get("cash")),
+                "cash_pct": native(row.get("cash_pct")),
+                "placement_pct": native(row.get("placement")),
+                "drift": native(row.get("drift")),
+                "traded_with_drift": native(row.get("with_drift")),
+                "mfe_r": native(row.get("mfe_r")),
+                "mae_r": native(row.get("mae_r")),
+                "giveback_r": native(row.get("giveback_r")),
+                "held_r": native(row.get("held_r")),
+                "stop_would_hit": native(row.get("stop_would_hit")),
+                "target_would_hit": native(row.get("target_would_hit")),
+                "target_vs_day_range": native(row.get("target_vs_day_range")),
+                "risk_pct": native(row.get("risk_pct")),
+                "payload": json.dumps(
+                    {"entry_at": row.get("entry_at"), "exit_at": row.get("exit_at")},
+                    default=str,
+                ),
+            })
+
+    return len(rows)
+
+
+def review_days(days=3, write=True):
+    """Review the most recent sessions and persist them. Used by the nightly job."""
+
+    trades = load_trades(None, days)
+    rows = [r for r in (review(t) for t in trades) if r]
+
+    if write:
+        persist(rows)
+
+    return rows
 
 
 def fmt(value, spec, blank="-"):
@@ -280,6 +435,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--day", help="YYYY-MM-DD")
     parser.add_argument("--days", type=int, default=1)
+    parser.add_argument("--write", action="store_true",
+                        help="upsert into trade_review")
     args = parser.parse_args()
 
     trades = load_trades(args.day, args.days)
@@ -293,13 +450,20 @@ def main():
         key = pd.Timestamp(trade["opened_at"]).tz_convert("America/New_York").strftime("%Y-%m-%d")
         by_day.setdefault(key, []).append(trade)
 
+    written = 0
+
     for day in sorted(by_day):
         rows = [r for r in (review(t) for t in by_day[day]) if r]
         if rows:
             print_report(rows, day)
+            if args.write:
+                written += persist(rows)
         else:
             print(f"\n  {day}: {len(by_day[day])} trades, none reviewable "
                   f"(missing geometry or bars)\n")
+
+    if args.write:
+        print(f"  wrote {written} rows to trade_review\n")
 
 
 if __name__ == "__main__":

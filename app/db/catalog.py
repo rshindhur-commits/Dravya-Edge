@@ -39,6 +39,14 @@ TABLES = (
      "says whether the underlying reached its target; only this says whether "
      "buying the contract would have made money, which is frequently the "
      "opposite answer."),
+    ("trade_review", "Scanning", "one per closed trade",
+     "Per-trade diagnostics computed nightly from the bars: where in the "
+     "session's range the entry sat, which way price was drifting when it "
+     "fired, how much of the peak was given back, and what holding would have "
+     "paid -- scored honestly, so a stop reached first is -1R whatever the day "
+     "did afterwards. Exists so questions about the book are a GROUP BY rather "
+     "than another throwaway script; the two derivations it replaced were both "
+     "wrong the first time."),
     ("activity_trace_event", "Scanning", "one per observed event",
      "The full narrative of a trading day, symbol by symbol, behind the Activity "
      "Feed."),
