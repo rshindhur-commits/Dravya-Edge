@@ -87,3 +87,67 @@ baseline. Negligible quota, safe to run alongside the live worker.
 removes the last untested entry-side idea. Whatever happens Monday, no future
 session should re-run a longer-hold experiment on this universe expecting a
 different answer.
+
+---
+
+## 12. Phase 0b — "risk more to get more", tested and refuted
+
+The operator challenged §11's 2% figure: the toll is a *percentage* of premium,
+not a fixed fee, so a big enough winner absorbs it. **That reasoning is correct**,
+and the 2% gate was an assumption rather than a law. Convex books — long
+volatility, tail hedges, trend following — run win rates in the twenties and pay
+worse tolls than ours, and they work because the winners are multiples.
+
+`tools/planb_convexity.py` tests it properly: **4 stop widths × 7 target widths =
+28 combinations**, 1,209 candidates. Widening the target alone would have been
+half a test, because with the app's own stop a trade dies in 0.6 days at a 3% win
+rate — the stop resolves it long before a wide target is reachable. So the stop is
+widened too, which is the half that actually raises risk per trade.
+
+```
+OPTION RETURN, % of premium, 3% ITM 35 DTE, ask in / bid out
+stop        1R      2R      3R      5R      8R     12R    none    held
+1x       -6.31   -6.82   -7.41   -7.48   -8.19   -8.98   -9.08    0.4d
+2x       -7.90   -9.17  -10.38  -11.33  -11.67  -11.68  -11.69    0.7d
+3x       -9.31  -11.21  -11.75  -12.39  -12.56  -12.57  -12.57    1.1d
+5x       -9.10  -11.73  -12.17  -12.34  -12.35  -12.35  -12.35    1.9d
+```
+
+**Every one of the 28 cells is negative, and it worsens monotonically in both
+directions.** The best cell is the tightest stop with the smallest target,
+−6.31%, CI [−6.8, −5.6], entirely below zero. Convexity would have shown as the
+mean *rising* toward the bottom right. It falls.
+
+### Why more risk does not help here
+
+Leverage multiplies expectancy; it does not create it. The underlying signal's
+best cell is **+0.02R**, and widening the stop makes it worse (−0.22R at 2×),
+because a wider stop loses more when wrong without the winners growing to match.
+
+The break-even arithmetic, which is the number to remember:
+
+```
+1R move  ->  ~0.4% underlying  x 0.65 delta  ->  ~5-6% of premium
+round trip toll                              ->   6.92%
+                                    break-even ~ 1.3R
+```
+
+**It costs about 1.3R just to open and close the position**, and only 30% of
+trades reach 2R. The signal's edge is roughly a tenth of its own transaction
+cost. No risk setting changes that ratio, because risk scales both sides of it.
+
+### What this does and does not close
+
+**Closed:** the hold (§11), and now risk-taking in both dimensions. Nobody should
+re-run either on this universe.
+
+**Still open, and unchanged:** whether an options market exists where the toll is
+1–2% rather than 7%. That is the only remaining variable, because it is the only
+one that moves the break-even rather than the edge.
+
+**Honest about the ceiling, in advance.** At a 1% toll, break-even falls to about
++0.2R against a measured edge of +0.134R. That is closer, and **still short.** So
+even the best plausible Monday result does not by itself produce a profitable
+system — it produces the first version of this problem where the gap is small
+enough that entry quality could close it. That is the most §11.4 can deliver, and
+saying so now is the point of writing it down.
