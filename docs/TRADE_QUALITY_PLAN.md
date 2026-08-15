@@ -1054,6 +1054,103 @@ needs its own freshly-run control. This is §3 gate 4 — same days both arms �
 form the day list alone does not catch, because here the *code* moved rather than
 the calendar.
 
+### 5.9 2026-08-15 — Phases A, B and C largely collapsed into one day
+
+Six entry levers and the whole contract question were measured in a single
+session. The plan assumed these would take from mid-August to early October; the
+data to answer them already existed. **This section supersedes the phase dates in
+§5.1–§5.4 and states what replaces them.**
+
+#### The finding that reframes everything
+
+**The signal is real, and it is roughly a third of what options cost.**
+
+```
+edge, 2,027 candidates    +0.134R    95% CI [+0.069, +0.199]   without top 5: +0.118R
+options break even at     ~+0.40R
+```
+
+The interval excludes zero and it survives the strip that has killed every other
+result in this document. That single line reconciles three findings that looked
+contradictory: the direction carries genuine information, nothing predicts which
+individual trade wins, and the book still loses. The edge is thin, real, and
+spread evenly — so there is no subset to select and no filter to build.
+
+#### What was tested and returned null
+
+| test | result | tool |
+|---|---|---|
+| 56 single features, Bonferroni-corrected | nothing survives with its sign | `feature_sweep.py` |
+| 2,278 feature pairs, best quadrant | 54.3% on discovery, **31.1% on holdout against a 31.3% base** | `feature_combination_sweep.py` |
+| regularised model, all 68 features | discovery AUC 0.740, **holdout AUC 0.433** — below a coin flip | `feature_combination_sweep.py` |
+| inverting the trigger | **−0.955R, 1% win rate.** The direction is firmly right | `inverted_trigger.py` |
+| entry delay, 5 windows | all worse than entering at the signal | `entry_timing_sweep.py` |
+| limit-order pullback, 5 windows | all worse; the first version was lookahead and is documented as such | `entry_timing_sweep.py` |
+
+**Selection cannot fix a generator.** Every one of these tried to pick winners
+from a pool where the edge is uniformly thin.
+
+#### The two things that did work
+
+**Entry timing score, threshold 55 not 70.** 22,954 resolved candidates:
+
+```
+<55     n=10,437    36% win    (35% / 36% across halves)
+55-70   n= 7,190    26% win    (23% / 27%)
+70+     n= 5,327    25% win    (25% / 25%)
+```
+
+Monotonic, stable in both halves, and stable across **five of six market
+regimes** — so one global number is defensible and per-regime fitting is
+unnecessary. Shipped as the code default in `60c5cb1`. It is a *ceiling*: the
+score predicts inversely, so lowering it refuses more (5,327 → 12,517).
+
+**Contract choice, worth 6.5 points a trade.** Every contract on every recorded
+chain, 1,944 candidates:
+
+```
+0-10d OTM   -10.36%   <- what the app was buying
+11-25d ITM   -3.86%   <- best
+```
+
+**100% of 11-25d ITM contracts cost more than the $500 cap**, so the ranker's own
+preference was unbuyable. Cap raised to 1500, preferred DTE 7-21 → 14-25. No arm
+is positive, so this reduces the bleed rather than curing it — the best arm at
+−3.86% is close to simply paying the §1a toll, which is what a +0.13R signal
+cannot cover.
+
+#### Issue 3's fix failed
+
+`EXIT_BREAKEVEN_TRIGGER_R` 1.0 → 0.25 gave 222 trades against 191, identical mean
+R, and a worse total (−280.0% against −227.7%). Closing early frees the symbol to
+re-enter and the extra trades give the gain back. The median did improve, −2.0%
+against −3.0%.
+
+**Untried, and different in mechanism:** `PROFIT_LOCK_MIN_MFE_R` 1.0 → 0.5. It
+ratchets a stop rather than closing a position, so it cannot create the extra
+trades that broke the breakeven test. Both protections currently share a cliff at
+1.0R, leaving the 0.1–1.0R band — half the book — with nothing.
+
+#### What this does to the dates
+
+| gate | was | now |
+|---|---|---|
+| **A** — entry boundary | Aug 21 | **answered.** Boundary protective (§5.1), six further levers null, one threshold shipped |
+| **B** — does anything beat random enough to pay for options | Sep 18 | **largely answered no.** The four hypotheses were pre-empted; selection is closed |
+| **C** — instrument | Oct 9 | **answered for options.** No contract on these chains carries a +0.13R signal. Shares are out of scope by the operator's decision |
+
+**The decisive evidence arrives Monday, not in October.** Three changes are live —
+timing ceiling 55, cost cap 1500, preferred DTE 14-25 — and all three are
+attributable afterwards: timing refusals log `ENTRY_TIMING_TOO_EARLY`, and cost
+and DTE are captured per trade in `trade_review`.
+
+**What Gate D becomes.** If Monday's sessions show the surviving entries behaving
+like the 36% band and the contracts shifting to 11-25d, the frozen forward run of
+§5.4 can start in early September rather than October. If they do not, the honest
+conclusion is available immediately: a +0.13R signal cannot be traded through
+options, and the remaining question is whether the signal can be made larger —
+which nothing measured on 2026-08-15 suggests it can.
+
 ### 5.6 Standing rules for the period
 
 §3's four gates continue to apply. These are added, each because it was violated:
