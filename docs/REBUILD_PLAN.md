@@ -151,3 +151,83 @@ even the best plausible Monday result does not by itself produce a profitable
 system — it produces the first version of this problem where the gap is small
 enough that entry quality could close it. That is the most §11.4 can deliver, and
 saying so now is the point of writing it down.
+
+---
+
+## 13. Correction, 2026-08-15 — the toll is not 7%, it is under 2%
+
+**§11, §12 and the "1% or stop" gate were all computed on the wrong number, and
+the conclusion drawn from them was wrong.**
+
+The figure quoted was the *median spread across the recorded chain*. A chain holds
+about 120 strikes, most of which nobody would ever trade. Charging their median
+to a real trade prices the junk, not the position. A trader picks the **best
+available contract**.
+
+```
+every quoted contract            n=120,737   p25 2.81%   med 4.82%   p75 7.93%
+contracts the app ACCEPTED       n=    408   p25 1.55%   med 2.18%   p75 3.23%
+TIGHTEST contract in each chain  n=  2,077   p25 1.17%   med 1.70%   p75 2.46%
+tightest w/ OI>=500, vol>=50     n=  1,375   p25 1.23%   med 1.88%   p75 3.01%
+```
+
+Tightest-per-chain by symbol, and this is the table that matters:
+
+```
+PLTR  0.75%   TSLA  0.78%   SPCX 1.09%   NVDA 1.16%   META 1.28%
+AMD   1.29%   MU    1.30%   MSFT 1.34%   ORCL 1.45%   SMH  1.59%
+AVGO  1.60%   GOOGL 1.67%   NFLX 1.74%   TSM  1.77%   MRVL 1.93%
+AMZN  2.19%   CRWD  2.41%   PANW 2.59%   ARM  2.67%   SMCI 2.95%
+AAPL  3.10%   AMAT  3.36%
+```
+
+**The 1% toll that §12 set as the condition for Plan B existing already exists**,
+on names already in the universe. Fifteen of twenty-two symbols sit under 2%.
+
+### What this does to break-even
+
+```
+toll 6.92% (wrong)   ->  break-even ~1.30R   edge is a tenth of the toll
+toll 2.18% (actual)  ->  break-even ~0.40R   matches section 1a exactly
+toll 1.70% (best)    ->  break-even ~0.31R
+toll 0.78% (TSLA)    ->  break-even ~0.14R   against a measured edge of +0.134R
+```
+
+That last line is the point. On the most liquid names the edge and the toll are
+**roughly equal**, not an order of magnitude apart. §12's claim that "the edge is
+one tenth of its own transaction cost" is withdrawn; it is true only against a
+spread nobody would pay.
+
+Note the 2.18% row reproduces §1a's independently fitted +0.40R break-even. Two
+methods agreeing is the check that the corrected number is the right one.
+
+### What survives, and what does not
+
+**Survives:** §11's finding that a longer hold does not help, and §12's finding
+that widening stops and targets does not help. Both compared arms against each
+other, and a wrong toll applied equally to every arm does not change which arm
+wins. The *rankings* hold; the *levels* were too pessimistic.
+
+**Withdrawn:** "buying options directionally cannot work", the 1%-or-stop gate,
+and the framing that the universe is unusable. Also withdrawn is the §12 claim
+that no risk setting matters — that grid should be re-run against a 1.7% toll
+before anything is concluded from it.
+
+### What it makes actionable
+
+1. **Symbol selection by spread.** PLTR/TSLA/NVDA/META/MSFT at 0.75-1.34% against
+   AAPL/AMAT at 3.10-3.36%. This is a filter on the *universe*, measurable
+   up front, and it is worth more than any entry rule tested so far.
+2. **Always take the tightest contract.** The app accepts at 2.18% median while
+   1.70% is available in the same chain — about half a point per trade left on
+   the table, every trade.
+3. Monday's mega-cap census is **no longer a go/no-go**. The answer is already
+   here, in data we owned the whole time.
+
+### How this happened
+
+The median was the natural summary of a distribution, and it was never asked
+whether the distribution described a decision anyone makes. Nobody trades the
+median contract. The check that would have caught it -- comparing the modelled
+toll against §1a's independently fitted break-even, which sat in the repo the
+whole time -- was not run until the operator pushed back a third time.
