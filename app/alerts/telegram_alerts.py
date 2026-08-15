@@ -2427,11 +2427,43 @@ def build_trade_exit_alert_message(
     )
     option_current_mid = _number(option_current_mid)
     contracts = max(1, int(_number(trade.get("option_contracts"), 1)))
-    option_pnl = (
-        (option_current_mid - option_entry_mid) * contracts * 100
-        if option_entry_mid is not None and option_current_mid is not None
-        else None
+
+    # Honest fills: the position bought the ask and sold the bid.
+    #
+    # This was `(option_current_mid - option_entry_mid)`, which crosses no spread
+    # at either end and so reports a price nobody could have traded at. Measured
+    # across the 19 closed trades carrying both legs on 2026-08-15, the alerts
+    # reported **$399** of profit against **$119** actually produced by the fills
+    # -- $14.74 a trade -- and called 8 of 19 winners where the fills made 5.
+    # CRWD on 2026-08-14 went out as +$55.00 on a trade whose fills made +$20.
+    #
+    # That is the same defect the comment below this block was written to fix.
+    # The WIN/LOSS *label* was moved onto premium instead of R; the premium it
+    # was moved onto was still a mid-to-mid number. A subscriber acting on it
+    # sees a figure their account cannot reproduce, which is worse than R was,
+    # because R at least never looked like dollars.
+    #
+    # Mid-to-mid remains the fallback for trades with no recorded bid/ask, and
+    # says so in the message rather than passing itself off as a fill.
+    option_entry_fill = _number(trade.get("option_entry_ask"))
+    option_exit_fill = _number(
+        trade.get("option_close_bid") or trade.get("option_current_bid")
     )
+
+    if option_entry_fill and option_exit_fill:
+
+        option_pnl = (option_exit_fill - option_entry_fill) * contracts * 100
+        option_pnl_estimated = False
+
+    else:
+
+        option_pnl = (
+            (option_current_mid - option_entry_mid) * contracts * 100
+            if option_entry_mid is not None and option_current_mid is not None
+            else None
+        )
+        option_pnl_estimated = option_pnl is not None
+
     final_r = _number(r_multiple)
 
     # The verdict follows the money, not R. R is measured against the
@@ -2485,7 +2517,10 @@ def build_trade_exit_alert_message(
         "<b>RESULT</b>",
         result_label,
         f"{_fmt(r_multiple)}R",
-        f"Option P/L: {_signed_money(option_pnl)}",
+        (
+            f"Option P/L: {_signed_money(option_pnl)}"
+            + (" (mid estimate, no quote)" if option_pnl_estimated else "")
+        ),
         "",
         *_option_lifecycle_lines(trade),
         "",
