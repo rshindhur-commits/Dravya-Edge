@@ -23,13 +23,23 @@ step to maintain for no benefit. `.python-version` pins `3.14` in the repo root.
 | --- | --- |
 | Type | **Background Worker** |
 | Region | **Virginia (US East)** — same as the Neon database |
-| Branch | `Claude_Overtake_Dravya_GPT` |
+| Branch | **`main`** |
 | Build command | `pip install -r requirements.txt` |
 | Start command | `python -m app.runtime.scan_loop` |
 | Instance | **Starter, $7/mo, 512 MB** |
 
 512 MB is enough: a full 26-symbol scan peaks at **155 MB** resident (16 MB
 before imports, 125 MB after). Roughly 3.3× headroom.
+
+**The deploy path is `Claude_POA` → PR → `main` → Render *and* Streamlit.** Both
+services deploy from `main`; nothing reaches production by any other route. This
+table read `Claude_Overtake_Dravya_GPT` until 2026-08-15, a branch last touched
+on 2026-08-02 — corrected here because this table is what a later session would
+read to identify production.
+
+Experimental work that must never deploy is kept on a **local-only branch that is
+never pushed** (currently `Plan_B`, see `docs/REBUILD_PLAN.md` §10). Having no
+remote is what makes it unable to reach `main`.
 
 ## 2. Environment variables
 
