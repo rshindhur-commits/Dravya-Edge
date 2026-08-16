@@ -1261,3 +1261,57 @@ is already known to fail (1% win rate, §5.9).
 **Next test, on this metric rather than on average return:** entry delay was
 measured null against a fixed-exit average, which is a different question from
 whether waiting improves the chance of reaching +20%. It is worth re-running here.
+
+## §5.13 — The exit rules replayed on the real book, with real option prices
+
+`tools/exit_replay_live.py`. All 41 closed trades with an option ticker, replayed
+on **the traded contract's own 5-minute bars**. No Black-Scholes, no synthetic
+contract, no assumed spread. Every arm starts from the same recorded
+`option_entry_mid`, so the only thing that differs is the exit.
+
+Two contaminants were found and handled before reading anything.
+
+**The book's headline loss is one broken trade.** The 9-day SMCI orphan booked
+−27.45%, which is 43% of the entire recorded loss, from a position the system was
+never supposed to hold overnight. Every arm here exits it on day one, so leaving
+it in would credit these rules for fixing a bug rather than for exiting better.
+Excluding it and the one other multi-day trade:
+
+```
+rule           n     mean    -top5   median     total   win   hold  ROUNDTRIP
+ACTUAL        39   +1.34%   -0.71%   -0.22%    +52.4%   41%     --     48%
+ema9_like     39   -1.07%   -3.37%   -2.36%    -41.9%   38%    33m      9%
+atr_only      39   +2.09%   -4.02%   -2.06%    +81.4%   44%   154m     25%
+giveback_50   39   +2.45%   -1.05%   +2.59%    +95.5%   56%   106m      0%
+giveback_33   39   +2.66%   -0.32%   +2.86%   +103.8%   56%    92m      0%
+```
+
+**The real book was positive without the orphan.** +52.4% total rather than
+−63.9%. The app's recorded trades are close to break-even carried by a few
+winners — the median is −0.22% — not the disaster the raw total suggests.
+
+### What survives the top-5 strip, and what does not
+
+**Nothing does, on the profit figures.** Every arm including ACTUAL goes negative
+once five trades are removed from thirty-nine. The profit improvement from
++52.4% to +95.5% is real in this sample and **is not established** — 39 trades is
+too few, and 13% of them carry the result.
+
+**The round-trip rate does survive, and it is the number that matters here.**
+48% → 0% is a count over 20 events, not a mean over outliers, so it is not an
+artifact of a few large winners. Twenty trades were ever up 10% or more; under the
+current rules about ten of them finished at or below zero, and under a give-back
+rule none did.
+
+### The honest summary
+
+- **Profit effect: promising, unproven.** Do not quote the +43-point improvement
+  as a result.
+- **Gain protection: demonstrated.** The specific failure the operator described
+  — a winner turning into a loser — goes from half the winners to none, on real
+  option prices.
+- **`ema9_like` is the worst arm by total**, at −41.9%, which is consistent with
+  the live exits firing on MACD and EMA9 wiggles at a 21-minute median hold.
+
+The give-back rule should be judged on the protection it demonstrably provides,
+not on the profit swing it has not earned the right to claim.
