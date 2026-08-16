@@ -29,25 +29,31 @@ def row(timestamp):
 
 class TestLateSessionCutoff:
 
-    def test_default_is_one_oh_five(self):
+    def test_default_is_two_oh_five(self):
+        """14:05, chosen over the 13:05 the data prefers. See the docstring."""
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ENTRY_LATE_SESSION_CUTOFF_ET", None)
-            assert late_session_cutoff_et() == "13:05"
+            assert late_session_cutoff_et() == "14:05"
 
     def test_morning_candidate_allowed(self):
         assert _late_session_refused(row("2026-08-14 10:30:00 EDT")) is False
 
     def test_just_before_cutoff_allowed(self):
-        assert _late_session_refused(row("2026-08-14 13:04:00 EDT")) is False
+        assert _late_session_refused(row("2026-08-14 14:04:00 EDT")) is False
 
     def test_exactly_at_cutoff_allowed(self):
-        """The cutoff is inclusive: 13:05 itself is still the good band."""
-        assert _late_session_refused(row("2026-08-14 13:05:00 EDT")) is False
+        """Inclusive: 14:05 itself is still allowed."""
+        assert _late_session_refused(row("2026-08-14 14:05:00 EDT")) is False
+
+    def test_the_kept_band_is_still_allowed(self):
+        """13:05-14:05 hits 8.1% and is deliberately retained at this setting."""
+        assert _late_session_refused(row("2026-08-14 13:30:00 EDT")) is False
 
     def test_after_cutoff_refused(self):
-        assert _late_session_refused(row("2026-08-14 13:06:00 EDT")) is True
+        assert _late_session_refused(row("2026-08-14 14:06:00 EDT")) is True
 
-    def test_afternoon_refused(self):
+    def test_the_worst_band_is_refused(self):
+        """14:05-15:35 hits 4.5%, well below the 20.7% random baseline."""
         assert _late_session_refused(row("2026-08-14 14:45:00 EDT")) is True
 
     def test_empty_cutoff_disables_the_rule(self):

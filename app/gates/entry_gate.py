@@ -680,8 +680,9 @@ def _timing_score_refused(row):
 def late_session_cutoff_et():
     """No new position after this wall-clock time, ET. Empty string disables it.
 
-    **13:05.** Measured on 1,231 archived candidates, scored on whether the
-    option ever offered the subscriber a 10% gain before the protective stop:
+    **14:05**, chosen by the operator over the 13:05 the data prefers. Measured
+    on 1,231 archived candidates, scored on whether the option ever offered a 10%
+    gain before the protective stop:
 
         10:25-11:25   21.5%
         11:25-12:15   24.8%
@@ -690,19 +691,32 @@ def late_session_cutoff_et():
         14:05-15:35    4.5%
 
     A random entry on the same contract with the same horizon reaches 10% about
-    20.7% of the time, so the last two bands are not merely weak, they are far
-    below chance. The reason is structural rather than statistical: late in the
-    session the day's move has already happened, and there is nothing left for a
+    20.7% of the time, so both afternoon bands sit far below chance. Late in the
+    session the day's move has already happened and there is nothing left for a
     bought option to capture before the bell.
 
-    Cutting here keeps 755 of 1,231 candidates at 21.7% and discards 476 at
-    5.9%. That lifts the book from 15.6% to roughly the random baseline -- it
-    removes a deficit rather than creating an edge, and should not be described
-    as one.
+    The two candidate cutoffs, and the trade-off between them:
 
-    A range-used filter measured slightly better in combination (714 kept at
-    22.3%) but needs the session high and low in the decision payload, which are
-    not recorded yet. The clock carries most of the effect on its own.
+        cutoff    kept              discarded
+        13:05     755 at 21.7%      476 at 5.9%
+        14:05     988 at 18.4%      243 at 4.1%
+
+    **13:05 is the better number and 14:05 is the shipped one.** It blocks the
+    4.5% band, which is the worst of the session, while keeping the 8.1% band and
+    233 more candidates. At 18.4% the book still sits *below* the 20.7% random
+    baseline, so this setting narrows the deficit rather than closing it -- 13:05
+    is what closes it.
+
+    That is the operator's call and it is a reasonable one: 13:05 refuses new
+    positions for the last three hours of a six-and-a-half hour session, which is
+    a large amount of the day to give up on seven days of evidence. Monday adds
+    an eighth. If the afternoon band keeps underperforming, 13:05 is one variable
+    away.
+
+    A range-used filter measured slightly better in combination with 13:05 (714
+    kept at 22.3%) but needs the session high and low in the decision payload,
+    which are recorded now but not yet available for the archive period. The
+    clock carries most of the effect on its own.
     """
 
     # Deliberately `os.getenv` rather than `get_secret_env`, which folds an
@@ -713,7 +727,7 @@ def late_session_cutoff_et():
 
     value = os.getenv("ENTRY_LATE_SESSION_CUTOFF_ET")
 
-    return "13:05" if value is None else value
+    return "14:05" if value is None else value
 
 
 def _late_session_refused(row):
