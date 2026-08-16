@@ -1,4 +1,4 @@
-"""Pull the day's real movers, ask whether the app could have traded them, and keep the answers.
+r"""Pull the day's real movers, ask whether the app could have traded them, and keep the answers.
 
 Built after 2026-08-14, when NBIS moved 9.3% and the app was silent. Answering
 that took an afternoon by hand. This makes it a nightly job whose output
