@@ -20,7 +20,12 @@ from app.exit.exit_engine import (
     option_giveback_arm_pct,
     option_giveback_keep,
 )
-from app.gates.entry_gate import _late_session_refused, late_session_cutoff_et
+from app.gates.entry_gate import (
+    _late_session_refused,
+    _trade_quality_refused,
+    late_session_cutoff_et,
+    min_trade_quality_score,
+)
 
 
 def row(timestamp):
@@ -203,3 +208,47 @@ class TestTwoTierFloor:
         state = {"option_entry_mid": 10.0, "option_current_mid": 6.0}
         fired, _peak, _floor = _option_giveback_exit(state, 10.2)
         assert fired is False
+
+
+class TestTradeQualityGate:
+    """TQS is the only entry signal here that survived a holdout split.
+
+    Q5 reaches +10% on the option 41.4% of the time against a 15.7% base, and the
+    underlying-2R control -- which contract quality cannot flatter -- rises
+    monotonically in the holdout half: 16.0, 17.2, 24.5, 30.7, 40.2.
+    """
+
+    def test_default_is_forty_eight(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ENTRY_MIN_TRADE_QUALITY", None)
+            assert min_trade_quality_score() == 48.0
+
+    def test_a_low_score_is_refused(self):
+        """NVDA 2026-07-30 scored 36.4 and lost $79.50."""
+        assert _trade_quality_refused({"Trade Quality Score": 36.4}) is True
+
+    def test_a_score_at_the_bar_is_allowed(self):
+        assert _trade_quality_refused({"Trade Quality Score": 48.0}) is False
+
+    def test_a_high_score_is_allowed(self):
+        assert _trade_quality_refused({"Trade Quality Score": 83.0}) is False
+
+    @pytest.mark.parametrize("value", [None, "", "nan", "none", "garbage"])
+    def test_a_missing_score_never_refuses(self, value):
+        """A caller that has not run the ranker must not lose its whole book."""
+        assert _trade_quality_refused({"Trade Quality Score": value}) is False
+
+    def test_absent_field_never_refuses(self):
+        assert _trade_quality_refused({}) is False
+
+    def test_zero_disables_the_gate(self):
+        with mock.patch.dict(os.environ, {"ENTRY_MIN_TRADE_QUALITY": "0"}):
+            assert _trade_quality_refused({"Trade Quality Score": 1.0}) is False
+
+    def test_the_threshold_sits_in_a_gap(self):
+        """44, 46, 48 and 52 give identical results on the live book -- nothing
+        sits between 40.6 and 48 -- so this is not a fitted edge."""
+        row = {"Trade Quality Score": 40.6}
+        for bar_value in ("44", "46", "48", "52"):
+            with mock.patch.dict(os.environ, {"ENTRY_MIN_TRADE_QUALITY": bar_value}):
+                assert _trade_quality_refused(row) is True
