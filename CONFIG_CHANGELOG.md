@@ -139,3 +139,62 @@ on anyone remembering to update this file.
 
 This file is still the place for **why**. The payload records what; only a
 person records the reasoning.
+
+## 2026-08-16 — contract cost caps lowered, to serve the subscriber bands
+
+```
+OPTION_PREFERRED_MAX_CONTRACT_COST   1200 -> 800
+OPTION_MAX_CONTRACT_COST             1500 -> 1000
+OPTION_AGGRESSIVE_MAX_CONTRACT_COST  2000 -> 1500
+OPTION_MIN_CONTRACT_COST              100    unchanged
+```
+
+**Why: this is a subscriber affordability rule now, not a paper-account one.**
+The operator has customers in two bands, under $500 and $500–1000. A $1,400
+contract is an alert half the audience cannot act on, and an alert nobody can
+take is worth nothing.
+
+Measured on 2,169 archived chains, picking the tightest contract that passes
+every gate the app already enforces:
+
+```
+cap      chains with a pick   med cost   med spread   <$500  500-1k  >$1k
+$1000        379 (17%)          $445       1.56%       61%     39%     1%
+$1500        477 (22%)          $595       1.59%       46%     26%    28%
+$2500        627 (29%)          $940       1.85%       34%     19%    47%
+$4000        659 (30%)          $985       1.74%       33%     18%    49%
+```
+
+**Raising the cap buys coverage, not quality.** Spread is 1.59% at $1,500 against
+1.74% at $4,000 — the expensive contracts are not tighter. Broken out by band,
+cheap contracts are the *tightest* of the three:
+
+```
+band            chains served   med cost   med spread   med DTE
+under $500        314 (14%)       $275       1.59%         4
+$500-1000         280 (13%)       $770       1.77%        11
+$1000-2500        407 (19%)      $1410       1.95%        11
+```
+
+Paying more buys **tenor**, not spread — 4 days against 11.
+
+### The correction this supersedes
+
+Earlier the same day I argued for raising the cap to $4,000, citing
+`TRADE_QUALITY_PLAN` §14 where the best contracts ran $2,664–$3,696. **Those were
+38 and 99 DTE and are blocked by `OPTION_MAX_DTE = 30`, not by the cost cap.**
+Cost is not the lever that reaches them; tenor is. Raising the cap would have
+moved half the alerts above $1,000 and unlocked nothing.
+
+### What it costs
+
+Coverage falls 22% → 17% of chains producing a tradeable contract. That is the
+price of keeping essentially every alert inside both customer bands.
+
+### Pending, deliberately not done yet
+
+**Per-band contract selection.** The ranker picks one contract, which cannot
+serve a $2,000 account and a $10,000 account at once. Both the sub-$500 and the
+$500–1000 tier can be filled on 216 chains (10%), so an alert could carry a
+"small" and a "standard" contract. Deferred past Monday: it changes the ranker
+and the alert format, and Monday is already carrying four rule changes.
