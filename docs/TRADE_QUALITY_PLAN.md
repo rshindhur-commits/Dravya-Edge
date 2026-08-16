@@ -1845,6 +1845,37 @@ reachable fixes this.
 median**, 45% win: a few winners carrying a losing book, which is the shape §2.2f
 exists to catch.
 
+#### Shipped 2026-08-16, and one correction to the tier
+
+`OPTION_MAX_CONTRACT_COST_BY_SYMBOL="GOOGL:1500,AVGO:2500,SMH:2500"`, a
+per-symbol exception in `affordability_config.py`. Empty disables it; it only
+ever raises a cap, never lowers one. MU, META and ARM removed from the watchlist
+in the same change.
+
+**The $1,430 median quoted above is a blend, and it misled the tier decision.**
+Per symbol, against the real archived chains:
+
+```
+symbol   qualifying   median cost      cap set   fits a $1,500 tier?
+GOOGL      12 of 33        $1,222         1500   yes -- and 2500 adds nothing
+AVGO        5 of 79        $2,250         2500   NO
+SMH         3 of 77        $2,400         2500   NO
+```
+
+GOOGL's twelve cheap contracts pulled the combined median down. **Only GOOGL
+belongs to the $1,500 tier the operator named**; AVGO and SMH are a deliberately
+higher tier at $2,250-2,400 and their alerts are not actionable below that.
+Dropping those two from the line keeps strictly to $1,500 and leaves 14 trades.
+
+Verified on the archive with the override off and on: AVGO 0 → 5, SMH 0 → 3,
+GOOGL 0 → 12, and NVDA, TSLA and PLTR unchanged at 45, 54 and 70. At this exact
+setting the three return **+8.04% mean, +6.02% stripped, 90% win on 20 trades**.
+
+**The replay harness finds none of them**, because `build_historical_chain`
+reconstructs its own strikes and assumes open interest, so it rejects these on
+`LOW_VOLUME` where the live chain does not. The measurement above uses the
+chains live actually examined. Monday is the real test of which is right.
+
 #### Before acting on the first group
 
 26 trades over 21 sessions is roughly one a day and is **below §3's bar of 80**.

@@ -16,22 +16,35 @@ CORE_WATCHLIST = [
 ]
 
 
+# MU, META and ARM were removed 2026-08-16. Over 21 archived sessions they
+# produced 431 candidates and, priced on the best contract their chains offer
+# with the cost cap lifted entirely, a **0% win rate across 122 trades** -- not
+# one winner. MU and META also carry the worst underlying signals measured
+# anywhere in this project, -0.678R at an 8% win rate and -0.719R at 4%.
+# Nothing reachable from any threshold fixes that. See
+# docs/TRADE_QUALITY_PLAN.md section 7.3c.
+#
+# AVGO, SMH and GOOGL were kept for the opposite reason: they are among the best
+# signals in the universe and were merely unaffordable. They trade through the
+# per-symbol exception in OPTION_MAX_CONTRACT_COST_BY_SYMBOL.
+#
+# AMD, PANW and AMAT are kept and still expected to produce nothing. Their
+# option economics are a positive mean over a negative median at a 45% win rate
+# -- a few winners carrying a losing book -- so they are watched rather than
+# funded. Remove them only on evidence, not on the fact that they are quiet.
 WATCHLIST = [
     *CORE_WATCHLIST,
     "AMZN",
-    "META",
     "GOOGL",
     "TSLA",
     "AMD",
     "AVGO",
-    "MU",
     "PLTR",
     "NFLX",
     "CRWD",
     "SMCI",
     "SPCX",
     "SMH",
-    "ARM",
     "TSM",
     "AMAT",
     "MRVL",

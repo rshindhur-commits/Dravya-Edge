@@ -18,7 +18,7 @@ def _number(value):
     return None if result != result else result
 
 
-def prefer_tightest_qualified(ranked):
+def prefer_tightest_qualified(ranked, symbol=None):
     """Move fully-qualified contracts to the front, tightest spread first.
 
     The ranker scores tenor, delta, quality and cost, and spread is one term
@@ -63,7 +63,14 @@ def prefer_tightest_qualified(ranked):
         return ranked
 
     max_spread = get_float_env("OPTION_MAX_SPREAD_PCT", 6.0)
-    max_cost = get_float_env("OPTION_MAX_CONTRACT_COST", 500.0)
+
+    # Must read the same cap the ranker did. Reading the global one here
+    # would let a per-symbol exception through scoring and then refuse it at
+    # promotion, which is the step that actually picks the contract -- the
+    # exception would look configured and do nothing.
+    from app.options.affordability_config import get_affordability_config
+
+    max_cost = get_affordability_config(symbol)["max_contract_cost"]
 
     try:
         min_oi = settings.option_min_open_interest
@@ -111,10 +118,11 @@ def rank_option_contracts(
     contracts,
     underlying_price,
     direction="CALL",
-    paper_mode=False
+    paper_mode=False,
+    symbol=None
 
 ):
-    
+
     debug_print(
         f"[CONTRACTS FETCHED] "
         f"{len(contracts)}"
@@ -127,7 +135,10 @@ def rank_option_contracts(
     try:
 
         ranked = []
-        affordability_config = get_affordability_config()
+        # Symbol only matters for the per-symbol cost cap exception; without it
+        # this is the global config exactly, which is what every caller that
+        # does not pass a symbol still gets.
+        affordability_config = get_affordability_config(symbol)
 
         for c in contracts:
 
@@ -599,7 +610,7 @@ def rank_option_contracts(
 
         )
 
-        ranked = prefer_tightest_qualified(ranked)
+        ranked = prefer_tightest_qualified(ranked, symbol)
 
         return ranked
 

@@ -407,11 +407,15 @@ def select_contract(underlying, direction, moment, spot, config=None):
 
     with _affordability_mode(config) as affordability:
 
+        # Symbol carries the per-symbol cost cap exception. Omitting it here
+        # would make the replay measure a different app than the one deployed,
+        # on exactly the names the exception exists for.
         ranked = rank_option_contracts(
             chain,
             underlying_price=spot,
             direction=direction,
             paper_mode=config.paper_mode,
+            symbol=underlying,
         )
 
         if not ranked:

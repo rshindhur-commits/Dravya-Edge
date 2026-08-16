@@ -107,7 +107,9 @@ def recommend_live_option(
 
             latest_price,
 
-            direction
+            direction,
+
+            symbol=symbol
 
         )
 
@@ -209,13 +211,14 @@ def recommend_live_option_bundle(
             direction=direction
         )
 
-        affordability_config = get_affordability_config()
+        affordability_config = get_affordability_config(symbol)
 
         ranked = rank_option_contracts(
             contracts,
             latest_price,
             direction,
-            paper_mode=paper_mode
+            paper_mode=paper_mode,
+            symbol=symbol
         )
 
         if not ranked:
