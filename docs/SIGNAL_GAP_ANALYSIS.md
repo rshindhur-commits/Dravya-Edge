@@ -133,9 +133,51 @@ measure exists and is inert, while the broken one feeds the score.
 **false**. `analyze_setup(df, benchmark_move_pct=None)` treats None as zero, so
 with the switch off the score is byte-identical to before and the change is
 inert in a live session. No extra API call: the value was already in hand.
-Awaiting A/B — **[proposal]**, and per §5.6 not a finding until measured. Being
-more correct does not make it better, and the composite score it feeds is
-already measured non-predictive and inverted.
+
+#### A/B run 2026-08-16 — **the corrected version does not win. Leave it off.** [verified]
+
+`tools/relative_strength_ab.py`. Both inputs are archived per snapshot —
+`Symbol Move %` and `Sector Reference Move %` — so neither arm is
+reconstructed. 3,850 usable rows across 9 sessions (2026-07-28..08-14); 13,219
+snapshots dropped for having no forward bar, mostly at or after the close. The
+arms disagree on **1,402 rows, 36.4%**.
+
+Measured as the spread in the underlying's forward return between the rows the
+arm scored +1 and the rows it scored −1. A directional input has to show
+forward return rising with its own value.
+
+| horizon | OLD (benchmark 0) | NEW (sector) | delta | sessions NEW wins |
+|---|---|---|---|---|
+| 15 min | +0.1073 | +0.0776 | **−0.0298** | 4/9 |
+| 30 min | +0.1943 | +0.1371 | **−0.0572** | 4/9 |
+| 60 min | +0.3003 | +0.2328 | **−0.0674** | 6/9 |
+| 120 min | +0.3923 | +0.3906 | −0.0017 | 7/9 |
+| 180 min | +0.4367 | +0.4578 | +0.0212 | 7/9 |
+
+**It loses at every horizon the app actually trades** and only edges ahead at
+three hours. Every delta is far inside the noise: the 95% CI on the 60-minute
+NEW spread, resampled by day, is [+0.0257, +0.4704] — a width of 0.44pp against
+a delta of 0.067pp.
+
+On the 1,402 rows where the two disagree — the only rows the switch changes —
+the 60-minute NEW spread is **−0.1375pp**, the wrong sign, against OLD's
++0.2083pp. That CI is [−0.4254, +0.1829] and straddles zero, so the honest
+statement is **"not better", not "actively worse"**.
+
+**Why, and this is the part worth keeping.** The old arm is
+"is this name up today" — pure absolute momentum, which carries the market and
+sector move inside it. The corrected arm subtracts the sector move, which at
+15–60 minute horizons is *most of the forward return*. It removes the component
+that predicts and keeps the idiosyncratic residual, which does not.
+
+So this is not "relative strength is worthless". It is: **sector-relative
+strength is not an intraday directional input at this horizon, and the app
+trades intraday.** If it is worth anything it is at multi-hour horizons.
+
+Third result in a row consistent with the composite score being non-predictive
+(see also [[setup-score-is-not-predictive]] and §2.2h). The switch stays off,
+and the bug stays fixed behind it — the code is now correct and the correctness
+is measurably not an improvement, which is worth knowing separately.
 
 ### 2.2 The universe is never ranked against itself [verified]
 
