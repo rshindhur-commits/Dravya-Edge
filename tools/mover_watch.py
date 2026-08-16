@@ -50,9 +50,14 @@ is the default here. `mover_check.py` keeps the 5-minute grid for when a single
 symbol is being examined closely and precision is worth the quota.
 
 Budget roughly **300 requests per mover that signals**, and none for one that
-does not. A `--top 10` night is typically 1,000-3,000 requests and about 10,000
-in the worst case where every name signals all day. `--dry-run` costs exactly
-one.
+does not. `--top 5` is typically 500-1,500 requests a night. `--dry-run` costs
+exactly one.
+
+**Requests are not billed.** The data plan (massive.com Options Advanced, $199/mo,
+verified 2026-08-16) is *Unlimited API Calls* with real-time data; the only
+constraint is `POLYGON_RATE_LIMIT_PER_MINUTE`, set to 1200. So the reason to keep
+this small is wall-clock time and not competing with the live scanner -- **not
+cost**. Do not "optimise" this job for request count.
 """
 
 import argparse
@@ -300,7 +305,7 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--day", default=None, help="YYYY-MM-DD, default today")
-    parser.add_argument("--top", type=int, default=10)
+    parser.add_argument("--top", type=int, default=5)
     # 15 rather than 5: a quarter of the quota for the same verdict, measured
     # on AAOI above. This runs nightly and unattended, so the default should
     # be the cheap one.
