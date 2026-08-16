@@ -1574,6 +1574,64 @@ worse than the 2-ceiling weeks on return on capital, revert to 2 and re-run this
 A/B against a freshly-run control (§5.8 — the code has moved, so no pre-08-16 arm
 is comparable).
 
+### 7.3f NBIS itself, and two format traps that nearly produced a wrong answer
+
+The symbol this whole line of questioning started from. Under the deployed code
+**NBIS produces nothing, and is not in the watchlist to begin with.** Forced
+through the replay it gives five signals and no contract, rejected 58.3% on
+spread and only **1.1% on cost** — so the per-symbol cost cap built for AVGO and
+SMH would not reach it. Spread is the blocker.
+
+What refusing it cost on the day it moved 9.3%, one position at a time, exits as
+shipped:
+
+```
+ceiling  taken  skipped   total    per trade   detail
+3 (live)     0        0      --           --   no contract passed
+4            0        0      --           --   no contract passed
+6            1        0   +19.0%       +19.0%  12:10 ($950 @ 5.8%)
+10           3        1   +52.6%       +17.5%  11:25 +18.0%; 12:10 +19.0%; 12:35 +15.5%
+```
+
+**The 12:10 trade at ceiling 6 is solid**: neither the app's own stop (266.33)
+nor the 1.5-ATR stop was touched, and both pricing methods agree — the contract's
+own bars give +31.9% at the underlying's target while the give-back floor exits
+at 13:50 for +19.0%, having armed at a +41.6% peak.
+
+**The ceiling-10 row is not.** It uses walk()'s 1.5-ATR stop (264.42), which is
+wider than the app's real stop that scan (266.27, the 0.50% floor). The 11:25
+signal *was* stopped on the underlying at 11:35 under the app's stop, so its
++18.0% would not have happened. Read the ceiling-6 row and treat ceiling 10 as an
+upper bound.
+
+**This does not argue for a looser ceiling.** Friday's NBIS is one favourable
+draw from a distribution measured in §7.3a as negative: on sessions ranging over
+5%, ceiling 6 returns **−1.89% mean across 85 trades** while ceiling 2 returns
++5.62%. A 9.3% day paying +19% is exactly the tail that makes loosening look
+obvious and lose money over a quarter.
+
+#### Two format traps, recorded because each produced a confident wrong number
+
+The replay chain and the archive chain are **not the same schema**, and two
+fields differ in ways that fail silently rather than loudly:
+
+```
+field           archive (scanner_snapshot)   replay (build_historical_chain)
+quote_status    absent                       "OK"
+iv              decimal, median 0.617        percent, e.g. 102.3
+```
+
+`usable()` requires `quote_status == "QUOTE_OK"` and defaults an absent value to
+it — so archive contracts pass and **every replay contract is rejected**, which
+reported NBIS as "no contract at any ceiling". And `bs()` expects decimal IV, so
+feeding it 102.3 priced the same trade at **−2.2%** when it actually made
++19.0%.
+
+**Every committed tool reads the archive**, so no result in this document is
+affected. The rule that follows: *a tool written against one chain source must
+assert its schema before using it, because both of these failed as plausible
+numbers rather than as errors.*
+
 ### 7.3a Does the ceiling filter out the biggest movers? — **asked by the operator, tested, no**
 
 The objection, and it is a good one: NBIS ran **9.3%** on 2026-08-14, its four
