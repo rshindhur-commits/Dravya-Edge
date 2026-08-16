@@ -130,6 +130,11 @@ def render_app_header():
             display: flex;
             align-items: center;
             gap: 18px;
+            /* The page trims .block-container's top padding to 1.3rem, well
+               under the ~3.75rem Streamlit reserves for its fixed toolbar, and
+               this header is the first element on the page. Buy the gap back
+               here rather than in .block-container, so only the header moves. */
+            margin-top: 2rem;
             margin-bottom: 0.8rem;
         }}
 
@@ -137,6 +142,11 @@ def render_app_header():
             height: 72px;
             width: auto;
             border-radius: 10px;
+            /* An img in a flex row shrinks by default. With the height pinned,
+               shrinking squeezes the tile horizontally and turns the ring into
+               an ellipse -- so hold the intrinsic size. */
+            flex: 0 0 auto;
+            display: block;
         }}
 
         .dravya-title {{
