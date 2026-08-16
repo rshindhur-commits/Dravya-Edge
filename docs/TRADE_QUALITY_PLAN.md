@@ -2011,3 +2011,13 @@ against Monday's exits.
 | regime blocker | returns `False` on all 2,266 archived candidates. Needs a **positive** test to distinguish working from dead |
 | `OPTION_REQUIRED_LEVERAGE` | is 0.0, so the gate cannot refuse anything. Give it a threshold or delete it |
 | MULTIDAY | 9 trades, 8 closed same session. Nothing to measure until `EXIT_MOMENTUM_ENABLED=false` lets them run |
+| **prefer ITM over tightest** | §7.3d. Selecting on spread lands the app ATM, the **worst** band at 43.8% required accuracy against ITM's 39.5% — roughly 4.3 points for nothing. Held back only because six changes shipped 2026-08-16 unmeasured. **First candidate after Monday.** |
+| XOM, JPM | 8 and 2 candidates over 21 sessions — too few to judge either way. Kept, not defended |
+| AMD, PANW, AMAT | kept and expected to produce nothing. Positive mean over a negative median at 45% win. Remove only on evidence, not on being quiet |
+
+**Deployment state at the close of 2026-08-16.** Seven commits sit on
+`Claude_POA` after the day's deploy point (`c73d639`), one of which changes
+behaviour: `c77e905` removes MU, META and ARM from the watchlist and adds the
+per-symbol cost cap. **Neither is live until that is merged and
+`OPTION_MAX_CONTRACT_COST_BY_SYMBOL` is set in Render** — the value exists only
+in local `.env`, and Render is not in git. See CONFIG_CHANGELOG.md.

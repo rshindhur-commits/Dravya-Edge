@@ -140,6 +140,47 @@ on anyone remembering to update this file.
 This file is still the place for **why**. The payload records what; only a
 person records the reasoning.
 
+## 2026-08-16 — `OPTION_MAX_CONTRACT_COST_BY_SYMBOL` introduced ⚠️ **not yet set in Render**
+
+| | |
+| --- | --- |
+| Host | Render (worker) — **PENDING, the value below exists only in local `.env`** |
+| Old | did not exist |
+| New | `GOOGL:1500,AVGO:2500,SMH:2500` |
+| Asked by | assistant |
+| Applied by | — |
+
+A per-symbol exception to `OPTION_MAX_CONTRACT_COST`. Empty disables it; it only
+ever raises a cap, never lowers one.
+
+**Why.** AVGO, SMH and GOOGL produced **zero** contracts across 21 sessions
+against the $1,000 cap, while carrying the best entry signals in the universe on
+the underlying (+1.098R, +1.070R, +0.760R — better than every tradeable name
+except ORCL). They were unreachable, not unprofitable. Raising the cap globally
+would push every other name's contract up with it, which is the opposite of what
+the subscriber bands are for.
+
+Verified on the archived chains with the override off and on: AVGO 0 → 5,
+SMH 0 → 3, GOOGL 0 → 12, with NVDA, TSLA and PLTR unchanged at 45, 54 and 70. At
+this setting the three return +8.04% mean, +6.02% after the top-5 strip, 90% win
+on 20 trades.
+
+**Tiering, and it is not uniform.** GOOGL qualifies at a **$1,222** median and is
+capped at 1500 because more buys it nothing. AVGO and SMH run **$2,250** and
+**$2,400**, so those alerts are a deliberately higher tier and are *not*
+actionable for a $1,500 subscriber. Dropping AVGO and SMH from the line keeps
+strictly to $1,500 and leaves 14 trades of the 20.
+
+**Watch:** the replay harness finds none of these three, because it rebuilds its
+own strikes and assumes open interest, so it rejects them on `LOW_VOLUME` where
+the live chain does not. Monday decides which is right. If they produce nothing,
+revert the line.
+
+**Same change removed MU, META and ARM from the watchlist** (in git, `c77e905`) —
+0% win rate across 122 trades on the best contract their chains offer.
+
+---
+
 ## 2026-08-16 — `EXIT_MOMENTUM_ENABLED` → false ⚠️ **load-bearing; the day's exit work does nothing without it**
 
 | | |
