@@ -19,7 +19,7 @@ much of the move is left on the table — each turned into something measurable.
 | # | dimension | metric | today | source | bar to launch |
 |---|---|---|---|---|---|
 | 1 | **Direction** | entries reaching +10% on the option, vs a random minute | **18.4% vs 20.7%** | §6 | beats random, and holds on holdout |
-| 2 | **Signal quality** | forward return rising with the composite score | **inverted** | §5, [[setup-score-is-not-predictive]] | monotone, holdout-stable |
+| 2 | **Signal quality** | Information Coefficient — rank correlation of score to forward return, per session | **unmeasured**; the bucketed version is **inverted** | §5, [[setup-score-is-not-predictive]] | IC > 0 with a day-resampled CI excluding zero, at a horizon the app trades |
 | 3 | **Capture** | share of MFE kept at exit | **29.5%** (n=18) | `trade_exit_analysis` | ≥ 50% at n ≥ 200 |
 | 4 | **Give-back** | winners finishing at or below zero | **32%** (was 53%) | §6 | < 20% |
 | 5 | **Loss control** | hard stop behaviour | **working** | §6 | unchanged |
@@ -97,6 +97,13 @@ trading week and §5.6 forbids config changes mid-measurement.
 | 1.1 | Backfill `trade_exit_analysis` across the replay archive | criterion 3 has 21 rows; it cannot gate anything at that size |
 | 1.2 | Expected move vs implied move (§2.3) as a **measurement**, not a gate | data already in hand; `iv_richness.py` is the seed |
 | 1.3 | Capture report by exit reason, on the backfilled table | tells us which exit rule leaves the most behind |
+| 1.4 | **Information Coefficient, per session, with a horizon curve** (§3a.1, §3a.2) | the app grades its signal on 42 trades while holding 17,069 scored snapshots |
+| 1.5 | **Score the signal on every emitted candidate, not only taken trades** (§3a.5) | today's statistics describe what passed every gate, which is survivorship |
+
+1.4 and 1.5 are one piece of work in practice: IC is only worth computing
+*because* it runs on the emitted population rather than the surviving one. The
+forward-return machinery already exists in `tools/relative_strength_ab.py`, so
+the cost is mostly joining scores to forward returns across the archive.
 
 **Gate A criteria, Aug 28:**
 - 1.1 done means ≥ 200 rows in `trade_exit_analysis`. If the replay cannot
@@ -106,6 +113,20 @@ trading week and §5.6 forbids config changes mid-measurement.
   move differs between quintiles **on holdout**. §5.14 warns specifically that
   `iv` was the least stable of six conditions tested — best quintile Q2 in
   discovery, Q1 in holdout. Expect this to fail.
+- **1.4 has no pass or fail.** It is instrumentation, and its first reading is a
+  baseline rather than a verdict. Record IC and its CI at every horizon and
+  leave it. The expectation from §0 and §2.2h is that IC is at or below zero at
+  the horizons the app trades; **if that is what it shows, the instrument is
+  working, not failing.**
+- 1.5 done means a per-session IC computed over emitted candidates, with the
+  count of candidates and the count of taken trades reported beside it, so the
+  gap between the two populations is visible on every future report.
+
+**One honest note on this phase's scope.** Adding 1.4 and 1.5 widens Phase 1
+past what Aug 17–28 comfortably holds, and Aug 17–21 is a live trading week
+where §5.6 forbids config changes. If something has to slip, **1.2 slips**: it
+is the item §5.14 already predicts will fail, while 1.4 and 1.5 change what
+every later phase can be measured against. Gate B does not move.
 
 ### Phase 2 — the direction question · **Aug 31 – Sep 25**
 
