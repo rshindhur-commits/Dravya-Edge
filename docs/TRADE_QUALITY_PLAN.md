@@ -1209,3 +1209,55 @@ The lever that matters most to per-trade economics is the one neither arm pulled
 The comparison to make is against a selector that ranks by spread, which is
 cheaper to build than either change already deployed and is the only one with a
 measured effect on break-even.
+
+## §5.11 — Entry quality measured as the product is actually sold
+
+Every earlier measurement scored a **fixed entry-and-exit policy** and reported
+its average. That is not the product. The product is: the app gives an entry, the
+subscriber takes profit at their own level, and the app signals an exit only when
+the trade goes against them. Under that design the round-trip cost is close to
+irrelevant — a couple of percent on an instrument held for twenty or more.
+
+`tools/entry_quality.py` measures the right thing: buy at the ask, track forward,
+and record **how high the bid gets before the protective stop fires**. A level
+counts only if it was available before the stop, because after that the
+subscriber is out.
+
+The control is a **random entry on the same day, same symbol, same contract, same
+stop distance, and the same number of forward bars.** The horizon match matters:
+signals arrive later in the session, so an unmatched control would hold more clock
+and clear any level more often for that reason alone. Correcting that bias made
+the result worse for the app, not better.
+
+```
+arm                 n     +10%   +20%   +30%   +50%   +100%   median   stopped
+app entry        1,315     16%     6%     3%     2%      1%    +1.7%      58%
+random entry     6,569     21%     9%     5%     2%      1%    +2.0%      50%
+```
+
+**The app's entries are worse than random at every profit level**, and they get
+stopped out more often — 58% against 50%.
+
+Only **6% of signals ever offer the subscriber a chance to take 20%**. A random
+moment on the same contract offers it 9% of the time.
+
+### What this rules out and what it opens
+
+**Ruled out:** that transaction cost was hiding a good entry. Cost plays no part
+in this measurement. The entry is the problem on its own terms.
+
+**Opened, and this is the useful part:** the entries are not merely uninformative,
+they are **worse than random**. Something is being read backwards. That is
+consistent with two findings already in the repo — the entry timing score predicts
+inversely (§5.9), and `avoid_chasing` blocks candidates that lose three times the
+book average. Both say the app fires late in a move, after the easy part is gone,
+which is exactly when an immediate reversal is most likely and is why the stop
+rate is 8 points above random.
+
+A signal that is reliably worse than random contains information. The open
+question is whether it can be turned around without inverting the direction, which
+is already known to fail (1% win rate, §5.9).
+
+**Next test, on this metric rather than on average return:** entry delay was
+measured null against a fixed-exit average, which is a different question from
+whether waiting improves the chance of reaching +20%. It is worth re-running here.
