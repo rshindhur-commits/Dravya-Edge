@@ -1636,8 +1636,114 @@ percent, IV. **Trying proxies until one works is how the feature sweep reached a
 
 NBIS is **not in the watchlist**. The lever that reaches a 9% mover is the
 universe, not the ceiling — a separate question that does not require loosening a
-filter now measured to work in every band. `tools/universe_quality.py` exists for
-it.
+filter now measured to work in every band. Answered in §7.3b.
+
+### 7.3b The universe — **run 2026-08-16, and the answer is not the one expected**
+
+Three measurements, cheapest first.
+
+#### The screen: the movers are real, and most are unaffordable
+
+`tools/universe_candidates.py`, 30 sessions of daily bars, no option quotes.
+Candidate names were fixed by a stated rule before the data was pulled — liquid
+optionable US names outside the watchlist, from the pockets a retail options
+subscriber actually trades. NBIS and MSTR are marked separately because they were
+raised *after* their move and are evidence of nothing on their own.
+
+```
+current watchlist (26 names):  median daily range 3.12%,  median price $344
+
+NBIS *   10.98%   $278        RIOT     9.02%    $19
+CRDO      8.45%   $260        CLSK     7.73%    $12
+ALAB      8.27%   $322        MARA     7.56%     $9
+DELL      6.83%   $491        SMR      7.42%     $9
+NET       5.80%   $316        OKLO     7.21%    $44
+```
+
+**Movement is genuinely available — two to three times the watchlist median.** But
+the left column is the NBIS trap: a near-ATM contract runs roughly 2-5% of share
+price, so a $278 or $491 name prices every tight contract out of a $1,000 cap.
+The right column is the interesting one, because **cheap stocks have cheap
+options**.
+
+#### The control: half the current watchlist can never trade
+
+`tools/universe_viability.py`, three sessions, every gate tested independently so
+the short-circuit trap (§0.2) cannot mislead:
+
+```
+symbol   cands  viable   rate   contracts  tight  cheap  BOTH   median cost
+NVDA        33      33   100%         649    84%    61%   47%        $855
+NFLX        23      21    91%         326    35%    91%   34%        $253
+TSLA        43      43   100%       2,661    76%    37%   28%      $1,290
+PLTR        61      60    98%       3,800    72%    36%   16%      $1,360
+...
+MRVL        98      10    10%       4,692    12%    18%    0%      $2,110
+CRWD        98       5     5%       6,566     5%    17%    0%      $2,225
+AMD         71       0     0%       5,940    24%    13%    0%      $2,250
+MU          95       0     0%       7,532    24%     4%    0%      $5,715
+PANW        83       0     0%       2,979     3%    18%    0%      $2,565
+```
+
+**Eleven of twenty-two names produced zero contracts, and they are 46% of all
+candidates.** The `BOTH` column is why, and it is the number this tool exists to
+expose: on AMD, 24% of contracts are inside a 3% spread and 13% are inside the
+cap, but **0% are both at once**. Across 16,439 contracts on the five worst
+names, not one. The tight ones cost thousands; the affordable ones are far OTM,
+thin and wide.
+
+**That is structural, not a threshold.** No setting reachable from the subscriber
+bands makes MU tradeable when its median contract is $5,715. Those names are
+consuming scan budget, Polygon quota and candidate slots to produce nothing.
+
+**Median contract cost predicts viability almost perfectly**, which makes it the
+natural universe screen — and it is not a criterion the watchlist was ever built
+on.
+
+#### The test: affordable movers are tradeable, and lost money
+
+`tools/replay_forward.py` over three sessions on six candidates, real chains,
+spread crossed both ways:
+
+```
+sym    attempts  filled  rate  trades   mean%   total%  med cost
+MSTR         11       7   64%       7   -6.9%   -48.2%     $445
+HOOD         19       7   37%       7   +0.7%    +5.1%     $290
+RIOT          9       2   22%       2   -8.1%   -16.3%     $191
+COIN         16       1    6%       1   -9.2%    -9.2%     $655
+IONQ          6       0    0%       0       -        -         -
+OKLO         21       0    0%       0       -        -         -
+
+17 trades: mean -4.0%, median -6.7%, 4 wins.  Without the best 2: -6.3%
+```
+
+**The affordability thesis holds.** Median contract $380 against $510 for the
+watchlist, everything inside the subscriber bands, and a 20.7% fill rate against
+the watchlist's 26.2%.
+
+**The money does not.** Mean −4.0%, and worse once the best two are stripped.
+
+**Two things that must be said before this is read as a result.** Seventeen
+trades over three sessions is far below §3's bar of 20 days and 80 trades — it
+cannot settle anything. And the comparison is **biased in the challenger's
+favour**: the replay cannot fetch historical open interest and assumes exactly
+the 500 minimum, while the watchlist control used the OI live actually saw. The
+movers' 20.7% is an overstatement by an unknown amount.
+
+**OKLO and IONQ are a separate finding.** 27 attempts, zero contracts, with
+`LOW_VOLUME` at 80% of all rejections. The quantum and nuclear names move but
+their option chains are too thin to trade — movement without liquidity is not an
+opportunity.
+
+#### What follows
+
+The cheap, high-confidence action is **not adding movers — it is dropping the
+dead names.** Eleven symbols, 46% of candidates, structurally incapable of
+producing a trade. Removing them costs nothing measurable and frees scan budget.
+
+Adding affordable movers is a **maybe**, and it needs the §3 bar: 20 sessions and
+80 trades, against a control run on matched days, before anything is decided. The
+three days available say the contracts exist and the money did not follow.
 
 ### 7.4 Three things refuted before they were built
 
