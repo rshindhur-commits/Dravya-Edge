@@ -2153,6 +2153,96 @@ retracted: those contracts are 38–99 DTE and are blocked by `OPTION_MAX_DTE=30
 not by cost. The caps were **lowered** instead, to fit the subscriber bands the
 operator named — roughly 61% of alerts under $500 and 39% in the $500–1,000 band.
 
+### 7.4a Contract tiering across subscriber segments — **designed 2026-08-16, deliberately not built**
+
+The operator's question: customers have different budgets and different appetites
+for ITM, ATM and OTM, and the app picks one contract. How should it serve all of
+them without dropping contract quality?
+
+#### The finding that starts the answer
+
+What the app actually buys, against what its chains offer:
+
+```
+delta band              accepted    available
+deep OTM  <0.30            6.1%         1.8%
+OTM  0.30-0.45            52.7%        28.6%
+ATM  0.45-0.60            41.2%        49.0%
+ITM  0.60-0.75             0.0%        20.5%    <- never bought
+median delta                0.42         0.52
+```
+
+**The app never buys an ITM contract**, though a fifth of every chain is ITM and
+`contract_ranker`'s own delta target is 0.55. The cost cap and tightest-spread
+promotion push it to the cheap side on every selection.
+
+Beside §7.3d's requirement table that is the wrong side to be on:
+
+```
+band        break-even accuracy   median cost
+ITM               39.5%              $1,070
+OTM 1-3%          41.6%                $645
+OTM 3-6%          42.1%                $400
+ATM               43.8%                $975
+the app is at     34.0%
+```
+
+**It is buying the bands that need the most accuracy and never the one that needs
+the least.**
+
+#### The design
+
+**Delta, not dollars, is the axis.** A $500 budget buys an at-the-money contract
+on a $40 stock and a lottery ticket on a $400 one — the same tier would mean a
+different trade on every underlying. Delta normalises: 0.70 is ITM by
+construction on any name, so a subscriber picks an appetite once. The machinery
+exists already (bounds 0.25-0.75, target 0.55); it is simply not tiered.
+
+**Publish the signal separately from the contract.** Symbol, direction, entry,
+stop and target are identical for everyone. A reference contract per tier follows,
+**with its delta and moneyness printed**, so a subscriber who cannot afford the
+reference can substitute a nearer strike and know what they are holding.
+
+**Three tiers, each picking best-in-band rather than cheapest overall:**
+
+| tier | delta | needs |
+|---|---|---|
+| Core | 0.60-0.75 (ITM) | 39.5% |
+| Standard | 0.45-0.60 (ATM) | 43.8% |
+| Aggressive | 0.30-0.45 (OTM) | 41.6% |
+
+Mechanically this is `prefer_tightest_qualified` run once per band with that
+band's own cost cap.
+
+**Intraday and multiday differ, and not by preference.** Intraday crosses the
+spread twice within hours and theta barely registers, so spread dominates.
+Multiday is the reverse: §2.2d measured **−5.07% of premium in decay over 2.1
+sessions**, seven times the edge the wider stop earned. Multiday therefore wants
+higher delta and longer tenor — more intrinsic, less time value to bleed — and
+**an Aggressive tier should not be offered on MULTIDAY at all.**
+
+#### Why it is not being built yet
+
+**At 34% accuracy no tier clears its own bar.** Tiering a signal that loses turns
+one losing signal into three and gives the cheapest segment the version needing
+the most accuracy — the fastest way to churn the lowest-paying customers.
+
+The order, agreed with the operator:
+
+1. **Measure the 2026-08-16 deployment.** Six changes, none yet with a data point.
+2. **Prefer ITM among already-qualified contracts** — ~4.3 points of required
+   accuracy for a one-line change to which contract is promoted. §7.3d.
+3. **Close the accuracy gap, 34% → 40%.** The actual project.
+4. **Tier last**, when there is something worth distributing.
+
+#### The one piece that can go early
+
+**Print delta and moneyness in the alert.** Today an alert reads `78.0P` with no
+indication of whether that is ITM or OTM, so a subscriber who cannot afford it
+has no basis for substituting. This is display-only — it touches no selection
+logic and changes no trade — and it is the prerequisite for tiering being useful
+later. **Requested for later in the week of 2026-08-17.**
+
 ### 7.5 What Monday actually tests
 
 Three numbers, in order of what they can falsify:
@@ -2183,6 +2273,8 @@ against Monday's exits.
 | regime blocker | returns `False` on all 2,266 archived candidates. Needs a **positive** test to distinguish working from dead |
 | `OPTION_REQUIRED_LEVERAGE` | is 0.0, so the gate cannot refuse anything. Give it a threshold or delete it |
 | MULTIDAY | 9 trades, 8 closed same session. Nothing to measure until `EXIT_MOMENTUM_ENABLED=false` lets them run |
+| **delta + moneyness in the alert** | §7.4a. Display-only, no selection logic. An alert reading `78.0P` gives a subscriber no way to substitute a strike they can afford. **Operator asked for it later in the week of 2026-08-17.** |
+| contract tiering by delta | §7.4a. Designed, not built. Blocked behind measuring the 2026-08-16 deployment, the ITM preference, and the accuracy gap — in that order |
 | **prefer ITM over tightest** | §7.3d. Selecting on spread lands the app ATM, the **worst** band at 43.8% required accuracy against ITM's 39.5% — roughly 4.3 points for nothing. Held back only because six changes shipped 2026-08-16 unmeasured. **First candidate after Monday.** |
 | XOM, JPM | 8 and 2 candidates over 21 sessions — too few to judge either way. Kept, not defended |
 | AMD, PANW, AMAT | kept and expected to produce nothing. Positive mean over a negative median at 45% win. Remove only on evidence, not on being quiet |
