@@ -750,6 +750,41 @@ def _late_session_refused(row):
     return (hour * 60 + minute) > (limit_hour * 60 + limit_minute)
 
 
+def max_range_placement_pct():
+    """Retained for analysis only. **This filter does not work and is not wired in.**
+
+    The observation looked damning: across 41 live trades the median entry sat
+    **68% of the way into the session's range** in the trade's own direction --
+    buying near the high on calls, near the low on puts. That is the textbook
+    description of chasing, and it was expected to be the entry defect.
+
+    It is not. Scored on whether the option ever offered a 10% gain, placement
+    carries no signal at all:
+
+        32-62%   15.4%      78-84%   16.3%
+        62-71%   18.7%      84-100%  14.2%
+        71-78%   13.4%
+
+    Refusing above 80% keeps 825 candidates at 15.5% and discards 406 at
+    **15.8%** -- the ones thrown away do slightly *better*. Combined with the
+    13:05 cutoff it actively hurts: 20.8% against 21.7% for the clock alone,
+    while discarding 216 more candidates to get there.
+
+    So "the app buys at 68% of the range" is true and is not a cause. It
+    describes where entries land without predicting what they do, and a filter
+    built on it would cost trades and buy nothing. `Session High` and
+    `Session Low` are still recorded in the payload, because the measurement
+    should be repeatable on a larger sample later.
+
+    Kept as a function so the refutation has somewhere to live. Wiring it into
+    `evaluate_entry_gate` would make the book worse.
+    """
+
+    from app.config.settings import get_float_env
+
+    return get_float_env("ENTRY_MAX_RANGE_PLACEMENT_PCT", 100.0)
+
+
 def evaluate_entry_gate(
     row,
     config: EntryGateConfig,
