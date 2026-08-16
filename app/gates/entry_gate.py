@@ -731,7 +731,25 @@ def late_session_cutoff_et():
 
 
 def _late_session_refused(row):
-    """True when this candidate arrives too late in the session to be worth taking."""
+    """True when this candidate arrives too late in the session to be worth taking.
+
+    **MULTIDAY candidates are exempt.** The cutoff was measured on one question --
+    does the option reach +10% before its stop, *inside the session* -- and the
+    mechanism is that late in the day there is no session left to move in. A
+    position held for days does not have that problem, so the evidence does not
+    transfer to it.
+
+    This is not hypothetical. Five of the nine MULTIDAY trades in the book opened
+    between 14:19 and 14:48 on 2026-07-30, and without this exemption all five
+    would be refused on evidence that says nothing about them.
+    """
+
+    profile = str(
+        _row_get(row, "Holding Profile", "holding_profile", default="")
+    ).strip().upper()
+
+    if profile == "MULTIDAY":
+        return False
 
     cutoff = (late_session_cutoff_et() or "").strip()
 

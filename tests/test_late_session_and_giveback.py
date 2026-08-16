@@ -74,6 +74,36 @@ class TestLateSessionCutoff:
         assert _late_session_refused({}) is False
 
 
+class TestMultidayIsExempt:
+    """The cutoff measures whether the option can move before the bell. A
+    position held for days is not constrained by the bell, and five of the nine
+    MULTIDAY trades in the book opened after 14:05."""
+
+    def test_a_late_multiday_candidate_is_allowed(self):
+        assert _late_session_refused({
+            "Data Timestamp ET": "2026-07-30 14:48:00 EDT",
+            "Holding Profile": "MULTIDAY",
+        }) is False
+
+    def test_a_late_intraday_candidate_is_still_refused(self):
+        assert _late_session_refused({
+            "Data Timestamp ET": "2026-07-30 14:48:00 EDT",
+            "Holding Profile": "INTRADAY",
+        }) is True
+
+    def test_an_unknown_profile_is_treated_as_intraday(self):
+        """The default profile is INTRADAY; only an explicit MULTIDAY exempts."""
+        assert _late_session_refused({
+            "Data Timestamp ET": "2026-07-30 14:48:00 EDT",
+        }) is True
+
+    def test_the_profile_is_case_insensitive(self):
+        assert _late_session_refused({
+            "Data Timestamp ET": "2026-07-30 14:48:00 EDT",
+            "holding_profile": "multiday",
+        }) is False
+
+
 class TestOptionGiveback:
 
     def test_defaults(self):
