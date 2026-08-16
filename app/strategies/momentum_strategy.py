@@ -1,6 +1,21 @@
+from app.config.settings import get_bool_env
 from app.utils.runtime_logging import debug_print
 
 import pandas as pd
+
+
+def relative_strength_benchmark_enabled():
+    """Should relative strength be measured against a benchmark, or against 0?
+
+    Off by default, and that default is the point: with it off, `analyze_setup`
+    receives no benchmark and scores exactly what it scored before, so the
+    switch can ship without changing a live session. Turn it on only behind an
+    A/B, because it moves the composite setup score -- and that score is already
+    measured non-predictive and inverted, so "more correct" does not imply
+    "better" here. See docs/SIGNAL_GAP_ANALYSIS.md §2.1.
+    """
+
+    return get_bool_env("RELATIVE_STRENGTH_BENCHMARK_ENABLED", False)
 
 
 def _category_based_score(latest, df):
@@ -126,7 +141,13 @@ def _category_based_score(latest, df):
     return bull_score if bull_score >= bear_score else -bear_score
 
 
-def analyze_setup(df):
+def analyze_setup(df, benchmark_move_pct=None):
+    """`benchmark_move_pct` is the session move of the symbol's sector reference.
+
+    None means "no benchmark available or the switch is off", and is treated as
+    zero -- which is what this function assumed unconditionally before, so the
+    default path is unchanged.
+    """
 
     required_columns = [
         "EMA9",
@@ -214,9 +235,15 @@ def analyze_setup(df):
 
         symbol_move = latest["SYMBOL_MOVE_PCT"]
 
-        # Compare against market benchmark
-        # Tech names → QQQ style behavior
-        benchmark_move = 0
+        # This was hardcoded to 0 under a comment naming QQQ, with no benchmark
+        # ever fetched -- so "Strong relative strength" meant "up more than 0.5%
+        # today", and on a day the sector is up 1.5% a name up 0.6% is lagging
+        # badly and scored bullish. main.py has computed the sector reference
+        # move all along, in _sector_strength, and recorded it as telemetry
+        # without ever feeding it back here.
+        benchmark_move = (
+            0.0 if benchmark_move_pct is None else float(benchmark_move_pct)
+        )
 
         if symbol_move > benchmark_move + 0.5:
 

@@ -113,21 +113,44 @@ plausible contributor, though this has not been isolated. The string
 **"Relative weakness vs market"** is also a reason line, so a claim the app
 cannot support can reach a subscriber.
 
-**Cost to fix:** hours. **[proposal]** Fetch the benchmark bar the app already
-has access to and subtract it. Whether that *improves* anything is a separate
-measurement and must not be assumed.
+**Correction, 2026-08-16, found while implementing the fix.** The first version
+of this section said the benchmark would have to be fetched. It does not.
+`main.py:1656` already has `_sector_strength()`, which computes
+`symbol_move_pct − sector_reference_move_pct` against the symbol's sector ETF
+(SMH / XLK / XLF / XLE) and labels it LEADING / LAGGING / NEUTRAL at ±0.75. It
+runs at line 4590, **before** `analyze_setup` at 4648, and every watchlist
+symbol maps to a sector whose reference is genuinely fetched.
 
-### 2.2 Nothing is ranked against anything else [verified]
+So the app has computed correct relative strength all along, and **records it as
+telemetry without ever feeding it back into the score.** Consumers are
+`v2_learning_dataset`, the dashboard, `paper_trade_manager` and
+`entry_snapshot` — display and analytics only. It gates nothing.
 
-Every signal is computed on one symbol in isolation. The universe is 23 names
-scanned every cycle, and the app never asks **which of these 23 is strongest
-right now**.
+That makes this cheaper than stated and stranger than stated: the correct
+measure exists and is inert, while the broken one feeds the score.
+
+**Fixed 2026-08-16**, behind `RELATIVE_STRENGTH_BENCHMARK_ENABLED`, default
+**false**. `analyze_setup(df, benchmark_move_pct=None)` treats None as zero, so
+with the switch off the score is byte-identical to before and the change is
+inert in a live session. No extra API call: the value was already in hand.
+Awaiting A/B — **[proposal]**, and per §5.6 not a finding until measured. Being
+more correct does not make it better, and the composite score it feeds is
+already measured non-predictive and inverted.
+
+### 2.2 The universe is never ranked against itself [verified]
+
+**Narrower than first written** — see the correction in §2.1. The app does
+compare each symbol to its *sector ETF*. What it never does is compare the 23
+**to each other**: it never asks which of them is strongest right now.
 
 This is the largest structural difference from standard practice. In the
 published equity literature momentum is a **cross-sectional** effect — long the
 strongest names relative to peers, short the weakest — not a time-series one.
 The app implements the time-series version, which is the version that works
 least well, and does so on megacaps, where it works least well of all.
+
+Sector-relative and cross-sectional are not the same thing. A name can beat its
+sector while the whole sector lags every other one in the universe.
 
 **[proposal]** Rank the 23 by return relative to the index over a lookback each
 scan, and require a candidate to be in the top or bottom band of its own
