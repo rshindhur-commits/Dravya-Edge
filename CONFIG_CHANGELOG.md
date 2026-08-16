@@ -185,15 +185,22 @@ Measured on 2,169 archived chains, every other gate held fixed, walked to an exi
 under the rules shipped the same day:
 
 ```
-ceiling  trades   mean    -top5      total   win  med spread   95% CI (by day)
-2.0         224  -0.64%  -1.97%   -144.2%   33%      1.20%   [-7.10, +4.77]
-3.0         354  -0.05%  -1.07%    -16.8%   34%      1.56%   [-4.89, +4.78]
-4.0         470  -2.13%  -2.97%  -1000.2%   31%      2.12%   [-6.65, +2.71]
-6.0         723  -3.30%  -4.89%  -2384.9%   31%      3.08%   [-7.83, +2.26]
-10.0        919  -5.55%  -7.66%  -5099.1%   29%      3.88%   [-9.85, +2.87]
+ceiling  trades   mean    -top5     total   win  med spread   95% CI (by day)
+2.0         184  +1.05%  -0.28%   +193.7%  32%      1.33%   [-5.05, +6.17]
+3.0         302  +2.34%  +1.54%   +705.5%  36%      1.74%   [-2.47, +7.44]
+4.0         369  +1.06%  +0.40%   +392.0%  34%      2.01%   [-3.07, +5.28]
+6.0         494  -0.84%  -1.35%   -413.7%  33%      2.33%   [-3.29, +2.05]
+10.0        606  -2.52%  -3.10%  -1530.0%  30%      3.02%   [-4.30, -0.44]
 ```
 
 3.0 wins every column and the degradation above it is steep and monotonic.
+
+**Table corrected 2026-08-16 after deployment.** The version first recorded here
+was run without a minimum DTE and so priced 0-DTE contracts the app can never buy
+(`OPTION_MIN_DTE = 5`). Near expiry the Black-Scholes ratio turns a 6% underlying
+move into a ten-bagger, and that noise dragged every arm down — 3.0 read −0.05%
+mean and −16.8% total against +2.34% and +705.5% here. **The ranking did not
+change and the deployed value of 3 was correct both times.**
 
 **This contradicts the entry above it, and the contradiction is real.** The
 2026-08-09 change to 2 rested on §1.4b, which scored *return on capital* through
@@ -203,8 +210,15 @@ contract selection. Different exits change which contracts are worth holding, so
 the optimum moving is expected — but only one of those two systems is deployed,
 and it is this one.
 
-**Not a finding that 3% works.** Every arm is negative and 3.0's interval spans
-zero. This is the smaller of two losses.
+**Not yet a finding that 3% is profitable.** 3.0's interval spans zero on five
+days. The *ranking* is what this establishes, and it is monotonic.
+
+**Tested against the operator's objection and it held.** NBIS ran 9.3% on
+2026-08-14 and was refused at ~6% spreads, raising the fair question of whether
+the ceiling filters out the biggest movers. Bucketed by session range, the
+tightest ceiling wins the 5%+ band monotonically (+5.62% at 2.0 against −1.89% at
+6.0). See TRADE_QUALITY_PLAN.md §7.3a — including the intermediate result that
+said the opposite and was one 0-DTE trade.
 
 **Revert if:** Monday's median entry spread lands above ~2% *and* return on
 capital is worse than the weeks run at ceiling 2. Re-run

@@ -62,6 +62,12 @@ from entry_quality import bars, bs, number, usable
 
 CEILINGS = [2.0, 3.0, 4.0, 6.0, 10.0]
 MIN_OI, MIN_VOLUME, MIN_COST, MAX_COST, MAX_DTE = 500, 100, 100, 1000, 30
+
+# `OPTION_MIN_DTE`, and its absence here was a real defect. Without it this tool
+# priced 0-DTE contracts the app cannot buy, and Black-Scholes near expiry turns
+# a 6% underlying move into a ten-bagger: one 0-DTE GOOGL put on 2026-08-05
+# returned +758% and carried 55% of an entire result band on its own.
+MIN_DTE = 5
 ARM, KEEP, BE, FLUSH_ARM, FLUSH_MULT, STOP_ATR = 25.0, 0.5, 10.0, 10.0, 1.5, 1.5
 BOOTSTRAP = 2000
 
@@ -109,7 +115,7 @@ def choose(chain, ceiling):
             continue
         if contract["oi"] < MIN_OI or contract["volume"] < MIN_VOLUME:
             continue
-        if dte > MAX_DTE or contract["spread_pct"] > ceiling:
+        if not (MIN_DTE <= dte <= MAX_DTE) or contract["spread_pct"] > ceiling:
             continue
         if best is None or contract["spread_pct"] < best["spread_pct"]:
             best = contract

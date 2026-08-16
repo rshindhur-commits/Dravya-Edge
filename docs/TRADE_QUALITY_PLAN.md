@@ -1172,6 +1172,13 @@ which nothing measured on 2026-08-15 suggests it can.
 - **Re-baseline the control after any change to the exit or risk engines.** §5.8
   records which arms share which code. A day list alone does not establish
   comparability once the code has moved underneath it.
+- **For any bucketed result, report the per-symbol and per-day share before
+  reading the mean.** §7.3a: a band passed the top-5 strip at +2.77% while a
+  single GOOGL trade carried 55% of its total. The strip does not catch
+  concentration; only the split does.
+- **Every replay tool must enforce the same contract bounds live enforces.**
+  §7.3a again: `spread_ceiling_ab.py` had `MAX_DTE` and no `MIN_DTE`, so it
+  priced 0-DTE contracts the app cannot buy and one returned +758%.
 - **State the check that could kill a finding in the same breath as the finding.**
   Three claims were withdrawn within hours on 2026-08-13/15 — the entry boundary,
   exits firing early, and "47% of trades never move" — each because the first cut
@@ -1524,17 +1531,29 @@ to be defensible or reverted, so it is written down in full.**
 gate held fixed, walked to an exit under **the rules shipped today**:
 
 ```
-ceiling  trades  days     mean    -top5      total   win  med spread   95% CI (by day)
-2.0         224     5   -0.64%   -1.97%   -144.2%   33%      1.20%   [-7.10, +4.77]
-3.0         354     6   -0.05%   -1.07%    -16.8%   34%      1.56%   [-4.89, +4.78]
-4.0         470     6   -2.13%   -2.97%  -1000.2%   31%      2.12%   [-6.65, +2.71]
-6.0         723     7   -3.30%   -4.89%  -2384.9%   31%      3.08%   [-7.83, +2.26]
-10.0        919     7   -5.55%   -7.66%  -5099.1%   29%      3.88%   [-9.85, +2.87]
+ceiling  trades  days     mean    -top5     total   win  med spread   95% CI (by day)
+2.0         184     5   +1.05%   -0.28%   +193.7%  32%      1.33%   [-5.05, +6.17]
+3.0         302     5   +2.34%   +1.54%   +705.5%  36%      1.74%   [-2.47, +7.44]
+4.0         369     5   +1.06%   +0.40%   +392.0%  34%      2.01%   [-3.07, +5.28]
+6.0         494     5   -0.84%   -1.35%   -413.7%  33%      2.33%   [-3.29, +2.05]
+10.0        606     6   -2.52%   -3.10%  -1530.0%  30%      3.02%   [-4.30, -0.44]
 ```
 
 3.0 wins **every column** — mean, the top-5 strip, total, and win rate — and the
 degradation above it is steep and monotonic, which is the shape a real cost
-relationship makes.
+relationship makes. **It is also positive after the top-5 strip**, at +1.54%,
+which almost nothing in this document manages.
+
+> **Corrected 2026-08-16, after deployment.** The table first published here was
+> run without a minimum DTE, so it priced 0-DTE contracts the app can never buy
+> (`OPTION_MIN_DTE = 5`). Near expiry the Black-Scholes ratio turns a 6%
+> underlying move into a ten-bagger — one 0-DTE GOOGL put returned **+758%** —
+> and that noise dragged every arm down: the original table showed 3.0 at −0.05%
+> mean and −16.8% total against +2.34% and +705.5% here. **The ranking never
+> changed and the deployed setting of 3 was right both times**, but the earlier
+> claim in this section that "every arm is negative" was an artifact and is
+> withdrawn. `MIN_DTE` is now enforced in the tool and inherited by everything
+> built on it.
 
 **Why the two measurements disagree, stated rather than waved away.** They are not
 the same experiment. §1.4b scored *return on capital* through the old exit engine
@@ -1545,15 +1564,80 @@ contracts are worth holding, and tightest-qualified changes which contract a giv
 ceiling actually buys — so a ceiling optimum moving is expected, not anomalous.
 
 **What is not settled, and must not be glossed:** 3.0's interval spans zero
-([−4.89, +4.78]) and every arm is negative. This is a choice between two losing
-settings on the evidence that the loss is smaller at 3. It is **not** a finding
-that a 3% ceiling works. Both this and §1.4b are honest measurements of different
-systems and only one of those systems is now deployed.
+([−2.47, +7.44]) on **five days**, which is nowhere near enough to carry a
+positive mean. What is solid is the *ranking* — monotonic, and surviving the
+strip. Both this and §1.4b are honest measurements of different systems and only
+one of those systems is now deployed.
 
 **Falsifier:** if Monday's fills come in above ~2% median spread *and* the book is
 worse than the 2-ceiling weeks on return on capital, revert to 2 and re-run this
 A/B against a freshly-run control (§5.8 — the code has moved, so no pre-08-16 arm
 is comparable).
+
+### 7.3a Does the ceiling filter out the biggest movers? — **asked by the operator, tested, no**
+
+The objection, and it is a good one: NBIS ran **9.3%** on 2026-08-14, its four
+signals were refused for spreads around 6%, and one of them would have paid
++31.9%. If a wide spread is the price of admission to a name that actually
+travels, an average across all candidates cannot see it.
+
+`tools/spread_ceiling_by_mover.py` buckets candidates by the session's high-low
+range as a percent of entry — hindsight, deliberately, because the question is
+whether the movers *were* being excluded:
+
+```
+session range   ceiling    n     mean    -top5     total   win
+2.0-3.5%          3.0     80   +2.30%   -0.84%   +184.3%   31%
+                  6.0    173   -3.71%   -5.29%   -641.5%   23%
+3.5-5.0%          3.0    149   +5.23%   +3.83%   +779.0%   47%
+                  6.0    194   +4.45%   +3.36%   +863.3%   48%
+5.0%+             2.0     20   +5.62%   +0.56%   +112.4%   55%
+                  3.0     40   +1.45%   -1.53%    +58.1%   38%
+                  6.0     85   -1.89%   -3.49%   -160.4%   33%
+```
+
+**On the biggest movers the tightest ceiling wins, monotonically** — the opposite
+of the hypothesis. A large move does not repay a wide spread; it is where a wide
+spread costs most, because the option is dear *and* the round trip is wide.
+
+**This result reversed once before, and how it reversed is the lesson.** The
+first run had ceiling 6 winning the 5%+ band at +12.18% mean with **+2.77%
+surviving the top-5 strip**, apparently vindicating the objection. It was 0-DTE
+contamination. Splitting that band by symbol showed one GOOGL trade carrying
+**55% of the entire total**, the top five carrying 78%, and the median trade in
+the band losing 2.53%. Enforcing `OPTION_MIN_DTE` deleted the effect and flipped
+the sign.
+
+**The concentration check is what caught it, not the strip** — the strip passed.
+Added to §5.6 as a standing rule.
+
+#### Can it be made tradeable anyway?
+
+No, on the evidence available. Session range is hindsight, so a usable version
+must key off something known at scan time. `tools/spread_ceiling_scaled.py`
+tested the obvious candidate, **ATR% at the signal**, and it fails twice:
+
+```
+ATR band            median session range
+0.00-0.25%                3.40%
+0.60%+                    3.99%
+```
+
+ATR barely sorts movers from non-movers — 0.6 points of range between the extreme
+bands — and in the highest-ATR band the tight ceiling wins anyway (+1.77%
+stripped at 2.0 against −6.58% at 6.0).
+
+Untested scan-time proxies remain: daily ATR and realised vol (**newly
+available** — the daily-context cache defect was only fixed 2026-08-16), gap
+percent, IV. **Trying proxies until one works is how the feature sweep reached a
+0.433 holdout AUC**, so any further attempt states its holdout in advance.
+
+#### What this actually points at
+
+NBIS is **not in the watchlist**. The lever that reaches a 9% mover is the
+universe, not the ceiling — a separate question that does not require loosening a
+filter now measured to work in every band. `tools/universe_quality.py` exists for
+it.
 
 ### 7.4 Three things refuted before they were built
 
