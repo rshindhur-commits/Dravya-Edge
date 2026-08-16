@@ -282,6 +282,89 @@ proposed above is a setting — each is information the app currently never sees
 
 ---
 
+## 3a. Metrics — what is measured, and what standard practice measures too
+
+Asked 2026-08-16. Checked by searching `app/` and `tools/`, not assumed.
+
+**Already computed**, and it is a respectable set: `win_rate`, `average_r`,
+`total_r`, `profit_factor`, `max_drawdown_r`, `net_win_rate`,
+`total_option_pnl_pct`, `average_spread_cost_pct` (`performance_statistics.py`),
+plus expectancy, rank-outcome calibration by rank bucket, spread calibration,
+AUC inside the A/B tools, and MFE / MAE / capture in `trade_exit_analysis`.
+
+It gets the hardest part right: **R and premium are reported separately**, which
+is the lesson [[r-multiple-flatters-the-book]] cost 291 trades to learn.
+
+**Returning zero matches:** `information_coefficient`, `spearman`, `rank_corr`,
+`turnover`, `sharpe`, `sortino`, `calmar`, `kelly`, `brier`.
+
+### 3a.1 Information Coefficient — the one that matters here [verified absent]
+
+The standard metric for a *signal* product, and the app has no form of it. IC is
+the rank correlation between the signal's strength and the subsequent forward
+return, computed per period and averaged across periods.
+
+Why it matters more than anything else on this list: **it is computable on every
+candidate the scanner ever emitted, not only on trades that were taken.**
+
+| population | rows |
+|---|---|
+| `scanner_snapshot` with full decision payload | **17,069** |
+| `candidate_snapshot` | 25,457 |
+| `candidate_outcome` | 883 |
+| `paper_trades` — what the headline stats read | **42** |
+
+`rank_outcome_calibration` buckets outcomes by rank, which is adjacent, but it
+reads realised trades. **The app grades its signal on 42 trades while holding
+17,069 scored snapshots.** IC uses the large population and is a continuous
+measure rather than a bucketed one.
+
+**[proposal]** Compute IC per session over the archive, against forward returns
+at several horizons. Cheap — `tools/relative_strength_ab.py` already assembles
+the forward-return series it needs.
+
+### 3a.2 IC decay by horizon [verified absent]
+
+Nothing measures *which holding horizon the signal works at*. This is not
+theoretical: the relative-strength A/B run on 2026-08-16 produced exactly this
+curve as a by-product and it was the informative part — the sector-relative arm
+was negative at 15–60 minutes and only turned positive at 180.
+
+A standing horizon curve answers a question nobody has asked directly: **are the
+exits matched to the horizon at which the signal actually predicts?** §0 says
+entries are worse than random at 12, 78 and 234 bars, so the honest expectation
+is that no horizon works. That is worth establishing rather than assuming.
+
+### 3a.3 Signal turnover and stability [verified absent]
+
+How often the signal flips direction on the same name, and how long a candidate
+survives before being re-rated. `candidate_persistence` exists as a field, so
+this is half-instrumented. High turnover on a weak signal is a mechanism for
+bleeding capital that none of the current metrics would show.
+
+### 3a.4 Sharpe, Sortino, Calmar — named, and ranked low [verified absent]
+
+Standard everywhere, and genuinely less useful here. They describe a continuous
+equity curve; this book takes ~3.4 trades a session with no continuous
+exposure, and **return on capital deployed** is already the primary metric by
+§3 of the trade quality plan — which is the more honest measure for an
+instrument whose cost is paid per trade.
+
+Worth adding once there is a positive return to risk-adjust. Not before, because
+the risk-adjusted version of a negative number tells you nothing new.
+
+### 3a.5 The survivorship problem, stated plainly
+
+The headline statistics describe **trades the app chose to take, that passed
+every gate**. A signal product's quality is a property of everything it emitted.
+Fixing this is mostly reporting rather than new computation: `candidate_outcome`
+already holds 883 rows, and the snapshot tables hold far more.
+
+This is the cheapest large improvement to measurement on the list, and it should
+land alongside the Phase 1 instrumentation in `PATH_TO_PRODUCTION.md`.
+
+---
+
 ## 4. Do not revisit these
 
 Already refuted, with the checks recorded (§7.4, §2.5, §5.14):
