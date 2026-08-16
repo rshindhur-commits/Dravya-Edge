@@ -1,0 +1,13 @@
+1 sessions logged, 4 distinct movers
+
+symbol    seen  traded  too wide  no setup   needs
+--------------------------------------------------
+HTFL         1       0         1         0       -
+AAOI         1       0         1         0      6%
+AAOX         1       0         0         1       -
+UMAC         1       0         0         1       -
+
+'needs' is the LOWEST ceiling that would have bought it on any day
+logged. A symbol appearing often with a low needs is the case for a
+per-symbol spread exception -- and TRADE_QUALITY_PLAN 7.3a is the
+evidence against loosening globally. Bring the list, not one day.
