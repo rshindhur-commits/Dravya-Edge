@@ -16,7 +16,11 @@ from unittest import mock
 import pandas as pd
 import pytest
 
-from app.exit.exit_engine import _volume_flush_reversal, volume_flush_enabled
+from app.exit.exit_engine import (
+    _volume_flush_reversal,
+    volume_flush_arm_pct,
+    volume_flush_enabled,
+)
 
 
 def frame(volumes):
@@ -29,6 +33,8 @@ def bar(close, open_, high, low, volume, atr=1.0):
 
 
 QUIET = frame([100.0] * 21)
+# The pattern function itself is arming-agnostic; the gate lives at the
+# call site in evaluate_exit, so these exercise the pattern alone.
 ON = {"EXIT_VOLUME_FLUSH_ENABLED": "true"}
 
 
@@ -104,11 +110,16 @@ class TestTheAverageExcludesTheCurrentBar:
 
 class TestSwitches:
 
-    def test_disabled_by_default(self):
-        """Off: it loses to the floor alone once the real stop is used."""
+    def test_enabled_by_default(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("EXIT_VOLUME_FLUSH_ENABLED", None)
-            assert volume_flush_enabled() is False
+            assert volume_flush_enabled() is True
+
+    def test_arms_at_ten_percent_by_default(self):
+        """Armed on every trade it books below the book; armed at 10 it wins."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EXIT_FLUSH_ARM_PCT", None)
+            assert volume_flush_arm_pct() == 10.0
 
     def test_disabled_never_fires(self):
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=300.0)

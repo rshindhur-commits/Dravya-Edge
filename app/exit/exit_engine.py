@@ -532,34 +532,40 @@ def _option_giveback_exit(trade_state, option_peak_mid):
 
 
 def volume_flush_enabled():
-    """**Off.** It measured well against a synthetic stop and badly against the real one.
+    return _env_bool("EXIT_VOLUME_FLUSH_ENABLED", True)
 
-    The first measurement gave every trade a 1.5 ATR hard stop rather than the
-    stop it actually carried. Real stops are tighter, and once the true level is
-    used the flush has nothing left to catch -- the stop already handles those
-    trades -- so all it adds is an early exit on positions that would have
-    recovered.
 
-    39 intraday trades, each on its own recorded stop:
+def volume_flush_arm_pct():
+    """Gain the trade must already show before a reversal may close it. 10.
 
-        arm            total    w/o best 3   better/worse   gave back   kept>=25%
-        the book      +443.67        --           --           53%         36%
-        flush only    +427.00    -399.54        12 / 19         42%         73%
-        floor only    +818.00     +31.83        17 / 14         32%         82%
-        combined      +757.00     -69.54        14 / 17         37%         82%
+    The flush is a reversal detector and it was switched off once, correctly,
+    because armed on every trade it books below the book it was meant to improve.
+    The damage was entirely on positions that never gained: it cut them early,
+    where the hard stop would have handled them.
 
-    The floor alone wins every column, and is the only arm still positive after
-    its best three trades are removed. The flush is below the book it was meant
-    to improve.
+    Arming it only once there is profit to protect removes that failure and keeps
+    the benefit. 39 intraday trades, each on its own recorded stop:
 
-    Left in the code with the switch off rather than deleted: the pattern beat
-    every structural reversal definition tested -- swing break, lower low, EMA9
-    and EMA20 crosses, a 15-minute EMA -- so it is the best reversal detector
-    found here, and it may earn its place on a wider stop or a different
-    instrument. It does not earn it on this book.
+        arm                    total   w/o best 3   gave back   kept>=25%
+        the book             +443.67      +0.00        53%         36%
+        floor only           +818.00     +31.83        32%         82%
+        floor + flush @10    +902.00     +75.46        32%         82%
+        floor + flush @25    +873.00     +46.46        32%         82%
+        floor + flush @40    +812.00     +12.83        32%         82%
+        floor + flush always +757.00     -69.54        37%         82%
+
+    Armed at 10 it wins every column, and more than doubles floor-only on the
+    strip that removes the best three trades -- the test that has killed most
+    results in this project.
+
+    **This is what answers "the trend reversed, get me out".** The floor alone
+    requires a trade up 40% to fall back to 20% before it acts. With the flush
+    armed, a genuine reversal -- a bar closing against the position on heavy
+    volume with real range -- ends it at once, at any profit above 10%, without
+    waiting for half the gain to disappear.
     """
 
-    return _env_bool("EXIT_VOLUME_FLUSH_ENABLED", False)
+    return _env_float("EXIT_FLUSH_ARM_PCT", 10.0)
 
 
 def _volume_flush_reversal(df, latest, is_short):
@@ -1125,15 +1131,24 @@ def evaluate_exit(
     # The reversal half of the pair. The floor catches a slow bleed the flush
     # never sees; the flush catches a sharp turn before the floor is reached.
     # Neither covers the other's case, which is why both are on.
-    if not exit_signal and _volume_flush_reversal(df, latest, is_short):
+    if not exit_signal:
 
-        exit_reasons.append(_exit_diagnostic(
-            "PROFIT_PROTECTION",
-            "Reversal: heavy volume against the position",
-        ))
-        primary_exit = _select_primary_exit(exit_reasons)
-        exit_signal = True
-        exit_reason = primary_exit["reason"]
+        _hit, flush_peak, _floor = _option_giveback_exit(trade_state, option_peak_mid)
+
+        # Only once there is a gain to protect. Armed on every trade the flush
+        # books below the book -- the damage is all on positions that never
+        # gained, where the hard stop is the right tool.
+        if (flush_peak is not None
+                and flush_peak >= volume_flush_arm_pct()
+                and _volume_flush_reversal(df, latest, is_short)):
+
+            exit_reasons.append(_exit_diagnostic(
+                "PROFIT_PROTECTION",
+                f"Reversal on heavy volume, {flush_peak:.0f}% peak protected",
+            ))
+            primary_exit = _select_primary_exit(exit_reasons)
+            exit_signal = True
+            exit_reason = primary_exit["reason"]
 
     momentum_exits_allowed = _momentum_exits_allowed(holding_profile, bars_in_trade)
 
