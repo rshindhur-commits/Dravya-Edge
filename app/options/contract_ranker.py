@@ -8,6 +8,104 @@ from app.config.settings import settings
 from app.options.affordability_config import get_affordability_config
 from app.options.option_affordability import add_affordability_metrics
 
+def _number(value):
+
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    return None if result != result else result
+
+
+def prefer_tightest_qualified(ranked):
+    """Move fully-qualified contracts to the front, tightest spread first.
+
+    The ranker scores tenor, delta, quality and cost, and spread is one term
+    among many. That is why AMD on 2026-08-14 chose its contract at rank #82
+    with an 8.33% spread and then refused it for being wide, while eighteen
+    contracts inside the 3% ceiling sat in the same chain. MU the same day
+    reported `Short DTE Spread % 2.37` at quality 80 and bought nothing.
+
+    Measured across the archive, on scans where the app bought **nothing**:
+
+        a fully-qualified contract was available   323 of 1,764   18.3%
+        that contract's spread, median             1.71%
+        the spread the app reported instead        9.76%
+
+    So roughly one refusal in five had a usable contract sitting beside the one
+    it rejected.
+
+    **Qualified means all four gates the app already enforces** -- spread inside
+    the ceiling, cost inside the cap, and open interest and volume above their
+    floors. Nothing is loosened and no new threshold is invented here. That
+    matters: ranking on spread *alone* reaches for deep-ITM LEAPS which are tight
+    precisely because they are expensive, and §14 measured that arm at $3,696 a
+    contract. Requiring the cost cap first makes that impossible.
+
+    It also cannot promote a dead contract. Three of AMD's eight tightest that
+    day were rejected `LOW_VOLUME` -- tight because nobody trades them -- and the
+    open-interest and volume floors exclude exactly those.
+
+    When no contract qualifies, which is the other 81.7%, the order is untouched
+    and behaviour is exactly as before.
+
+    **This changes which candidates become tradeable, not how good the existing
+    trades are.** On the 138 trades the app already takes, all six selection
+    rules tested land within 0.8 points of each other. Expect more trades rather
+    than better ones, and note that the 2026-08-15 validation replay showed more
+    trades making the total worse. Watch the count.
+    """
+
+    from app.config.settings import get_bool_env, get_float_env, settings
+
+    if not get_bool_env("OPTION_PREFER_TIGHTEST_QUALIFIED", True):
+        return ranked
+
+    max_spread = get_float_env("OPTION_MAX_SPREAD_PCT", 6.0)
+    max_cost = get_float_env("OPTION_MAX_CONTRACT_COST", 500.0)
+
+    try:
+        min_oi = settings.option_min_open_interest
+        min_volume = settings.option_min_volume
+    except AttributeError:
+        min_oi, min_volume = 0, 0
+
+    def qualified(contract):
+
+        spread = _number(contract.get("spread_pct"))
+        cost = _number(contract.get("contract_cost"))
+        oi = _number(contract.get("open_interest"))
+        volume = _number(contract.get("volume"))
+
+        if spread is None or not (0 < spread <= max_spread):
+            return False
+        if cost is None or cost > max_cost:
+            return False
+        if oi is None or oi < min_oi:
+            return False
+        if volume is None or volume < min_volume:
+            return False
+
+        return True
+
+    passing = [c for c in ranked if qualified(c)]
+
+    if not passing:
+        return ranked
+
+    passing.sort(key=lambda c: _number(c.get("spread_pct")) or 999.0)
+    remainder = [c for c in ranked if not qualified(c)]
+
+    debug_print(
+        f"[TIGHTEST QUALIFIED] {len(passing)} of {len(ranked)} qualify; "
+        f"promoted {passing[0].get('ticker')} at "
+        f"{_number(passing[0].get('spread_pct')):.2f}%"
+    )
+
+    return passing + remainder
+
+
 def rank_option_contracts(
 
     contracts,
@@ -500,6 +598,8 @@ def rank_option_contracts(
             reverse=True
 
         )
+
+        ranked = prefer_tightest_qualified(ranked)
 
         return ranked
 
