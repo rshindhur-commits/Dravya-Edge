@@ -1,0 +1,244 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Dravya Edge mark">
+<defs>
+  <radialGradient id="hide" cx="0.38" cy="0.2" r="0.9">
+    <stop offset="0"    stop-color="#5FEFB6"/>
+    <stop offset="0.32" stop-color="#23B87F"/>
+    <stop offset="0.7"  stop-color="#0D7550"/>
+    <stop offset="1"    stop-color="#06402C"/>
+  </radialGradient>
+  <radialGradient id="muzzle" cx="0.44" cy="0.18" r="0.95">
+    <stop offset="0"   stop-color="#31C98F"/>
+    <stop offset="0.55" stop-color="#0E6B4A"/>
+    <stop offset="1"   stop-color="#053422"/>
+  </radialGradient>
+  <linearGradient id="hornL" x1="0.15" y1="0.05" x2="0.75" y2="1">
+    <stop offset="0"    stop-color="#96F2D0"/>
+    <stop offset="0.28" stop-color="#3FD199"/>
+    <stop offset="0.66" stop-color="#158B60"/>
+    <stop offset="1"    stop-color="#0A5439"/>
+  </linearGradient>
+  <linearGradient id="hornR" x1="0.85" y1="0.05" x2="0.25" y2="1">
+    <stop offset="0"    stop-color="#96F2D0"/>
+    <stop offset="0.28" stop-color="#3FD199"/>
+    <stop offset="0.66" stop-color="#158B60"/>
+    <stop offset="1"    stop-color="#0A5439"/>
+  </linearGradient>
+  <linearGradient id="earL" x1="0.2" y1="0" x2="0.8" y2="1">
+    <stop offset="0" stop-color="#33C994"/>
+    <stop offset="1" stop-color="#0D5B3E"/>
+  </linearGradient>
+  <linearGradient id="ringg" x1="0.15" y1="0" x2="0.85" y2="1">
+    <stop offset="0"    stop-color="#7DF3C4"/>
+    <stop offset="0.42" stop-color="#16A470"/>
+    <stop offset="0.72" stop-color="#075138"/>
+    <stop offset="1"    stop-color="#1FBF86"/>
+  </linearGradient>
+  <linearGradient id="gold" x1="0" y1="1" x2="0.8" y2="0">
+    <stop offset="0"    stop-color="#9C7418"/>
+    <stop offset="0.45" stop-color="#D4A93C"/>
+    <stop offset="1"    stop-color="#FBEDB8"/>
+  </linearGradient>
+  <linearGradient id="goldTop" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#FBEDB8"/>
+    <stop offset="1" stop-color="#D4A93C"/>
+  </linearGradient>
+  <radialGradient id="vign" cx="0.5" cy="0.4" r="0.75">
+    <stop offset="0"   stop-color="#123553"/>
+    <stop offset="0.62" stop-color="#0A1A2F"/>
+    <stop offset="1"   stop-color="#050E1A"/>
+  </radialGradient>
+
+  <filter id="sculpt" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="9" result="b"/>
+    <feDiffuseLighting in="b" surfaceScale="10" diffuseConstant="1.2" lighting-color="#ffffff" result="d">
+      <fePointLight x="140" y="30" z="190"/>
+    </feDiffuseLighting>
+    <feComposite in="d" in2="SourceAlpha" operator="in" result="dc"/>
+    <feComposite in="SourceGraphic" in2="dc" operator="arithmetic" k1="1" k2="0" k3="0" k4="0" result="sh"/>
+    <feSpecularLighting in="b" surfaceScale="10" specularConstant="0.85" specularExponent="26" lighting-color="#C6FFE8" result="s">
+      <fePointLight x="140" y="30" z="190"/>
+    </feSpecularLighting>
+    <feComposite in="s" in2="SourceAlpha" operator="in" result="sc"/>
+    <feComposite in="sh" in2="sc" operator="arithmetic" k1="0" k2="1" k3="1" k4="0"/>
+  </filter>
+
+  <filter id="sculptSoft" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="b"/>
+    <feDiffuseLighting in="b" surfaceScale="7" diffuseConstant="1.16" lighting-color="#ffffff" result="d">
+      <fePointLight x="140" y="30" z="160"/>
+    </feDiffuseLighting>
+    <feComposite in="d" in2="SourceAlpha" operator="in" result="dc"/>
+    <feComposite in="SourceGraphic" in2="dc" operator="arithmetic" k1="1" k2="0" k3="0" k4="0" result="sh"/>
+    <feSpecularLighting in="b" surfaceScale="7" specularConstant="0.6" specularExponent="28" lighting-color="#DFFFF2" result="s">
+      <fePointLight x="140" y="30" z="160"/>
+    </feSpecularLighting>
+    <feComposite in="s" in2="SourceAlpha" operator="in" result="sc"/>
+    <feComposite in="sh" in2="sc" operator="arithmetic" k1="0" k2="1" k3="1" k4="0"/>
+  </filter>
+
+  <filter id="metal" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="b"/>
+    <feSpecularLighting in="b" surfaceScale="4" specularConstant="1.1" specularExponent="30" lighting-color="#FFF6DA" result="s">
+      <fePointLight x="150" y="40" z="120"/>
+    </feSpecularLighting>
+    <feComposite in="s" in2="SourceAlpha" operator="in" result="sc"/>
+    <feComposite in="SourceGraphic" in2="sc" operator="arithmetic" k1="0" k2="1" k3="1" k4="0"/>
+  </filter>
+
+  <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+    <feGaussianBlur stdDeviation="7"/>
+  </filter>
+  <filter id="soft2" x="-60%" y="-60%" width="220%" height="220%">
+    <feGaussianBlur stdDeviation="4"/>
+  </filter>
+  <filter id="cast" x="-50%" y="-50%" width="200%" height="200%">
+    <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#01070E" flood-opacity="0.6"/>
+  </filter>
+</defs>
+
+
+
+
+<g filter="url(#metal)">
+  <circle cx="256" cy="256" r="214" fill="none" stroke="url(#ringg)" stroke-width="10"/>
+</g>
+<path d="M 256 28 L 269 42 L 256 56 L 243 42 Z" fill="url(#gold)" filter="url(#metal)"/>
+
+<g filter="url(#cast)">
+<g transform="translate(256,245) scale(0.79) translate(-256,-263)">
+
+  <!-- ears: set low and out, angled down and back -->
+  <g filter="url(#sculptSoft)">
+    <path d="M 178 258 C 150 262, 120 280, 102 308
+             C 122 324, 156 322, 180 306 C 185 290, 184 272, 178 258 Z" fill="url(#earL)"/>
+    <path d="M 334 258 C 362 262, 392 280, 410 308
+             C 390 324, 356 322, 332 306 C 327 290, 328 272, 334 258 Z" fill="url(#earL)"/>
+  </g>
+  <!-- horns: thick at the boss, tapering to a lifted point -->
+  <g filter="url(#sculpt)">
+    <path d="M 194 158
+             C 168 166, 140 180, 120 194
+             C 100 174,  80 146,  66 112
+             C  76 154,  92 196, 114 222
+             C 138 246, 174 236, 202 208
+             C 200 191, 197 174, 194 158 Z" fill="url(#hornL)"/>
+    <path d="M 318 158
+             C 344 166, 372 180, 392 194
+             C 412 174, 432 146, 446 112
+             C 436 154, 420 196, 398 222
+             C 374 246, 338 236, 310 208
+             C 312 191, 315 174, 318 158 Z" fill="url(#hornR)"/>
+  </g>
+  <!-- horn growth ridges -->
+  <g fill="none" stroke="#03271A" stroke-width="3" stroke-linecap="round" opacity="0.26" filter="url(#soft2)">
+    <path d="M 92 156 C 100 166, 106 176, 110 186"/>
+    <path d="M 104 192 C 116 202, 128 208, 138 212"/>
+    <path d="M 128 220 C 142 228, 158 231, 172 230"/>
+    <path d="M 420 156 C 412 166, 406 176, 402 186"/>
+    <path d="M 408 192 C 396 202, 384 208, 374 212"/>
+    <path d="M 384 220 C 370 228, 354 231, 340 230"/>
+  </g>
+  <!-- skull: broad brow, heavy jaw, short face -->
+  <g filter="url(#sculpt)">
+    <path d="M 200 162
+             C 180 172, 162 190, 157 216
+             C 152 244, 160 272, 172 296
+             C 182 314, 194 326, 202 338
+             C 194 352, 190 374, 196 392
+             C 204 406, 228 414, 256 414
+             C 284 414, 308 406, 316 392
+             C 322 374, 318 352, 310 338
+             C 318 326, 330 314, 340 296
+             C 352 272, 360 244, 355 216
+             C 350 190, 332 172, 312 162
+             C 294 152, 276 149, 256 149
+             C 236 149, 218 152, 200 162 Z" fill="url(#hide)"/>
+  </g>
+
+  <path d="M 200 162 C 180 172, 162 190, 157 216 C 153 240, 158 264, 167 286"
+        fill="none" stroke="#9CFFDA" stroke-width="4" stroke-linecap="round"
+        opacity="0.28" filter="url(#soft2)"/>
+  <!-- forelock: curled hair on the poll -->
+  <g opacity="0.75">
+    <path d="M 204 172 C 212 152, 232 145, 256 146 C 280 145, 300 152, 308 172
+             C 294 162, 276 157, 256 157 C 236 157, 218 162, 204 172 Z"
+          fill="#0A6242" opacity="0.6" filter="url(#soft2)"/>
+  </g>
+  <g opacity="0.55" fill="#08573B">
+    <path d="M 214 170 C 209 156, 222 148, 231 154 C 223 158, 217 164, 214 170 Z"/>
+    <path d="M 236 162 C 233 148, 248 143, 255 150 C 246 152, 240 157, 236 162 Z"/>
+    <path d="M 276 162 C 279 148, 264 143, 257 150 C 266 152, 272 157, 276 162 Z"/>
+    <path d="M 298 170 C 303 156, 290 148, 281 154 C 289 158, 295 164, 298 170 Z"/>
+  </g>
+  <g opacity="0.28" fill="#6FEBBB">
+    <path d="M 222 162 C 219 155, 227 152, 231 155 C 227 157, 224 159, 222 162 Z"/>
+    <path d="M 249 153 C 248 147, 257 146, 259 150 C 254 150, 251 151, 249 153 Z"/>
+    <path d="M 290 162 C 293 155, 285 152, 281 155 C 285 157, 288 159, 290 162 Z"/>
+  </g>
+  <!-- brow shelf: light on top of the ridge, shadow beneath it -->
+  <path d="M 176 226 C 200 208, 230 200, 256 200 C 282 200, 312 208, 336 226
+           C 310 214, 282 208, 256 208 C 230 208, 202 214, 176 226 Z"
+        fill="#8FF7CE" opacity="0.22" filter="url(#soft2)"/>
+  <path d="M 172 244 C 196 228, 228 220, 256 220 C 284 220, 316 228, 340 244
+           C 314 236, 284 232, 256 232 C 228 232, 198 236, 172 244 Z"
+        fill="#022417" opacity="0.5" filter="url(#soft)"/>
+
+  <!-- cheek masses, catching light -->
+  <ellipse cx="196" cy="292" rx="26" ry="34" fill="#5AE7AE" opacity="0.1" filter="url(#soft)"/>
+  <ellipse cx="316" cy="292" rx="26" ry="34" fill="#3FD79E" opacity="0.06" filter="url(#soft)"/>
+
+  <!-- eyes: heavy upper lid, set on the sides of the skull -->
+  <g>
+    <path d="M 172 250 C 182 236, 206 234, 216 248 C 206 262, 182 264, 172 250 Z" fill="#022016"/>
+    <path d="M 340 250 C 330 236, 306 234, 296 248 C 306 262, 330 264, 340 250 Z" fill="#022016"/>
+    <ellipse cx="194" cy="249" rx="9.5" ry="10" fill="#01090F"/>
+    <ellipse cx="318" cy="249" rx="9.5" ry="10" fill="#01090F"/>
+    <circle cx="190" cy="245" r="3" fill="#DFFFF1" opacity="0.9"/>
+    <circle cx="314" cy="245" r="3" fill="#DFFFF1" opacity="0.9"/>
+    <path d="M 172 248 C 182 234, 206 232, 216 246" fill="none" stroke="#01130C"
+          stroke-width="6" stroke-linecap="round" opacity="0.55" filter="url(#soft2)"/>
+    <path d="M 340 248 C 330 234, 306 232, 296 246" fill="none" stroke="#01130C"
+          stroke-width="6" stroke-linecap="round" opacity="0.55" filter="url(#soft2)"/>
+  </g>
+
+  <!-- muzzle: a forward plane of different material -->
+  <path d="M 202 338 C 220 328, 292 328, 310 338
+           C 318 352, 322 374, 316 392
+           C 308 406, 284 414, 256 414
+           C 228 414, 204 406, 196 392
+           C 190 374, 194 352, 202 338 Z"
+        fill="url(#muzzle)" filter="url(#sculptSoft)"/>
+  <path d="M 202 340 C 220 331, 292 331, 310 340" fill="none" stroke="#012014"
+        stroke-width="7" opacity="0.4" filter="url(#soft2)"/>
+
+  <!-- nostrils -->
+  <g fill="#010F09">
+    <path d="M 230 356 C 218 358, 210 370, 215 380 C 221 389, 236 385, 238 375
+             C 240 365, 238 356, 230 356 Z"/>
+    <path d="M 282 356 C 294 358, 302 370, 297 380 C 291 389, 276 385, 274 375
+             C 272 365, 274 356, 282 356 Z"/>
+  </g>
+  <path d="M 226 358 C 219 361, 214 368, 213 375" fill="none" stroke="#7BE9BC"
+        stroke-width="2.4" stroke-linecap="round" opacity="0.35"/>
+  <path d="M 286 358 C 293 361, 298 368, 299 375" fill="none" stroke="#7BE9BC"
+        stroke-width="2.4" stroke-linecap="round" opacity="0.35"/>
+  <path d="M 232 398 C 242 403, 270 403, 280 398" fill="none" stroke="#01140C"
+        stroke-width="4.5" stroke-linecap="round" opacity="0.45"/>
+</g>
+</g>
+
+<!-- the edge: measured ascent, extruded -->
+<g>
+  <path d="M 188 426 L 230 426 L 230 408 L 272 408 L 272 390 L 316 390"
+        fill="none" stroke="#5E440C" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"
+        transform="translate(0,5)"/>
+  <path d="M 188 426 L 230 426 L 230 408 L 272 408 L 272 390 L 316 390"
+        fill="none" stroke="url(#gold)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"
+        filter="url(#metal)"/>
+  <path d="M 189 422 L 227 422 M 233 404 L 269 404 M 275 386 L 314 386"
+        fill="none" stroke="url(#goldTop)" stroke-width="2.6" stroke-linecap="round" opacity="0.7"/>
+  <circle cx="318" cy="395" r="8.5" fill="#5E440C"/>
+  <circle cx="318" cy="390" r="8.5" fill="url(#gold)" filter="url(#metal)"/>
+</g>
+
+</svg>

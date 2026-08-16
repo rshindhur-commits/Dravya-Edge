@@ -112,56 +112,79 @@ if str(ROOT_DIR) not in sys.path:
     )
 
 
-def render_app_header():
-    """The wordmark and tagline are artwork, not text.
+# Deliberately not an f-string: the CSS is mostly braces, and doubling every one
+# of them to survive .format() is how a stylesheet acquires silent typos.
+_HEADER_CSS = """<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
 
-    The lockup carries "DRAVYA EDGE" and the tagline inside the image, so there
-    is no heading element left on the page. Two consequences worth keeping in
-    mind: the alt text is the only copy a screen reader or a failed image load
-    ever sees, and the fallback below has to restate both lines itself.
+  .de-header { display:flex; align-items:center; gap:22px; width:100%;
+    padding:14px 2px 18px;
+    /* .block-container's top padding is trimmed to 1.3rem, under the ~3.75rem
+       Streamlit reserves for its fixed toolbar, and this is the first element
+       on the page. The 2rem buys that clearance back on the header alone. */
+    margin:2rem 0 6px;
+    border-bottom:1px solid rgba(22,164,112,.32);
+    font-family:'Inter',-apple-system,'Helvetica Neue',Arial,sans-serif; }
+
+  .de-header > img { height:78px; width:78px; flex:0 0 auto; }
+
+  .de-title { display:flex; flex-direction:column; gap:7px; min-width:0; }
+  .de-name { font-size:clamp(23px,3.1vw,44px); font-weight:300; letter-spacing:.11em;
+    color:#F2EFE6; line-height:1; white-space:nowrap; }
+  .de-name b { font-weight:700; color:#D4A93C; }
+  .de-sub { font-size:clamp(8.5px,.9vw,12.5px); font-weight:400; letter-spacing:.34em;
+    color:#7C9BB2; text-transform:uppercase; line-height:1; white-space:nowrap; }
+
+  /* The rule is the piece that makes this read as a page header rather than a
+     card: it absorbs whatever width is left, so the header always spans the
+     container instead of ending wherever the artwork happened to end. */
+  .de-rule { flex:1 1 auto; min-width:24px; height:1px;
+    background:linear-gradient(90deg, rgba(212,169,60,.5), rgba(212,169,60,.06)); }
+  .de-dot { flex:0 0 auto; width:9px; height:9px; transform:rotate(45deg);
+    background:#D4A93C; opacity:.85; }
+
+  @media (max-width:760px) {
+    .de-header { gap:14px; padding:10px 2px 13px; margin-top:1.4rem; }
+    .de-header > img { height:50px; width:50px; }
+    .de-rule, .de-dot, .de-long { display:none; }
+    .de-sub { letter-spacing:.2em; }
+  }
+</style>"""
+
+
+def render_app_header():
+    """A header that spans the page, and paints no background of its own.
+
+    The wordmark is text, not artwork. That is the whole point: an image has a
+    fixed width and a baked-in plate, so it ends where it ends and its navy sits
+    visibly on top of the page's own. This header stretches to the container and
+    inherits whatever the page background is.
+
+    The mark is the one piece that stays an image -- a transparent SVG, 12KB
+    against the 132KB lockup it replaces, and it re-encodes on every rerun.
     """
 
-    lockup = ROOT_DIR / "assets" / "logo_lockup.png"
+    mark = ROOT_DIR / "assets" / "dravya-edge-mark.svg"
 
-    if not lockup.exists():
+    if not mark.exists():
 
         st.title("Dravya Edge")
         st.caption("Directional signals · Nasdaq options")
         return
 
-    encoded_lockup = base64.b64encode(lockup.read_bytes()).decode("ascii")
+    encoded_mark = base64.b64encode(mark.read_bytes()).decode("ascii")
+
+    st.markdown(_HEADER_CSS, unsafe_allow_html=True)
 
     st.markdown(
         f"""
-        <style>
-        .dravya-header {{
-            /* The page trims .block-container's top padding to 1.3rem, well
-               under the ~3.75rem Streamlit reserves for its fixed toolbar, and
-               this header is the first element on the page. Buy the gap back
-               here rather than in .block-container, so only the header moves. */
-            margin-top: 2rem;
-            margin-bottom: 0.9rem;
-        }}
-
-        .dravya-header img {{
-            /* Sized by width, not height: the lockup is a 2.9:1 banner whose
-               tagline is the smallest thing on it. At the 72px the old square
-               icon used, the whole plate would be 209px wide and the tagline
-               about 3px tall -- present but unreadable. */
-            width: 100%;
-            max-width: 470px;
-            height: auto;
-            display: block;
-            /* The plate is a solid rgb(10, 26, 47), a lighter navy than the
-               page behind it, so its edge is visible however it is placed.
-               Rounding it makes that edge read as a deliberate banner. */
-            border-radius: 12px;
-        }}
-        </style>
-
-        <div class="dravya-header">
-            <img src="data:image/png;base64,{encoded_lockup}"
-                 alt="Dravya Edge — directional signals, Nasdaq options">
+        <div class="de-header">
+          <img src="data:image/svg+xml;base64,{encoded_mark}" alt="Dravya Edge">
+          <div class="de-title">
+            <div class="de-name">DRAVYA <b>EDGE</b></div>
+            <div class="de-sub">Directional signals<span class="de-long"> &middot; NASDAQ options</span></div>
+          </div>
+          <div class="de-rule"></div><div class="de-dot"></div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -7563,8 +7586,15 @@ def _daily_candidate_snapshot_count(trading_day):
 
 def main():
 
+    # layout="wide" was already here, so the header was never boxed into ~730px.
+    # initial_sidebar_state is deliberately left alone: the sidebar carries
+    # navigation, the scan engine controls and the system block, so collapsing it
+    # by default would hide the controls an operator reaches for first.
+    favicon = ROOT_DIR / "assets" / "favicon-32.png"
+
     st.set_page_config(
         page_title="Dravya Edge",
+        page_icon=str(favicon) if favicon.exists() else None,
         layout="wide"
     )
 
