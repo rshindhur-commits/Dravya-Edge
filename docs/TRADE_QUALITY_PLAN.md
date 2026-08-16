@@ -1776,6 +1776,83 @@ Adding affordable movers is a **maybe**, and it needs the §3 bar: 20 sessions a
 80 trades, against a control run on matched days, before anything is decided. The
 three days available say the contracts exist and the money did not follow.
 
+### 7.3c The nine are not one group — **run 2026-08-16, and the removal list shrinks to three**
+
+The operator's position: these are the market's real movers, worth carrying at
+**break-even**, and worth reaching through cheap far-OTM contracts if that is what
+it takes. Both halves were tested. The first is right about three of the nine and
+wrong about three others; the second is wrong everywhere.
+
+#### Far OTM and affordable does not work, on any of them
+
+`tools/dead_name_otm.py`, 945 candidates, cheapest contract inside the $100-1000
+band, spread ceiling and liquidity floors both relaxed across 15 cells:
+
+```
+ceiling   OI   vol     n     mean    -top5   median     total  win  spread
+6        100    25    39   +1.75%   -7.44%   -9.75%    +68.2%  31%   5.31%
+6          0     0    45   +2.32%   -5.99%   -9.75%   +104.4%  33%   5.14%
+10       500   100    51   -8.08%  -13.02%  -12.79%   -412.0%  22%   6.67%
+none       0     0   309  -10.08%  -12.71%  -16.10%  -3114.9%  19%  10.33%
+```
+
+**No cell clears break-even on both mean and the strip.** The two with a positive
+mean have a **median of −9.75%** — a handful of winners over a book of losers.
+And the contracts are not even far OTM: median moneyness is +2%, near the money
+and short-dated, paying a 5-10% spread. That is the whole reason they lose.
+
+#### But the signal on some of them is the best in the universe
+
+Walked on the **underlying alone** — no option, no spread, no theta:
+
+```
+symbol         n   mean R   median    win        symbol       n   mean R    win
+AVGO (dead)   63   +1.098   +1.665    78%        NVDA (live) 73   -0.216    36%
+SMH  (dead)   70   +1.070   +1.610    73%        ARM  (dead)120   -0.331    25%
+ORCL (live)  113   +1.005   +1.734    58%        MU   (dead)185   -0.678     8%
+GOOGL(dead)   33   +0.760   +1.537    58%        META (dead) 54   -0.719     4%
+```
+
+**AVGO, SMH and GOOGL carry better signals than every name currently tradeable
+except ORCL.** They were never bad tickers — the operator was right about that.
+They were unreachable, which is a different thing and has a different fix.
+
+#### Priced properly, three of them make money
+
+Tightest contract, cost cap lifted, everything else as shipped:
+
+```
+group                ceiling  OI/vol      n     mean    -top5   median  win    cost  dte
+AVGO, SMH, GOOGL        3     500/100    26   +7.44%   +5.86%   +7.98%  92%  $1,430   17
+AMD, PANW, AMAT         3     500/100    44   +3.08%   +0.63%   -3.48%  45%  $1,900    9
+MU, META, ARM           3     500/100   122   -8.92%   -9.28%   -8.53%   0%  $3,920   11
+```
+
+**Three groups, three verdicts.**
+
+**AVGO, SMH, GOOGL — keep, and they need a cap near $2,500.** Every one of the 15
+cells cleared break-even; this is the tightest and best. The blocker is purely
+`OPTION_MAX_CONTRACT_COST`, at $1,430 median against a $1,000 cap. That is a
+**subscriber-tier decision, not a technical one** — these contracts serve neither
+the sub-$500 nor the $500-1000 band.
+
+**MU, META, ARM — remove.** A **0% win rate across 122 trades** on the best
+contract their chains offer. MU and META also have the worst underlying signals
+measured anywhere in this project (−0.678R at 8%, −0.719R at 4%). Nothing
+reachable fixes this.
+
+**AMD, PANW, AMAT — leave out, keep watching.** Positive mean, **negative
+median**, 45% win: a few winners carrying a losing book, which is the shape §2.2f
+exists to catch.
+
+#### Before acting on the first group
+
+26 trades over 21 sessions is roughly one a day and is **below §3's bar of 80**.
+A 92% win rate on 26 trades is high enough to be suspicious on its own. The
+direction is consistent across the underlying walk, the option walk and all 15
+cells, which is more agreement than most findings here get — but the cap should
+move only alongside a decision about which subscriber band these alerts are for.
+
 ### 7.4 Three things refuted before they were built
 
 Recorded because each was recommended by me and killed by its own check, and the
