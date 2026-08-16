@@ -1373,3 +1373,51 @@ never be described as one.
 **Concrete rule:** do not open in the final third of the session, and do not open
 when the session's range is already largely spent. Both are computable at scan
 time from data the app already holds.
+
+## §6 — What this app is, stated by the operator and binding on future work
+
+Re-stated on 2026-08-16 after a session that repeatedly drifted away from it.
+
+**This is a signal-detection product.** It reads the market and tells a subscriber
+when to enter and when to get out. The subscriber holds the position and decides
+when to take profit. Round-trip cost is not the subject and is not to be
+reintroduced as a framing: it is already enforced inside the option gates as a
+spread ceiling and a cost cap, and re-deriving it as a reason the product cannot
+work is how three days were spent.
+
+The requirement, in the operator's terms:
+
+1. read the technicals, market conditions, indicators and news, and produce a
+   **correct entry signal**
+2. **detect the entry moment**, not merely the direction
+3. once in, **detect when the signal has changed**
+4. **do not give back profit that was made**
+5. **do not let a trade run into a large loss**
+6. **signal the exit** at the right moment
+7. **distinguish chop and small reversals from real ones** — know when to hold
+   and when to alert
+
+Item 7 is the hardest and is the one today's work actually addressed.
+
+### Where each item stands, 2026-08-16
+
+| | state |
+| --- | --- |
+| 1 entry signal | **weakest part.** Only the 14:05 cutoff survived testing. Entries reach +10% on the option 18.4% of the time against 20.7% for a random moment — still below chance. |
+| 1 news | **not implemented at all.** The app reads no news. Polygon serves it on the current plan (verified 2026-08-15) and nothing consumes it. |
+| 2 entry moment | seven experiments null. Delay, features, ranking, generators all failed. |
+| 3 signal changed | partly — the volume flush detects a turn; nothing detects a thesis breaking. |
+| 4 give back profit | **53% → 32%** of winners finishing at or below zero. |
+| 5 large loss | hard stop, unchanged, working. |
+| 6 exit timing | flush + floor, both measured on the live book. |
+| 7 chop vs real | **this is what the flush does.** Heavy volume with real range separates a conviction turn from drift; every structural definition tried (swing break, lower low, EMA9, EMA20, 15m EMA) fires after the money has gone. |
+
+### Two honest gaps
+
+**News is absent.** It is in the requirement, the data is available, and nothing
+in the pipeline touches it. That is the largest untouched item on this list.
+
+**Item 7 is measured on intraday trades only.** The flush is armed for MULTIDAY
+positions too, where a single heavy bar could end a multi-day thesis. There are 9
+MULTIDAY trades and 8 closed the same session, so there is nothing yet to measure
+it against. Revisit once `EXIT_MOMENTUM_ENABLED=false` lets them actually run.
