@@ -23,6 +23,19 @@ from datetime import datetime, timedelta
 import pytest
 
 import app.backtesting.historical_market_data as hmd
+
+
+@pytest.fixture(autouse=True)
+def _momentum_exits_on(monkeypatch):
+    """Every fixture trade was exited with the momentum class active.
+
+    Production has run EXIT_MOMENTUM_ENABLED=false since 2026-08-16, so a
+    local .env mirroring production silently replays these trades under a
+    different exit engine than the one that produced them, and parity fails
+    for a reason that has nothing to do with the code under test.
+    """
+
+    monkeypatch.setenv("EXIT_MOMENTUM_ENABLED", "true")
 from app.backtesting.replay_engine import (
     ReplayConfig,
     ReplayTrade,

@@ -140,6 +140,134 @@ on anyone remembering to update this file.
 This file is still the place for **why**. The payload records what; only a
 person records the reasoning.
 
+## 2026-08-16 — `OPTION_MAX_CONTRACT_COST_BY_SYMBOL` introduced ⚠️ **not yet set in Render**
+
+| | |
+| --- | --- |
+| Host | Render (worker) — **PENDING, the value below exists only in local `.env`** |
+| Old | did not exist |
+| New | `GOOGL:1500,AVGO:2500,SMH:2500` |
+| Asked by | assistant |
+| Applied by | — |
+
+A per-symbol exception to `OPTION_MAX_CONTRACT_COST`. Empty disables it; it only
+ever raises a cap, never lowers one.
+
+**Why.** AVGO, SMH and GOOGL produced **zero** contracts across 21 sessions
+against the $1,000 cap, while carrying the best entry signals in the universe on
+the underlying (+1.098R, +1.070R, +0.760R — better than every tradeable name
+except ORCL). They were unreachable, not unprofitable. Raising the cap globally
+would push every other name's contract up with it, which is the opposite of what
+the subscriber bands are for.
+
+Verified on the archived chains with the override off and on: AVGO 0 → 5,
+SMH 0 → 3, GOOGL 0 → 12, with NVDA, TSLA and PLTR unchanged at 45, 54 and 70. At
+this setting the three return +8.04% mean, +6.02% after the top-5 strip, 90% win
+on 20 trades.
+
+**Tiering, and it is not uniform.** GOOGL qualifies at a **$1,222** median and is
+capped at 1500 because more buys it nothing. AVGO and SMH run **$2,250** and
+**$2,400**, so those alerts are a deliberately higher tier and are *not*
+actionable for a $1,500 subscriber. Dropping AVGO and SMH from the line keeps
+strictly to $1,500 and leaves 14 trades of the 20.
+
+**Watch:** the replay harness finds none of these three, because it rebuilds its
+own strikes and assumes open interest, so it rejects them on `LOW_VOLUME` where
+the live chain does not. Monday decides which is right. If they produce nothing,
+revert the line.
+
+**Same change removed MU, META and ARM from the watchlist** (in git, `c77e905`) —
+0% win rate across 122 trades on the best contract their chains offer.
+
+---
+
+## 2026-08-16 — `EXIT_MOMENTUM_ENABLED` → false ⚠️ **load-bearing; the day's exit work does nothing without it**
+
+| | |
+| --- | --- |
+| Host | Render (worker) |
+| Old | unset, so the **code default `true`** applied |
+| New | `false` |
+| Asked by | assistant |
+| Applied by | operator, deployed 2026-08-16 |
+
+**Why.** MACD, EMA9 and VWAP exits fire at a 21-minute median hold. The two exit
+rules shipped the same day — the two-tier give-back floor and the volume-flush
+reversal — can only act on a position that is still open, so with momentum exits
+running they **never engage**. On the live-book replay of 41 closed trades the
+`ema9_like` arm is the worst of five, at −41.9% total.
+
+It is also the only thing that lets a MULTIDAY position survive its first
+session: 8 of 9 MULTIDAY trades closed the same day they opened.
+
+**Watch:** §1.6 of `docs/TRADE_QUALITY_PLAN.md` measured momentum exits as a class
+and found them to be **loss-limiters, not profit-takers** — removing them let dead
+trades run to the hard stop and lose 12.3% instead of 7.4%. The give-back floor is
+supposed to be the replacement containment. **If Monday's losers come in near
+−12% rather than −7%, that replacement is not working and this reverts.**
+
+**Verification, first thing Monday:** if `MACD` or `EMA` appears in any exit
+reason, the variable did not take and nothing else deployed that day is being
+tested.
+
+---
+
+## 2026-08-16 — `OPTION_MAX_SPREAD_PCT` 2 → 3, reversing the 2026-08-09 change
+
+| | |
+| --- | --- |
+| Host | Render (worker) |
+| Old | `2` |
+| New | `3` |
+| Asked by | assistant |
+| Applied by | operator, deployed 2026-08-16 |
+
+Measured on 2,169 archived chains, every other gate held fixed, walked to an exit
+under the rules shipped the same day:
+
+```
+ceiling  trades   mean    -top5     total   win  med spread   95% CI (by day)
+2.0         184  +1.05%  -0.28%   +193.7%  32%      1.33%   [-5.05, +6.17]
+3.0         302  +2.34%  +1.54%   +705.5%  36%      1.74%   [-2.47, +7.44]
+4.0         369  +1.06%  +0.40%   +392.0%  34%      2.01%   [-3.07, +5.28]
+6.0         494  -0.84%  -1.35%   -413.7%  33%      2.33%   [-3.29, +2.05]
+10.0        606  -2.52%  -3.10%  -1530.0%  30%      3.02%   [-4.30, -0.44]
+```
+
+3.0 wins every column and the degradation above it is steep and monotonic.
+
+**Table corrected 2026-08-16 after deployment.** The version first recorded here
+was run without a minimum DTE and so priced 0-DTE contracts the app can never buy
+(`OPTION_MIN_DTE = 5`). Near expiry the Black-Scholes ratio turns a 6% underlying
+move into a ten-bagger, and that noise dragged every arm down — 3.0 read −0.05%
+mean and −16.8% total against +2.34% and +705.5% here. **The ranking did not
+change and the deployed value of 3 was correct both times.**
+
+**This contradicts the entry above it, and the contradiction is real.** The
+2026-08-09 change to 2 rested on §1.4b, which scored *return on capital* through
+the **old** exit engine and the old ranker. This scores *percent return on
+premium* under the give-back floor, the volume flush and tightest-qualified
+contract selection. Different exits change which contracts are worth holding, so
+the optimum moving is expected — but only one of those two systems is deployed,
+and it is this one.
+
+**Not yet a finding that 3% is profitable.** 3.0's interval spans zero on five
+days. The *ranking* is what this establishes, and it is monotonic.
+
+**Tested against the operator's objection and it held.** NBIS ran 9.3% on
+2026-08-14 and was refused at ~6% spreads, raising the fair question of whether
+the ceiling filters out the biggest movers. Bucketed by session range, the
+tightest ceiling wins the 5%+ band monotonically (+5.62% at 2.0 against −1.89% at
+6.0). See TRADE_QUALITY_PLAN.md §7.3a — including the intermediate result that
+said the opposite and was one 0-DTE trade.
+
+**Revert if:** Monday's median entry spread lands above ~2% *and* return on
+capital is worse than the weeks run at ceiling 2. Re-run
+`tools/spread_ceiling_ab.py` against a freshly-run control — the exit code moved
+on 2026-08-15/16, so no arm from before then is comparable.
+
+---
+
 ## 2026-08-16 — contract cost caps lowered, to serve the subscriber bands
 
 ```

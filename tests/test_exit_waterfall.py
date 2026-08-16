@@ -1,4 +1,6 @@
+import os
 import unittest
+from unittest import mock
 
 import pandas as pd
 
@@ -7,6 +9,19 @@ from app.exit.exit_engine import evaluate_exit
 
 
 class ExitWaterfallTests(unittest.TestCase):
+
+    def setUp(self):
+        """The EMA rule under test IS a momentum exit.
+
+        Production runs the class off, so without pinning it here this asserts
+        the behaviour of a rule the ambient environment has disabled.
+        """
+
+        patcher = mock.patch.dict(
+            os.environ, {"EXIT_MOMENTUM_ENABLED": "true"}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_selected_rule_is_preserved_in_priority_order(self):
 

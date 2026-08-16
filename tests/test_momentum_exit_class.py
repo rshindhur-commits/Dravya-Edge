@@ -11,11 +11,24 @@ import pytest
 from app.exit.exit_engine import _momentum_exits_allowed
 
 
+@pytest.fixture
+def unset(monkeypatch):
+    """Assert the CODE default, not whatever the operator's .env says.
+
+    Production runs EXIT_MOMENTUM_ENABLED=false, so a local .env that mirrors
+    production made every 'on by default' assertion here fail. The default
+    being tested is the one in the source, which is only visible with the
+    variable absent.
+    """
+
+    monkeypatch.delenv("EXIT_MOMENTUM_ENABLED", raising=False)
+
+
 @pytest.mark.parametrize(
     "profile,bars",
     [("INTRADAY", 0), ("INTRADAY", 12), ("MULTIDAY", 99), (None, 5)],
 )
-def test_the_class_is_on_by_default(profile, bars):
+def test_the_class_is_on_by_default(unset, profile, bars):
 
     assert _momentum_exits_allowed(profile, bars) is True
 
@@ -32,7 +45,7 @@ def test_disabling_removes_them_for_every_profile(monkeypatch, profile, bars):
     assert _momentum_exits_allowed(profile, bars) is False
 
 
-def test_the_multiday_leash_still_applies_when_the_class_is_on(monkeypatch):
+def test_the_multiday_leash_still_applies_when_the_class_is_on(unset, monkeypatch):
     """The pre-existing guard is untouched, not replaced."""
 
     monkeypatch.setenv("MULTIDAY_MOMENTUM_EXIT_MIN_BARS", "4")

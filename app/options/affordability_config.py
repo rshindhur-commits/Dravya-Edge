@@ -1,8 +1,68 @@
+import os
+
 from app.config.capital_profiles import CAPITAL_PROFILES
 from app.config.settings import get_bool_env, get_float_env, get_int_env, get_secret_env
 
 
-def get_affordability_config():
+# Preferred and aggressive move with the hard cap, at the same ratios the global
+# settings use (800 / 1000 / 1500). Raising the hard cap alone leaves preference
+# pointing at the cheap, decayed corner of the chain, which is the mistake
+# recorded in CONFIG_CHANGELOG.md for the 2026-08-15 change.
+PREFERRED_RATIO = 0.8
+AGGRESSIVE_RATIO = 1.5
+
+
+def per_symbol_cost_caps():
+    """Symbols allowed a different contract cost cap. Empty disables it.
+
+    `OPTION_MAX_CONTRACT_COST_BY_SYMBOL="AVGO:2500,SMH:2500,GOOGL:2500"`
+
+    Some underlyings carry a good signal and no contract this account can buy.
+    Measured over 21 sessions, AVGO and SMH produce the best entries in the
+    universe -- **+1.098R and +1.070R on the underlying, better than every name
+    currently tradeable except ORCL** -- and GOOGL is close behind. Priced with
+    the cap lifted, the three return +7.44% mean and +5.86% after the top-5 strip
+    at the shipped ceiling and liquidity floors, on 26 trades.
+
+    They are unreachable rather than unprofitable: the tightest qualifying
+    contract runs a **$1,430 median**, above the $1,000 cap that exists to keep
+    alerts inside the subscriber bands. Raising the cap globally would push every
+    other name's contract up with it, which is the opposite of what those bands
+    are for -- so the exception is per symbol and nothing else moves.
+
+    **This serves a tier that can afford ~$1,500 and no other.** An alert on
+    these three is not actionable for a sub-$500 subscriber, and that is a
+    product decision the operator took explicitly, not a side effect.
+
+    Read live rather than frozen at import, so the operator can withdraw it
+    without a deploy. Anything unparseable is skipped rather than raising: a
+    malformed override must not take the option path down mid-session.
+    """
+
+    raw = os.getenv("OPTION_MAX_CONTRACT_COST_BY_SYMBOL", "") or ""
+    caps = {}
+
+    for item in raw.split(","):
+
+        if ":" not in item:
+            continue
+
+        symbol, _, value = item.partition(":")
+
+        try:
+            cap = float(value.strip())
+        except (TypeError, ValueError):
+            continue
+
+        symbol = symbol.strip().upper()
+
+        if symbol and cap > 0:
+            caps[symbol] = cap
+
+    return caps
+
+
+def get_affordability_config(symbol=None):
 
     profile_name = get_secret_env(
         "OPTION_CAPITAL_PROFILE",
@@ -83,5 +143,20 @@ def get_affordability_config():
     ]:
 
         config["mode"] = "HARD"
+
+    # Applied last, so it overrides the env vars above rather than being
+    # overwritten by them. Only raises: an override below the global cap would
+    # be a way to tighten a single name silently, and no measurement asks for
+    # that. `cost_cap_symbol` is recorded so a trade can be attributed to the
+    # exception afterwards -- an alert above the band that nothing explains is
+    # indistinguishable from a bug.
+    override = per_symbol_cost_caps().get(str(symbol or "").strip().upper())
+
+    if override and override > config["max_contract_cost"]:
+
+        config["max_contract_cost"] = override
+        config["preferred_max_contract_cost"] = override * PREFERRED_RATIO
+        config["aggressive_max_contract_cost"] = override * AGGRESSIVE_RATIO
+        config["cost_cap_symbol"] = symbol
 
     return config

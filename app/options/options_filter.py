@@ -1,7 +1,31 @@
+import re
+
 from app.options.option_metrics import calculate_spread_pct
 from app.config.settings import settings
 from app.options.affordability_config import get_affordability_config
 from app.options.option_affordability import add_affordability_metrics
+
+
+# `O:AVGO260821C00300000` -> AVGO. Parsed here rather than imported from
+# app.backtesting, which must not become a dependency of the live option path.
+_OCC_ROOT = re.compile(r"^O:([A-Z]+)\d{6}[CP]\d+$")
+
+
+def _underlying_of(option_data):
+    """The underlying a contract belongs to, or None.
+
+    Needed only so the per-symbol cost cap reaches this filter. Without it a
+    contract on an exempt symbol passes the ranker and is then refused here as
+    `OPTION_TOO_EXPENSIVE`, which would make the exception look configured while
+    doing nothing -- and the rejection would name cost, sending the next reader
+    to the global cap that is not what refused it.
+    """
+
+    match = _OCC_ROOT.match(
+        str((option_data or {}).get("ticker") or "").strip().upper()
+    )
+
+    return match.group(1) if match else None
 
 
 # What the rejected contract actually was.
@@ -106,7 +130,9 @@ def _evaluate_option_liquidity(option_data):
 
     try:
 
-        affordability_config = get_affordability_config()
+        affordability_config = get_affordability_config(
+            _underlying_of(option_data)
+        )
         add_affordability_metrics(
             option_data,
             config=affordability_config

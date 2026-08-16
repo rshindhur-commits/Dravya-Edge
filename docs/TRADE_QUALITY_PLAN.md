@@ -630,6 +630,11 @@ enclosing question is already answered *no*.
 |---|---|---|---|
 | `OPTION_MAX_SPREAD_PCT` | 3 | **2** | §1.4b, +2.33sd, holdout positive |
 
+> **Superseded 2026-08-16 — this row now says the opposite of what is deployed.**
+> Re-measured under the exit rules and the contract selector shipped that day, 3
+> beats 2 on every column (−16.8% against −144.2% total). See **§7.3**, which
+> states why the two measurements disagree and what would send it back to 2.
+
 `OPTION_MAX_CONTRACT_COST` was checked on 2026-08-13 and is **already 500**;
 §1.1 was applied on 2026-08-09 and needs nothing. An earlier draft of this
 section listed it as still at 1200, which was wrong.
@@ -1167,6 +1172,13 @@ which nothing measured on 2026-08-15 suggests it can.
 - **Re-baseline the control after any change to the exit or risk engines.** §5.8
   records which arms share which code. A day list alone does not establish
   comparability once the code has moved underneath it.
+- **For any bucketed result, report the per-symbol and per-day share before
+  reading the mean.** §7.3a: a band passed the top-5 strip at +2.77% while a
+  single GOOGL trade carried 55% of its total. The strip does not catch
+  concentration; only the split does.
+- **Every replay tool must enforce the same contract bounds live enforces.**
+  §7.3a again: `spread_ceiling_ab.py` had `MAX_DTE` and no `MIN_DTE`, so it
+  priced 0-DTE contracts the app cannot buy and one returned +758%.
 - **State the check that could kill a finding in the same breath as the finding.**
   Three claims were withdrawn within hours on 2026-08-13/15 — the entry boundary,
   exits firing early, and "47% of trades never move" — each because the first cut
@@ -1421,3 +1433,720 @@ in the pipeline touches it. That is the largest untouched item on this list.
 positions too, where a single heavy bar could end a multi-day thesis. There are 9
 MULTIDAY trades and 8 closed the same session, so there is nothing yet to measure
 it against. Revisit once `EXIT_MOMENTUM_ENABLED=false` lets them actually run.
+
+## §7 — Deployed 2026-08-16: the five rules, the environment they need, and what Monday tests
+
+Merged `Claude_POA` → `main` and deployed to Render and Streamlit on 2026-08-16.
+26 commits, 1,256 tests passing, 2 skipped. This section is the durable record of
+**what changed, what it was measured on, and what would falsify it** — written
+the day it shipped so that a later "what changed?" does not have to be
+reconstructed from git.
+
+### 7.1 The five changes
+
+| | change | measured on | expected effect |
+|---|---|---|---|
+| 1 | **late-session cutoff 14:05** (`entry_gate.late_session_cutoff_et`) | 1,231 archived candidates | keeps 988 at 18.4% reaching +10%, discards 243 at 4.1% |
+| 2 | **Trade Quality Score floor 48** (`entry_gate.min_trade_quality_score`) | quintiles, split by date | Q5 reaches +10% at 41.4% against 15.7% base; the underlying-2R control rises monotonically in holdout, 16.0 → 40.2 |
+| 3 | **two-tier profit floor** — breakeven armed at +10%, half-give-back at +25% (`exit_engine._giveback_floor`) | 39 live intraday trades, the traded contract's own bars | round-trip winners 48% → 29%; total +52.4% → +143.4% |
+| 4 | **volume-flush reversal exit, armed at +10%** (`exit_engine._volume_flush_reversal`) | the same 39 | best arm in every column, and **+75.46 after stripping the best three** |
+| 5 | **prefer the tightest fully-qualified contract** (`contract_ranker.prefer_tightest_qualified`) | 1,764 scans that bought nothing | 323 (18.3%) had a usable contract at 1.71% median while the app reported 9.76% |
+
+Plus one defect fix that is not a rule change and matters more than any of them:
+
+**The daily context was caching its own failures.** The cache key is (symbol,
+trading day), so one empty premarket fetch pinned `daily_trend = UNKNOWN` for that
+symbol for the rest of the session and no later scan retried. `Daily Trend` reads
+UNKNOWN on **1,882 of 1,883** archived candidates and `Daily ATR %` is populated on
+**1 of 2,266**; called directly the same code returns BULL with a 3.08% ATR and
+30.5% realised vol. Fixed in `27ef45b` — only a real context is now cached.
+
+It did **not** disable `iv_richness`, which was the first guess and is wrong: that
+gate falls back to intraday ATR and records `IV_RV_SOURCE = INTRADAY_ATR` on 1,882
+rows against DAILY on 1. It has been evaluating throughout, on the weaker of its
+two inputs. This promotes it to the source it was designed around, and **that is
+itself an unmeasured change to gate behaviour** — watch it.
+
+### 7.2 The environment, as deployed
+
+*Set explicitly in Render — these differ from the code default or from what was
+previously set:*
+
+```
+EXIT_MOMENTUM_ENABLED                 false
+OPTION_MAX_SPREAD_PCT                 3
+OPTION_MAX_CONTRACT_COST              1000
+OPTION_PREFERRED_MAX_CONTRACT_COST    800
+OPTION_AGGRESSIVE_MAX_CONTRACT_COST   1500
+```
+
+`EXIT_MOMENTUM_ENABLED=false` is load-bearing and its code default is `true`.
+Without it, MACD and EMA9 exits fire at a 21-minute median hold and **none of
+changes 3 and 4 ever engage** — §5.13 measures `ema9_like` as the worst arm in the
+book at −41.9%. It is also the largest available fix for MULTIDAY, which §6's
+item 7 gap depends on.
+
+*Code defaults, shipped in source, no Render entry required:*
+
+```
+ENTRY_LATE_SESSION_CUTOFF_ET      14:05
+ENTRY_MIN_TRADE_QUALITY              48
+EXIT_OPTION_BREAKEVEN_ARM_PCT        10
+EXIT_OPTION_GIVEBACK_ARM_PCT         25
+EXIT_OPTION_GIVEBACK_KEEP           0.5
+EXIT_VOLUME_FLUSH_ENABLED          true
+EXIT_FLUSH_ARM_PCT                   10
+EXIT_FLUSH_VOLUME_MULT              1.5
+OPTION_PREFER_TIGHTEST_QUALIFIED   true
+```
+
+**Verified by popping every one of these from the environment and reading the
+value the code returns.** An explicit Render value silently beats the code
+default, which is how `ENTRY_TIMING_MAX_SCORE` behaved the week before — so a
+stale Render entry for any of these is a live hazard, not a theoretical one.
+
+Two of these read `os.getenv` **directly** rather than through `get_secret_env`,
+because `get_secret_env` folds the empty string into the default and these need
+empty to mean *disabled*: `ENTRY_LATE_SESSION_CUTOFF_ET` is one.
+
+*Deliberately unchanged, each with the measurement that says so:*
+
+| | value | why not touched |
+|---|---|---|
+| `IV_RICHNESS_ENFORCE` | false | enforcing removes the **best** candidates — the 26 it would block reach +10% at 50.0% against 15.1% for those kept |
+| `OPTION_MIN_OPEN_INTEREST` | 500 | removing it **entirely** buys 17 chains of 2,169. Its 57.4% rejection share is a short-circuit artifact — it is tested first (§0.2) |
+| `OPTION_MIN_VOLUME` | 100 | removing it entirely buys 6 |
+| `OPTION_MAX_DTE` | 30 | untested, and every longer-hold experiment has failed (§2.2d, §2.2f) |
+| `OPTION_MIN_CONTRACT_COST` | 100 | unchanged |
+| `ENTRY_TIMING_MAX_SCORE` | 55 | §5.9, shipped in `60c5cb1` |
+| `MAX_ACTIVE_PER_DIRECTION` | 2 | measured to earn its keep |
+
+### 7.3 The spread ceiling is now 3, and this contradicts §5.1
+
+**§5.1 records `OPTION_MAX_SPREAD_PCT = 2` as "proven, restore first", on §1.4b's
++2.33sd with a positive holdout. It has been set to 3 instead. That reversal needs
+to be defensible or reverted, so it is written down in full.**
+
+`tools/spread_ceiling_ab.py`, 2,169 candidates with a recorded chain, every other
+gate held fixed, walked to an exit under **the rules shipped today**:
+
+```
+ceiling  trades  days     mean    -top5     total   win  med spread   95% CI (by day)
+2.0         184     5   +1.05%   -0.28%   +193.7%  32%      1.33%   [-5.05, +6.17]
+3.0         302     5   +2.34%   +1.54%   +705.5%  36%      1.74%   [-2.47, +7.44]
+4.0         369     5   +1.06%   +0.40%   +392.0%  34%      2.01%   [-3.07, +5.28]
+6.0         494     5   -0.84%   -1.35%   -413.7%  33%      2.33%   [-3.29, +2.05]
+10.0        606     6   -2.52%   -3.10%  -1530.0%  30%      3.02%   [-4.30, -0.44]
+```
+
+3.0 wins **every column** — mean, the top-5 strip, total, and win rate — and the
+degradation above it is steep and monotonic, which is the shape a real cost
+relationship makes. **It is also positive after the top-5 strip**, at +1.54%,
+which almost nothing in this document manages.
+
+> **Corrected 2026-08-16, after deployment.** The table first published here was
+> run without a minimum DTE, so it priced 0-DTE contracts the app can never buy
+> (`OPTION_MIN_DTE = 5`). Near expiry the Black-Scholes ratio turns a 6%
+> underlying move into a ten-bagger — one 0-DTE GOOGL put returned **+758%** —
+> and that noise dragged every arm down: the original table showed 3.0 at −0.05%
+> mean and −16.8% total against +2.34% and +705.5% here. **The ranking never
+> changed and the deployed setting of 3 was right both times**, but the earlier
+> claim in this section that "every arm is negative" was an artifact and is
+> withdrawn. `MIN_DTE` is now enforced in the tool and inherited by everything
+> built on it.
+
+**Why the two measurements disagree, stated rather than waved away.** They are not
+the same experiment. §1.4b scored *return on capital* through the old exit engine
+and the old ranker on 21 pooled replay sessions. This scores *percent return on
+premium* under the give-back floor, the volume flush and tightest-qualified
+selection, on chains from `scanner_snapshot`. Changing the exit rules changes which
+contracts are worth holding, and tightest-qualified changes which contract a given
+ceiling actually buys — so a ceiling optimum moving is expected, not anomalous.
+
+**What is not settled, and must not be glossed:** 3.0's interval spans zero
+([−2.47, +7.44]) on **five days**, which is nowhere near enough to carry a
+positive mean. What is solid is the *ranking* — monotonic, and surviving the
+strip. Both this and §1.4b are honest measurements of different systems and only
+one of those systems is now deployed.
+
+**Falsifier:** if Monday's fills come in above ~2% median spread *and* the book is
+worse than the 2-ceiling weeks on return on capital, revert to 2 and re-run this
+A/B against a freshly-run control (§5.8 — the code has moved, so no pre-08-16 arm
+is comparable).
+
+### 7.3f NBIS itself, and two format traps that nearly produced a wrong answer
+
+The symbol this whole line of questioning started from. Under the deployed code
+**NBIS produces nothing, and is not in the watchlist to begin with.** Forced
+through the replay it gives five signals and no contract, rejected 58.3% on
+spread and only **1.1% on cost** — so the per-symbol cost cap built for AVGO and
+SMH would not reach it. Spread is the blocker.
+
+What refusing it cost on the day it moved 9.3%, one position at a time, exits as
+shipped:
+
+```
+ceiling  taken  skipped   total    per trade   detail
+3 (live)     0        0      --           --   no contract passed
+4            0        0      --           --   no contract passed
+6            1        0   +19.0%       +19.0%  12:10 ($950 @ 5.8%)
+10           3        1   +52.6%       +17.5%  11:25 +18.0%; 12:10 +19.0%; 12:35 +15.5%
+```
+
+**The 12:10 trade at ceiling 6 is solid**: neither the app's own stop (266.33)
+nor the 1.5-ATR stop was touched, and both pricing methods agree — the contract's
+own bars give +31.9% at the underlying's target while the give-back floor exits
+at 13:50 for +19.0%, having armed at a +41.6% peak.
+
+**The ceiling-10 row is not.** It uses walk()'s 1.5-ATR stop (264.42), which is
+wider than the app's real stop that scan (266.27, the 0.50% floor). The 11:25
+signal *was* stopped on the underlying at 11:35 under the app's stop, so its
++18.0% would not have happened. Read the ceiling-6 row and treat ceiling 10 as an
+upper bound.
+
+**This does not argue for a looser ceiling.** Friday's NBIS is one favourable
+draw from a distribution measured in §7.3a as negative: on sessions ranging over
+5%, ceiling 6 returns **−1.89% mean across 85 trades** while ceiling 2 returns
++5.62%. A 9.3% day paying +19% is exactly the tail that makes loosening look
+obvious and lose money over a quarter.
+
+#### Two format traps, recorded because each produced a confident wrong number
+
+The replay chain and the archive chain are **not the same schema**, and two
+fields differ in ways that fail silently rather than loudly:
+
+```
+field           archive (scanner_snapshot)   replay (build_historical_chain)
+quote_status    absent                       "OK"
+iv              decimal, median 0.617        percent, e.g. 102.3
+```
+
+`usable()` requires `quote_status == "QUOTE_OK"` and defaults an absent value to
+it — so archive contracts pass and **every replay contract is rejected**, which
+reported NBIS as "no contract at any ceiling". And `bs()` expects decimal IV, so
+feeding it 102.3 priced the same trade at **−2.2%** when it actually made
++19.0%.
+
+**Every committed tool reads the archive**, so no result in this document is
+affected. The rule that follows: *a tool written against one chain source must
+assert its schema before using it, because both of these failed as plausible
+numbers rather than as errors.*
+
+### 7.3a Does the ceiling filter out the biggest movers? — **asked by the operator, tested, no**
+
+The objection, and it is a good one: NBIS ran **9.3%** on 2026-08-14, its four
+signals were refused for spreads around 6%, and one of them would have paid
++31.9%. If a wide spread is the price of admission to a name that actually
+travels, an average across all candidates cannot see it.
+
+`tools/spread_ceiling_by_mover.py` buckets candidates by the session's high-low
+range as a percent of entry — hindsight, deliberately, because the question is
+whether the movers *were* being excluded:
+
+```
+session range   ceiling    n     mean    -top5     total   win
+2.0-3.5%          3.0     80   +2.30%   -0.84%   +184.3%   31%
+                  6.0    173   -3.71%   -5.29%   -641.5%   23%
+3.5-5.0%          3.0    149   +5.23%   +3.83%   +779.0%   47%
+                  6.0    194   +4.45%   +3.36%   +863.3%   48%
+5.0%+             2.0     20   +5.62%   +0.56%   +112.4%   55%
+                  3.0     40   +1.45%   -1.53%    +58.1%   38%
+                  6.0     85   -1.89%   -3.49%   -160.4%   33%
+```
+
+**On the biggest movers the tightest ceiling wins, monotonically** — the opposite
+of the hypothesis. A large move does not repay a wide spread; it is where a wide
+spread costs most, because the option is dear *and* the round trip is wide.
+
+**This result reversed once before, and how it reversed is the lesson.** The
+first run had ceiling 6 winning the 5%+ band at +12.18% mean with **+2.77%
+surviving the top-5 strip**, apparently vindicating the objection. It was 0-DTE
+contamination. Splitting that band by symbol showed one GOOGL trade carrying
+**55% of the entire total**, the top five carrying 78%, and the median trade in
+the band losing 2.53%. Enforcing `OPTION_MIN_DTE` deleted the effect and flipped
+the sign.
+
+**The concentration check is what caught it, not the strip** — the strip passed.
+Added to §5.6 as a standing rule.
+
+#### Can it be made tradeable anyway?
+
+No, on the evidence available. Session range is hindsight, so a usable version
+must key off something known at scan time. `tools/spread_ceiling_scaled.py`
+tested the obvious candidate, **ATR% at the signal**, and it fails twice:
+
+```
+ATR band            median session range
+0.00-0.25%                3.40%
+0.60%+                    3.99%
+```
+
+ATR barely sorts movers from non-movers — 0.6 points of range between the extreme
+bands — and in the highest-ATR band the tight ceiling wins anyway (+1.77%
+stripped at 2.0 against −6.58% at 6.0).
+
+Untested scan-time proxies remain: daily ATR and realised vol (**newly
+available** — the daily-context cache defect was only fixed 2026-08-16), gap
+percent, IV. **Trying proxies until one works is how the feature sweep reached a
+0.433 holdout AUC**, so any further attempt states its holdout in advance.
+
+#### What this actually points at
+
+NBIS is **not in the watchlist**. The lever that reaches a 9% mover is the
+universe, not the ceiling — a separate question that does not require loosening a
+filter now measured to work in every band. Answered in §7.3b.
+
+### 7.3b The universe — **run 2026-08-16, and the answer is not the one expected**
+
+Three measurements, cheapest first.
+
+#### The screen: the movers are real, and most are unaffordable
+
+`tools/universe_candidates.py`, 30 sessions of daily bars, no option quotes.
+Candidate names were fixed by a stated rule before the data was pulled — liquid
+optionable US names outside the watchlist, from the pockets a retail options
+subscriber actually trades. NBIS and MSTR are marked separately because they were
+raised *after* their move and are evidence of nothing on their own.
+
+```
+current watchlist (26 names):  median daily range 3.12%,  median price $344
+
+NBIS *   10.98%   $278        RIOT     9.02%    $19
+CRDO      8.45%   $260        CLSK     7.73%    $12
+ALAB      8.27%   $322        MARA     7.56%     $9
+DELL      6.83%   $491        SMR      7.42%     $9
+NET       5.80%   $316        OKLO     7.21%    $44
+```
+
+**Movement is genuinely available — two to three times the watchlist median.** But
+the left column is the NBIS trap: a near-ATM contract runs roughly 2-5% of share
+price, so a $278 or $491 name prices every tight contract out of a $1,000 cap.
+The right column is the interesting one, because **cheap stocks have cheap
+options**.
+
+#### The control: half the current watchlist can never trade
+
+`tools/universe_viability.py` over the **full 21-session archive**, 2,169
+candidates, every gate tested independently so the short-circuit trap (§0.2)
+cannot mislead:
+
+```
+symbol   cands  viable   rate   contracts  tight  cheap  BOTH   median cost
+-- carrying the book
+SPCX        57      47    82%       3,004    48%    45%   27%      $1,105
+PLTR        93      70    75%       4,708    73%    34%   16%      $1,420
+NVDA        88      45    51%         857    83%    66%   51%        $760
+NFLX        49      23    47%         340    36%    91%   35%        $252
+ORCL       125      51    41%       9,922    16%    30%    2%      $1,445
+TSLA       134      54    40%       3,705    78%    36%   28%      $1,325
+-- marginal
+SMCI        60       7    12%         536     4%    93%    4%        $370
+CRWD       184      15     8%       8,719     6%    16%    1%      $2,365
+MRVL       126      10     8%       5,565    12%    17%    0%      $2,160
+AAPL        39       2     5%         165    33%    54%   10%        $880
+MSFT        68       3     4%       1,168    21%    32%    1%      $1,480
+AMZN        53       1     2%         351    37%    50%    9%      $1,000
+TSM        108       2     2%       2,377    17%    13%    0%      $2,065
+-- zero, across 21 sessions
+MU         190       0     0%      13,649    31%     3%    0%      $6,405
+AMAT       142       0     0%       3,381     4%     3%    0%      $3,950
+ARM        130       0     0%       4,187     9%    17%    0%      $2,140
+PANW       127       0     0%       4,580     3%    15%    0%      $2,485
+AMD        106       0     0%       7,847    24%    13%    0%      $2,220
+AVGO        79       0     0%       2,469    24%    26%    0%      $1,655
+SMH         77       0     0%       3,155    15%    11%    0%      $2,640
+META        61       0     0%       2,255    27%    17%    0%      $1,980
+GOOGL       33       0     0%         508    14%    40%    0%      $1,220
+XOM          8       0     0%          67     4%    75%    3%        $650
+JPM          2       0     0%          23     0%    65%    0%        $865
+```
+
+**Eleven names produced zero contracts in 21 sessions, and they are 44% of all
+candidates.** The `BOTH` column is why, and it is the number this tool exists to
+expose: on AMD, 24% of contracts are inside a 3% spread and 13% are inside the
+cap, but **0% are both at once**. On MU, 31% are tight and 3% affordable — and
+none is both, across 13,649 contracts. The tight ones cost thousands; the
+affordable ones are far OTM, thin and wide.
+
+**XOM and JPM are not proven dead** — 8 and 2 candidates is too little to judge,
+and XOM's chain is actually cheap ($650 median, 75% inside the cap). They fail on
+liquidity and spread, not structure, and belong in a different bucket from MU.
+
+**That is structural, not a threshold.** No setting reachable from the subscriber
+bands makes MU tradeable when its median contract is $5,715. Those names are
+consuming scan budget, Polygon quota and candidate slots to produce nothing.
+
+**Median contract cost predicts viability almost perfectly**, which makes it the
+natural universe screen — and it is not a criterion the watchlist was ever built
+on.
+
+#### The test: affordable movers are tradeable, and lost money
+
+`tools/replay_forward.py` over three sessions on six candidates, real chains,
+spread crossed both ways:
+
+```
+sym    attempts  filled  rate  trades   mean%   total%  med cost
+MSTR         11       7   64%       7   -6.9%   -48.2%     $445
+HOOD         19       7   37%       7   +0.7%    +5.1%     $290
+RIOT          9       2   22%       2   -8.1%   -16.3%     $191
+COIN         16       1    6%       1   -9.2%    -9.2%     $655
+IONQ          6       0    0%       0       -        -         -
+OKLO         21       0    0%       0       -        -         -
+
+17 trades: mean -4.0%, median -6.7%, 4 wins.  Without the best 2: -6.3%
+```
+
+**The affordability thesis holds.** Median contract $380 against $510 for the
+watchlist, everything inside the subscriber bands, and a 20.7% fill rate against
+the watchlist's 26.2%.
+
+**The money does not.** Mean −4.0%, and worse once the best two are stripped.
+
+**Two things that must be said before this is read as a result.** Seventeen
+trades over three sessions is far below §3's bar of 20 days and 80 trades — it
+cannot settle anything. And the comparison is **biased in the challenger's
+favour**: the replay cannot fetch historical open interest and assumes exactly
+the 500 minimum, while the watchlist control used the OI live actually saw. The
+movers' 20.7% is an overstatement by an unknown amount.
+
+**OKLO and IONQ are a separate finding.** 27 attempts, zero contracts, with
+`LOW_VOLUME` at 80% of all rejections. The quantum and nuclear names move but
+their option chains are too thin to trade — movement without liquidity is not an
+opportunity.
+
+#### What follows
+
+The cheap, high-confidence action is **not adding movers — it is dropping the
+dead names.** Nine symbols proven over 21 sessions, 945 candidates, zero trades.
+
+**How much removal is worth, stated honestly.** Dead names are 979 of 2,266
+ranked candidates (43%) but reach the global top 3 only **5% of the time against
+21% for live names** — the ranker is already filtering most of them. On the 414
+scans holding both a dead and a live name, a dead name was nonetheless the
+best-ranked candidate in that scan **30%** of the time.
+
+So removal is **mostly efficiency, not recovered P&L**: scan time, Polygon quota
+and 44% of the candidate funnel, plus whatever the 30% figure costs in what gets
+surfaced first. It should not be sold as a profit improvement, and it is free.
+
+Adding affordable movers is a **maybe**, and it needs the §3 bar: 20 sessions and
+80 trades, against a control run on matched days, before anything is decided. The
+three days available say the contracts exist and the money did not follow.
+
+### 7.3c The nine are not one group — **run 2026-08-16, and the removal list shrinks to three**
+
+The operator's position: these are the market's real movers, worth carrying at
+**break-even**, and worth reaching through cheap far-OTM contracts if that is what
+it takes. Both halves were tested. The first is right about three of the nine and
+wrong about three others; the second is wrong everywhere.
+
+#### Far OTM and affordable does not work, on any of them
+
+`tools/dead_name_otm.py`, 945 candidates, cheapest contract inside the $100-1000
+band, spread ceiling and liquidity floors both relaxed across 15 cells:
+
+```
+ceiling   OI   vol     n     mean    -top5   median     total  win  spread
+6        100    25    39   +1.75%   -7.44%   -9.75%    +68.2%  31%   5.31%
+6          0     0    45   +2.32%   -5.99%   -9.75%   +104.4%  33%   5.14%
+10       500   100    51   -8.08%  -13.02%  -12.79%   -412.0%  22%   6.67%
+none       0     0   309  -10.08%  -12.71%  -16.10%  -3114.9%  19%  10.33%
+```
+
+**No cell clears break-even on both mean and the strip.** The two with a positive
+mean have a **median of −9.75%** — a handful of winners over a book of losers.
+And the contracts are not even far OTM: median moneyness is +2%, near the money
+and short-dated, paying a 5-10% spread. That is the whole reason they lose.
+
+#### But the signal on some of them is the best in the universe
+
+Walked on the **underlying alone** — no option, no spread, no theta:
+
+```
+symbol         n   mean R   median    win        symbol       n   mean R    win
+AVGO (dead)   63   +1.098   +1.665    78%        NVDA (live) 73   -0.216    36%
+SMH  (dead)   70   +1.070   +1.610    73%        ARM  (dead)120   -0.331    25%
+ORCL (live)  113   +1.005   +1.734    58%        MU   (dead)185   -0.678     8%
+GOOGL(dead)   33   +0.760   +1.537    58%        META (dead) 54   -0.719     4%
+```
+
+**AVGO, SMH and GOOGL carry better signals than every name currently tradeable
+except ORCL.** They were never bad tickers — the operator was right about that.
+They were unreachable, which is a different thing and has a different fix.
+
+#### Priced properly, three of them make money
+
+Tightest contract, cost cap lifted, everything else as shipped:
+
+```
+group                ceiling  OI/vol      n     mean    -top5   median  win    cost  dte
+AVGO, SMH, GOOGL        3     500/100    26   +7.44%   +5.86%   +7.98%  92%  $1,430   17
+AMD, PANW, AMAT         3     500/100    44   +3.08%   +0.63%   -3.48%  45%  $1,900    9
+MU, META, ARM           3     500/100   122   -8.92%   -9.28%   -8.53%   0%  $3,920   11
+```
+
+**Three groups, three verdicts.**
+
+**AVGO, SMH, GOOGL — keep, and they need a cap near $2,500.** Every one of the 15
+cells cleared break-even; this is the tightest and best. The blocker is purely
+`OPTION_MAX_CONTRACT_COST`, at $1,430 median against a $1,000 cap. That is a
+**subscriber-tier decision, not a technical one** — these contracts serve neither
+the sub-$500 nor the $500-1000 band.
+
+**MU, META, ARM — remove.** A **0% win rate across 122 trades** on the best
+contract their chains offer. MU and META also have the worst underlying signals
+measured anywhere in this project (−0.678R at 8%, −0.719R at 4%). Nothing
+reachable fixes this.
+
+**AMD, PANW, AMAT — leave out, keep watching.** Positive mean, **negative
+median**, 45% win: a few winners carrying a losing book, which is the shape §2.2f
+exists to catch.
+
+#### Shipped 2026-08-16, and one correction to the tier
+
+`OPTION_MAX_CONTRACT_COST_BY_SYMBOL="GOOGL:1500,AVGO:2500,SMH:2500"`, a
+per-symbol exception in `affordability_config.py`. Empty disables it; it only
+ever raises a cap, never lowers one. MU, META and ARM removed from the watchlist
+in the same change.
+
+**The $1,430 median quoted above is a blend, and it misled the tier decision.**
+Per symbol, against the real archived chains:
+
+```
+symbol   qualifying   median cost      cap set   fits a $1,500 tier?
+GOOGL      12 of 33        $1,222         1500   yes -- and 2500 adds nothing
+AVGO        5 of 79        $2,250         2500   NO
+SMH         3 of 77        $2,400         2500   NO
+```
+
+GOOGL's twelve cheap contracts pulled the combined median down. **Only GOOGL
+belongs to the $1,500 tier the operator named**; AVGO and SMH are a deliberately
+higher tier at $2,250-2,400 and their alerts are not actionable below that.
+Dropping those two from the line keeps strictly to $1,500 and leaves 14 trades.
+
+Verified on the archive with the override off and on: AVGO 0 → 5, SMH 0 → 3,
+GOOGL 0 → 12, and NVDA, TSLA and PLTR unchanged at 45, 54 and 70. At this exact
+setting the three return **+8.04% mean, +6.02% stripped, 90% win on 20 trades**.
+
+**The replay harness finds none of them**, because `build_historical_chain`
+reconstructs its own strikes and assumes open interest, so it rejects these on
+`LOW_VOLUME` where the live chain does not. The measurement above uses the
+chains live actually examined. Monday is the real test of which is right.
+
+### 7.3d Far OTM, on the operator's own condition — **run 2026-08-16**
+
+The standard, stated twice: cheaper, further-OTM contracts are fine **provided
+the direction is called correctly**. §7.3c answered the unconditional version and
+found far OTM losing, but that blends the trades the app called right with the
+ones it did not, and the condition is precisely about the first group.
+
+`tools/moneyness_by_outcome.py` splits every candidate by what the underlying did
+first -- target before stop, or stop before target -- and prices every moneyness
+band inside each. 2,169 candidates, 1,483 resolving to a verdict.
+
+```
+verdict  band          n     mean    -top5   median   win   med cost
+RIGHT    ITM         385  +13.58%  +13.17%  +12.87%   87%     $1,070
+         ATM         596  +12.72%  +12.36%  +11.19%   83%       $975
+         OTM 1-3%    363  +14.57%  +14.02%  +12.77%   82%       $645
+         OTM 3-6%    182  +11.74%  +10.89%  +12.02%   82%       $400
+         OTM 6%+      57   +9.65%   +8.44%   +9.61%   82%       $310
+WRONG    ITM         645   -8.88%   -9.07%   -8.69%    2%     $1,170
+         ATM         780   -9.90%  -10.10%   -9.65%    3%       $980
+         OTM 1-3%    514  -10.37%  -10.62%  -10.01%    4%       $688
+         OTM 3-6%    245   -8.52%   -8.99%   -9.46%    8%       $425
+```
+
+**No band is broken.** Every one pays 10-15% when the call is right, including
+6%+ OTM at a $310 median. The operator's condition is the correct one and the
+answer under it is yes.
+
+#### The number this reduces to
+
+What separates the bands is not whether they work but **how often the direction
+must be right for each to break even**:
+
+```
+band        upside    downside   ratio   break-even accuracy   med cost
+ITM        +13.58%     -8.88%     1.53          39.5%            $1,070
+OTM 1-3%   +14.57%    -10.37%     1.41          41.6%              $645
+OTM 3-6%   +11.74%     -8.52%     1.38          42.1%              $400
+ATM        +12.72%     -9.90%     1.29          43.8%              $975
+
+the app is directionally right                  34.0%
+```
+
+**Going further OTM raises the accuracy requirement, it does not lower it.** The
+upside shrinks faster than the downside does, because a stopped-out trade loses
+roughly 9% of premium whatever the strike, while the winner's payoff falls with
+moneyness. Cheapness is an affordability gain, not an edge gain, and it was
+worth measuring rather than assuming in either direction.
+
+**The whole gap is 5 to 8 points of directional accuracy**, and it is the same
+gap for every contract choice. That is the project, and no strike selection
+substitutes for it.
+
+#### One free improvement, deliberately not shipped yet
+
+`prefer_tightest_qualified` selects on spread, which lands the app **ATM -- the
+worst band on this table**, needing 43.8%. ITM needs **39.5%**. Preferring
+slightly ITM among already-qualified contracts is worth roughly **4.3 points of
+required accuracy for nothing**, and it agrees with §5.9's independent finding
+that 11-25d ITM was the best arm at −3.86% against −10.36% for 0-10d OTM.
+
+Not shipped, because §5.6's standing rule is that no new switch is committed
+until the one before it is measured, and six changes went live on 2026-08-16 with
+none measured. **This is the first candidate for the change after Monday.**
+
+#### AVGO, SMH and GOOGL do not have this option anyway
+
+Run on the three alone: **75% directionally right, 90 of 120** -- against 34% for
+the universe, which is why they are profitable at all. And there are **no 3-6% or
+6%+ OTM contracts on their chains** that pass the filters. Far OTM is not a
+choice available on them.
+
+### 7.3e MU, META and ARM on the far-OTM condition — **the condition is not met**
+
+The operator asked for the three removed names back, trading far OTM, under the
+same standard: acceptable **so long as the direction is called correctly**. That
+is the right condition and it is the one that fails.
+
+#### Direction is right 10% of the time, and never when a contract exists
+
+```
+                        right   wrong   accuracy
+MU / META / ARM            29     274      10%
+universe                  511     972      34%
+AVGO / SMH / GOOGL         90      30      75%
+```
+
+Inside those 29 correct calls, the number of contracts passing the gates in
+**every** moneyness band is **zero**. The 121 tradeable contracts these names
+produced all sit in the WRONG bucket, losing 10.7% to 11.7% at a 0-1% win rate.
+
+Break-even needs roughly **42%** accuracy (§7.3d). These names have **10%**. The
+gap is 32 points, against 5-8 for the rest of the book.
+
+#### Far OTM is not purchasable on them either
+
+Which is a different problem from it losing money, and worth separating. Every
+contract quoted on their chains, each gate applied alone:
+
+```
+band        quoted  $100-2500  spr<=3  OI>=500  vol>=100   ALL   median cost
+ITM           4065        25%     23%      25%       25%    0%        $4,715
+ATM          11622        24%     29%      27%       38%    1%        $5,185
+OTM 1-3%      3923        36%     22%      24%       31%    2%        $3,765
+OTM 3-6%       481        57%     14%      33%       20%    0%        $1,945
+OTM 6%+          0   -- none quoted at this moneyness
+```
+
+**Their far-OTM contracts are affordable and untradeable.** At 3-6% OTM, 57% sit
+inside $2,500 — but only **14%** are inside a 3% spread and **20%** carry volume,
+so **0%** pass together. Cheapness was never the blocker on these names.
+
+Against the three that work:
+
+```
+NVDA / TSLA / PLTR, OTM 3-6%:  1129 quoted, 70% affordable, 62% tight, 21% pass ALL
+```
+
+**Nothing beyond 6% OTM is quoted for any name**, in any group — the selector's
+`max_moneyness_pct` does not reach that far. "Further out than 6%" is not a
+setting away; it is not in the chain the app builds.
+
+#### What adding them back would actually do
+
+Two options, both measured, neither good:
+
+| | outcome |
+|---|---|
+| add back, gates unchanged | **431 candidates, 0 trades** — exactly what they did before. Harmless, pointless, and it consumes scan budget and Polygon quota |
+| add back, gates relaxed for them | measured at **−8% to −12% per trade, 0-1% win rate** across 122 trades (§7.3c) |
+
+**DECIDED 2026-08-16, by the operator: leave them out.** Not a deferral — the
+question was asked with the measurements in front of it and answered. Reopen only
+on directional accuracy above ~42%, which is a property of the entry engine and
+not of any contract setting. Do not reopen it from a single session in which one
+of these names moves.
+
+**Also decided: the 6% moneyness window stays.** Widening it was offered and
+declined. Every band measured needs *more* accuracy the further out it goes
+(§7.3d), and pricing a wider chain costs quota per scan for contracts that fail
+volume anyway. If it is ever revisited, measure on the archive first — the
+replay tooling can widen `max_moneyness_pct` without touching the live selector.
+
+#### Before acting on the first group
+
+26 trades over 21 sessions is roughly one a day and is **below §3's bar of 80**.
+A 92% win rate on 26 trades is high enough to be suspicious on its own. The
+direction is consistent across the underlying walk, the option walk and all 15
+cells, which is more agreement than most findings here get — but the cap should
+move only alongside a decision about which subscriber band these alerts are for.
+
+### 7.4 Three things refuted before they were built
+
+Recorded because each was recommended by me and killed by its own check, and the
+pattern is what §5.6's last standing rule exists to catch.
+
+**A correlation check on concurrent positions.** Refuted before writing any code:
+across the archive there are **10 overlapping pairs**, of which 1 was additive —
+and that one was NVDA against NVDA, the same symbol, which `MAX_ACTIVE_PER_DIRECTION`
+already governs. Median effective correlation across the pairs is **−0.13**. There
+is nothing here to gate.
+
+**A range-placement filter.** Built, measured, reverted. Placement quintiles are
+flat (15.4 / 18.7 / 13.4 / 16.3 / 14.2) and the trades it would have dropped do
+*better*. `Session High` and `Session Low` were kept in `result_row` because they
+are cheap and worth having; the filter was not. **`max_range_placement_pct`
+remains at 100, disabled, with the refutation in its own docstring.** The error
+was quoting placement as evidence for a diagnosis before testing it — see §5.14,
+where "range already used" survives as a *time-of-day* effect and placement does
+not.
+
+**Raising the cost cap to $4,000.** Recommended citing §5.9's ITM finding, then
+retracted: those contracts are 38–99 DTE and are blocked by `OPTION_MAX_DTE=30`,
+not by cost. The caps were **lowered** instead, to fit the subscriber bands the
+operator named — roughly 61% of alerts under $500 and 39% in the $500–1,000 band.
+
+### 7.5 What Monday actually tests
+
+Three numbers, in order of what they can falsify:
+
+1. **Exit reasons.** Should be give-back and volume-flush. **If MACD or EMA9
+   appears at all, `EXIT_MOMENTUM_ENABLED` did not take**, and nothing else on this
+   page is being tested.
+2. **Contract cost and spread.** Costs mostly sub-$500; median entry spread at or
+   under ~1.6%. If spread lands near 2.4% — the live figure from §5.6a —
+   `prefer_tightest_qualified` is not reaching the chain.
+3. **Trade count.** §5.10 is the warning: the last deployment made the total loss
+   *worse* by taking 40% more trades at the same per-trade rate. Two changes here
+   cut trades (cutoff, quality floor) and one adds them (tightest-qualified). The
+   net is unknown and the count is the first thing to read.
+
+**The flush is measured on 5-minute bars and the engine runs it on the 15-minute
+frame.** Both its tests are relative to the bar's own history so they translate,
+but a 15m bar is a rarer and larger event — it will fire **less often** than the
+measurement implies. That gap is unmeasured and is the first thing to check
+against Monday's exits.
+
+### 7.6 Still open after this deployment
+
+| | item | why it is still open |
+|---|---|---|
+| news | **zero implementation.** In the operator's requirement (§6 item 1), Polygon serves it on the current plan, nothing consumes it. Largest untouched item on the list |
+| per-band contract selection | the ranker picks **one** contract and cannot serve a $2,000 and a $10,000 account at once. Both tiers fill on 216 chains (10%). Deferred past Monday by agreement |
+| regime blocker | returns `False` on all 2,266 archived candidates. Needs a **positive** test to distinguish working from dead |
+| `OPTION_REQUIRED_LEVERAGE` | is 0.0, so the gate cannot refuse anything. Give it a threshold or delete it |
+| MULTIDAY | 9 trades, 8 closed same session. Nothing to measure until `EXIT_MOMENTUM_ENABLED=false` lets them run |
+| **prefer ITM over tightest** | §7.3d. Selecting on spread lands the app ATM, the **worst** band at 43.8% required accuracy against ITM's 39.5% — roughly 4.3 points for nothing. Held back only because six changes shipped 2026-08-16 unmeasured. **First candidate after Monday.** |
+| XOM, JPM | 8 and 2 candidates over 21 sessions — too few to judge either way. Kept, not defended |
+| AMD, PANW, AMAT | kept and expected to produce nothing. Positive mean over a negative median at 45% win. Remove only on evidence, not on being quiet |
+
+**Deployment state at the close of 2026-08-16.** Seven commits sit on
+`Claude_POA` after the day's deploy point (`c73d639`), one of which changes
+behaviour: `c77e905` removes MU, META and ARM from the watchlist and adds the
+per-symbol cost cap. **Neither is live until that is merged and
+`OPTION_MAX_CONTRACT_COST_BY_SYMBOL` is set in Render** — the value exists only
+in local `.env`, and Render is not in git. See CONFIG_CHANGELOG.md.
