@@ -1668,29 +1668,51 @@ options**.
 
 #### The control: half the current watchlist can never trade
 
-`tools/universe_viability.py`, three sessions, every gate tested independently so
-the short-circuit trap (§0.2) cannot mislead:
+`tools/universe_viability.py` over the **full 21-session archive**, 2,169
+candidates, every gate tested independently so the short-circuit trap (§0.2)
+cannot mislead:
 
 ```
 symbol   cands  viable   rate   contracts  tight  cheap  BOTH   median cost
-NVDA        33      33   100%         649    84%    61%   47%        $855
-NFLX        23      21    91%         326    35%    91%   34%        $253
-TSLA        43      43   100%       2,661    76%    37%   28%      $1,290
-PLTR        61      60    98%       3,800    72%    36%   16%      $1,360
-...
-MRVL        98      10    10%       4,692    12%    18%    0%      $2,110
-CRWD        98       5     5%       6,566     5%    17%    0%      $2,225
-AMD         71       0     0%       5,940    24%    13%    0%      $2,250
-MU          95       0     0%       7,532    24%     4%    0%      $5,715
-PANW        83       0     0%       2,979     3%    18%    0%      $2,565
+-- carrying the book
+SPCX        57      47    82%       3,004    48%    45%   27%      $1,105
+PLTR        93      70    75%       4,708    73%    34%   16%      $1,420
+NVDA        88      45    51%         857    83%    66%   51%        $760
+NFLX        49      23    47%         340    36%    91%   35%        $252
+ORCL       125      51    41%       9,922    16%    30%    2%      $1,445
+TSLA       134      54    40%       3,705    78%    36%   28%      $1,325
+-- marginal
+SMCI        60       7    12%         536     4%    93%    4%        $370
+CRWD       184      15     8%       8,719     6%    16%    1%      $2,365
+MRVL       126      10     8%       5,565    12%    17%    0%      $2,160
+AAPL        39       2     5%         165    33%    54%   10%        $880
+MSFT        68       3     4%       1,168    21%    32%    1%      $1,480
+AMZN        53       1     2%         351    37%    50%    9%      $1,000
+TSM        108       2     2%       2,377    17%    13%    0%      $2,065
+-- zero, across 21 sessions
+MU         190       0     0%      13,649    31%     3%    0%      $6,405
+AMAT       142       0     0%       3,381     4%     3%    0%      $3,950
+ARM        130       0     0%       4,187     9%    17%    0%      $2,140
+PANW       127       0     0%       4,580     3%    15%    0%      $2,485
+AMD        106       0     0%       7,847    24%    13%    0%      $2,220
+AVGO        79       0     0%       2,469    24%    26%    0%      $1,655
+SMH         77       0     0%       3,155    15%    11%    0%      $2,640
+META        61       0     0%       2,255    27%    17%    0%      $1,980
+GOOGL       33       0     0%         508    14%    40%    0%      $1,220
+XOM          8       0     0%          67     4%    75%    3%        $650
+JPM          2       0     0%          23     0%    65%    0%        $865
 ```
 
-**Eleven of twenty-two names produced zero contracts, and they are 46% of all
+**Eleven names produced zero contracts in 21 sessions, and they are 44% of all
 candidates.** The `BOTH` column is why, and it is the number this tool exists to
 expose: on AMD, 24% of contracts are inside a 3% spread and 13% are inside the
-cap, but **0% are both at once**. Across 16,439 contracts on the five worst
-names, not one. The tight ones cost thousands; the affordable ones are far OTM,
-thin and wide.
+cap, but **0% are both at once**. On MU, 31% are tight and 3% affordable — and
+none is both, across 13,649 contracts. The tight ones cost thousands; the
+affordable ones are far OTM, thin and wide.
+
+**XOM and JPM are not proven dead** — 8 and 2 candidates is too little to judge,
+and XOM's chain is actually cheap ($650 median, 75% inside the cap). They fail on
+liquidity and spread, not structure, and belong in a different bucket from MU.
 
 **That is structural, not a threshold.** No setting reachable from the subscriber
 bands makes MU tradeable when its median contract is $5,715. Those names are
@@ -1738,8 +1760,17 @@ opportunity.
 #### What follows
 
 The cheap, high-confidence action is **not adding movers — it is dropping the
-dead names.** Eleven symbols, 46% of candidates, structurally incapable of
-producing a trade. Removing them costs nothing measurable and frees scan budget.
+dead names.** Nine symbols proven over 21 sessions, 945 candidates, zero trades.
+
+**How much removal is worth, stated honestly.** Dead names are 979 of 2,266
+ranked candidates (43%) but reach the global top 3 only **5% of the time against
+21% for live names** — the ranker is already filtering most of them. On the 414
+scans holding both a dead and a live name, a dead name was nonetheless the
+best-ranked candidate in that scan **30%** of the time.
+
+So removal is **mostly efficiency, not recovered P&L**: scan time, Polygon quota
+and 44% of the candidate funnel, plus whatever the 30% figure costs in what gets
+surfaced first. It should not be sold as a profit improvement, and it is free.
 
 Adding affordable movers is a **maybe**, and it needs the §3 bar: 20 sessions and
 80 trades, against a control run on matched days, before anything is decided. The
