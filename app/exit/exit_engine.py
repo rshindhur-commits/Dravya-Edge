@@ -443,6 +443,56 @@ def option_giveback_keep():
     return _env_float("EXIT_OPTION_GIVEBACK_KEEP", 0.5)
 
 
+def option_breakeven_arm_pct():
+    """Gain at which the position is no longer allowed to become a loss. 10."""
+
+    return _env_float("EXIT_OPTION_BREAKEVEN_ARM_PCT", 10.0)
+
+
+def _giveback_floor(peak_gain):
+    """The lowest gain this trade may fall to, or None while unprotected.
+
+    Two levels, because one cannot do both jobs.
+
+    Arming a *proportional* give-back at a small gain destroys winners: at 15%
+    with half kept it books -7.3% total across the live trades and keeps only 18%
+    of the trades that reached +25%, because an option wobbling between +12% and
+    +20% is noise and half of a small peak sits inside it.
+
+    Leaving small gains unprotected entirely is the hole the operator found: a
+    trade up 20% that reverses has nothing but the hard stop beneath it.
+
+    A **breakeven floor** resolves it. It is far looser than a proportional one --
+    it only fires if the whole gain is gone -- so it survives the wobble while
+    still refusing to let a winner become a loser.
+
+        rule                  total    round-trip   kept >= 25%
+        the book today       +52.4%       48%            9%
+        arm 15, keep half     -7.3%       19%           18%
+        arm 25, keep half    +98.7%       24%           55%
+        two-tier 10 / 25    +143.4%       29%           45%
+
+    So: past 10%, never let it go red. Past 25%, never give back more than half.
+    The second floor always sits above the first by the time it engages, so they
+    ratchet rather than fight.
+
+    39 trades is thin and the profit figures are not established -- the top-5
+    strip is still negative at -1.56%. The round-trip and winners-kept columns are
+    counts rather than means and are the part worth trusting.
+    """
+
+    if peak_gain is None:
+        return None
+
+    if peak_gain >= option_giveback_arm_pct():
+        return peak_gain * option_giveback_keep()
+
+    if peak_gain >= option_breakeven_arm_pct():
+        return 0.0
+
+    return None
+
+
 def _option_giveback_exit(trade_state, option_peak_mid):
     """(should_exit, peak_gain_pct, floor_pct) for the option give-back rule.
 
@@ -471,12 +521,12 @@ def _option_giveback_exit(trade_state, option_peak_mid):
 
     peak = option_peak_mid if option_peak_mid and option_peak_mid > 0 else current_mid
     peak_gain = (peak - entry_mid) / entry_mid * 100.0
-
-    if peak_gain < option_giveback_arm_pct():
-        return False, peak_gain, None
-
-    floor_gain = peak_gain * option_giveback_keep()
     current_gain = (current_mid - entry_mid) / entry_mid * 100.0
+
+    floor_gain = _giveback_floor(peak_gain)
+
+    if floor_gain is None:
+        return False, peak_gain, None
 
     return current_gain <= floor_gain, peak_gain, floor_gain
 

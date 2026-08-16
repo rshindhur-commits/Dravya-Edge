@@ -14,7 +14,9 @@ import pandas as pd
 import pytest
 
 from app.exit.exit_engine import (
+    _giveback_floor,
     _option_giveback_exit,
+    option_breakeven_arm_pct,
     option_giveback_arm_pct,
     option_giveback_keep,
 )
@@ -82,13 +84,48 @@ class TestOptionGiveback:
     def test_none_trade_state_is_safe(self):
         assert _option_giveback_exit(None, None)[0] is False
 
-    def test_below_arming_gain_never_fires(self):
-        """The PLTR case: a 16% peak is noise and must not arm at all."""
+    def test_the_pltr_case_stays_in(self):
+        """A 16% peak arms only the breakeven floor, and +4.8% is above it."""
         state = {"option_entry_mid": 4.72, "option_current_mid": 4.95}
         fired, peak, floor = _option_giveback_exit(state, 5.50)
         assert fired is False
         assert peak == pytest.approx(16.5, abs=0.5)
-        assert floor is None
+        assert floor == 0.0
+
+
+class TestTwoTierFloor:
+
+    def test_default_breakeven_arm(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EXIT_OPTION_BREAKEVEN_ARM_PCT", None)
+            assert option_breakeven_arm_pct() == 10.0
+
+    def test_unprotected_below_ten(self):
+        assert _giveback_floor(9.9) is None
+
+    def test_breakeven_floor_between_ten_and_twentyfive(self):
+        assert _giveback_floor(10.0) == 0.0
+        assert _giveback_floor(20.0) == 0.0
+        assert _giveback_floor(24.9) == 0.0
+
+    def test_proportional_floor_above_twentyfive(self):
+        assert _giveback_floor(25.0) == pytest.approx(12.5)
+        assert _giveback_floor(69.3) == pytest.approx(34.65)
+
+    def test_the_second_floor_never_drops_below_the_first(self):
+        """The tiers must ratchet, not fight."""
+        assert _giveback_floor(25.0) >= _giveback_floor(24.9)
+
+    def test_none_peak_is_unprotected(self):
+        assert _giveback_floor(None) is None
+
+    def test_a_small_gain_that_reverses_is_now_caught(self):
+        """The hole: up 20%, reversing, previously had only the hard stop."""
+        state = {"option_entry_mid": 10.0, "option_current_mid": 9.5}
+        fired, peak, floor = _option_giveback_exit(state, 12.0)
+        assert peak == pytest.approx(20.0)
+        assert floor == 0.0
+        assert fired is True
 
     def test_armed_and_holding_does_not_fire(self):
         state = {"option_entry_mid": 4.72, "option_current_mid": 7.05}
