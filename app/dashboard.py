@@ -113,66 +113,55 @@ if str(ROOT_DIR) not in sys.path:
 
 
 def render_app_header():
+    """The wordmark and tagline are artwork, not text.
 
-    logo = ROOT_DIR / "assets" / "logo.png"
+    The lockup carries "DRAVYA EDGE" and the tagline inside the image, so there
+    is no heading element left on the page. Two consequences worth keeping in
+    mind: the alt text is the only copy a screen reader or a failed image load
+    ever sees, and the fallback below has to restate both lines itself.
+    """
 
-    if not logo.exists():
+    lockup = ROOT_DIR / "assets" / "logo_lockup.png"
+
+    if not lockup.exists():
 
         st.title("Dravya Edge")
+        st.caption("Directional signals · Nasdaq options")
         return
 
-    encoded_logo = base64.b64encode(logo.read_bytes()).decode("ascii")
+    encoded_lockup = base64.b64encode(lockup.read_bytes()).decode("ascii")
 
     st.markdown(
         f"""
         <style>
         .dravya-header {{
-            display: flex;
-            align-items: center;
-            gap: 18px;
             /* The page trims .block-container's top padding to 1.3rem, well
                under the ~3.75rem Streamlit reserves for its fixed toolbar, and
                this header is the first element on the page. Buy the gap back
                here rather than in .block-container, so only the header moves. */
             margin-top: 2rem;
-            margin-bottom: 0.8rem;
+            margin-bottom: 0.9rem;
         }}
 
         .dravya-header img {{
-            height: 72px;
-            width: auto;
-            border-radius: 10px;
-            /* An img in a flex row shrinks by default. With the height pinned,
-               shrinking squeezes the tile horizontally and turns the ring into
-               an ellipse -- so hold the intrinsic size. */
-            flex: 0 0 auto;
+            /* Sized by width, not height: the lockup is a 2.9:1 banner whose
+               tagline is the smallest thing on it. At the 72px the old square
+               icon used, the whole plate would be 209px wide and the tagline
+               about 3px tall -- present but unreadable. */
+            width: 100%;
+            max-width: 470px;
+            height: auto;
             display: block;
-        }}
-
-        .dravya-title {{
-            display: flex;
-            flex-direction: column;
-        }}
-
-        .dravya-title h1 {{
-            margin: 0;
-            font-size: 2.2rem;
-            line-height: 1.1;
-        }}
-
-        .dravya-title p {{
-            margin: 0;
-            color: #9aa0a6;
-            font-size: 0.95rem;
+            /* The plate is a solid rgb(10, 26, 47), a lighter navy than the
+               page behind it, so its edge is visible however it is placed.
+               Rounding it makes that edge read as a deliberate banner. */
+            border-radius: 12px;
         }}
         </style>
 
         <div class="dravya-header">
-            <img src="data:image/png;base64,{encoded_logo}" alt="Dravya Edge logo">
-            <div class="dravya-title">
-                <h1>Dravya Edge</h1>
-                <p>AI Powered Intraday Trading Workstation</p>
-            </div>
+            <img src="data:image/png;base64,{encoded_lockup}"
+                 alt="Dravya Edge — directional signals, Nasdaq options">
         </div>
         """,
         unsafe_allow_html=True,
