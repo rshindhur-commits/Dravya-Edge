@@ -118,7 +118,7 @@ def render_app_header():
 
     if not logo.exists():
 
-        st.title("Dravya Wallstreet Edge")
+        st.title("Dravya Edge")
         return
 
     encoded_logo = base64.b64encode(logo.read_bytes()).decode("ascii")
@@ -158,9 +158,9 @@ def render_app_header():
         </style>
 
         <div class="dravya-header">
-            <img src="data:image/png;base64,{encoded_logo}" alt="Dravya Wallstreet Edge logo">
+            <img src="data:image/png;base64,{encoded_logo}" alt="Dravya Edge logo">
             <div class="dravya-title">
-                <h1>Dravya Wallstreet Edge</h1>
+                <h1>Dravya Edge</h1>
                 <p>AI Powered Intraday Trading Workstation</p>
             </div>
         </div>
@@ -7565,7 +7565,7 @@ def _daily_candidate_snapshot_count(trading_day):
 def main():
 
     st.set_page_config(
-        page_title="Dravya Wallstreet Edge",
+        page_title="Dravya Edge",
         layout="wide"
     )
 

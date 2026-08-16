@@ -83,7 +83,7 @@ def send_test_alert() -> None:
 
     message = (
         "✅ TEST ALERT\n\n"
-        "Channel: Dravya Wallstreet Edge\n"
+        "Channel: Dravya Edge\n"
         "Purpose: Telegram channel delivery test\n"
         f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         "If you see this, the bot can post to the configured Telegram destination."
