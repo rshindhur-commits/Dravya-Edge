@@ -532,7 +532,34 @@ def _option_giveback_exit(trade_state, option_peak_mid):
 
 
 def volume_flush_enabled():
-    return _env_bool("EXIT_VOLUME_FLUSH_ENABLED", True)
+    """**Off.** It measured well against a synthetic stop and badly against the real one.
+
+    The first measurement gave every trade a 1.5 ATR hard stop rather than the
+    stop it actually carried. Real stops are tighter, and once the true level is
+    used the flush has nothing left to catch -- the stop already handles those
+    trades -- so all it adds is an early exit on positions that would have
+    recovered.
+
+    39 intraday trades, each on its own recorded stop:
+
+        arm            total    w/o best 3   better/worse   gave back   kept>=25%
+        the book      +443.67        --           --           53%         36%
+        flush only    +427.00    -399.54        12 / 19         42%         73%
+        floor only    +818.00     +31.83        17 / 14         32%         82%
+        combined      +757.00     -69.54        14 / 17         37%         82%
+
+    The floor alone wins every column, and is the only arm still positive after
+    its best three trades are removed. The flush is below the book it was meant
+    to improve.
+
+    Left in the code with the switch off rather than deleted: the pattern beat
+    every structural reversal definition tested -- swing break, lower low, EMA9
+    and EMA20 crosses, a 15-minute EMA -- so it is the best reversal detector
+    found here, and it may earn its place on a wider stop or a different
+    instrument. It does not earn it on this book.
+    """
+
+    return _env_bool("EXIT_VOLUME_FLUSH_ENABLED", False)
 
 
 def _volume_flush_reversal(df, latest, is_short):

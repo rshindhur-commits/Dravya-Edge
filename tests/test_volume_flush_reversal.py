@@ -29,6 +29,7 @@ def bar(close, open_, high, low, volume, atr=1.0):
 
 
 QUIET = frame([100.0] * 21)
+ON = {"EXIT_VOLUME_FLUSH_ENABLED": "true"}
 
 
 class TestItFires:
@@ -36,12 +37,14 @@ class TestItFires:
     def test_a_real_flush_against_a_call(self):
         """Red bar, 3x volume, range above 1 ATR."""
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=300.0)
-        assert _volume_flush_reversal(QUIET, latest, is_short=False) is True
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(QUIET, latest, is_short=False) is True
 
     def test_a_real_flush_against_a_put(self):
         """Mirrored: a green bar is the reversal when we are short."""
         latest = bar(close=102.0, open_=99.0, high=102.5, low=98.5, volume=300.0)
-        assert _volume_flush_reversal(QUIET, latest, is_short=True) is True
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(QUIET, latest, is_short=True) is True
 
 
 class TestWhatMustNotFireIt:
@@ -49,35 +52,42 @@ class TestWhatMustNotFireIt:
     def test_a_bar_in_our_favour_never_fires(self):
         """Heavy volume WITH the position is strength, not a reversal."""
         latest = bar(close=102.0, open_=99.0, high=102.5, low=98.5, volume=300.0)
-        assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
 
     def test_ordinary_drift_never_fires(self):
         """Red bar, but volume is normal -- this is the slow bleed, not a turn."""
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=105.0)
-        assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
 
     def test_a_small_bar_never_fires(self):
         """Heavy volume but the range is inside 1 ATR -- churn, not conviction."""
         latest = bar(close=99.5, open_=100.0, high=100.1, low=99.4, volume=300.0)
-        assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
 
     def test_volume_exactly_at_the_multiple_does_not_fire(self):
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=150.0)
-        assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
 
     @pytest.mark.parametrize("field", ["Close", "Open", "High", "Low", "Volume", "ATR"])
     def test_a_missing_field_never_fires(self, field):
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=300.0)
         latest[field] = None
-        assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
 
     def test_zero_atr_never_fires(self):
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=300.0, atr=0.0)
-        assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
 
     def test_an_empty_history_never_fires(self):
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=300.0)
-        assert _volume_flush_reversal(frame([]), latest, is_short=False) is False
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(frame([]), latest, is_short=False) is False
 
 
 class TestTheAverageExcludesTheCurrentBar:
@@ -88,15 +98,17 @@ class TestTheAverageExcludesTheCurrentBar:
         rule exactly when it matters most."""
         history = frame([100.0] * 20 + [10_000.0])
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=10_000.0)
-        assert _volume_flush_reversal(history, latest, is_short=False) is True
+        with mock.patch.dict(os.environ, ON):
+            assert _volume_flush_reversal(history, latest, is_short=False) is True
 
 
 class TestSwitches:
 
-    def test_enabled_by_default(self):
+    def test_disabled_by_default(self):
+        """Off: it loses to the floor alone once the real stop is used."""
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("EXIT_VOLUME_FLUSH_ENABLED", None)
-            assert volume_flush_enabled() is True
+            assert volume_flush_enabled() is False
 
     def test_disabled_never_fires(self):
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=300.0)
@@ -105,7 +117,7 @@ class TestSwitches:
 
     def test_the_multiple_is_configurable(self):
         latest = bar(close=99.0, open_=102.0, high=102.5, low=98.5, volume=120.0)
-        with mock.patch.dict(os.environ, {"EXIT_FLUSH_VOLUME_MULT": "1.1"}):
+        with mock.patch.dict(os.environ, dict(ON, EXIT_FLUSH_VOLUME_MULT="1.1")):
             assert _volume_flush_reversal(QUIET, latest, is_short=False) is True
-        with mock.patch.dict(os.environ, {"EXIT_FLUSH_VOLUME_MULT": "3.0"}):
+        with mock.patch.dict(os.environ, dict(ON, EXIT_FLUSH_VOLUME_MULT="3.0")):
             assert _volume_flush_reversal(QUIET, latest, is_short=False) is False
