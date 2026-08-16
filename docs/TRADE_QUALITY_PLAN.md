@@ -1054,6 +1054,103 @@ needs its own freshly-run control. This is §3 gate 4 — same days both arms �
 form the day list alone does not catch, because here the *code* moved rather than
 the calendar.
 
+### 5.9 2026-08-15 — Phases A, B and C largely collapsed into one day
+
+Six entry levers and the whole contract question were measured in a single
+session. The plan assumed these would take from mid-August to early October; the
+data to answer them already existed. **This section supersedes the phase dates in
+§5.1–§5.4 and states what replaces them.**
+
+#### The finding that reframes everything
+
+**The signal is real, and it is roughly a third of what options cost.**
+
+```
+edge, 2,027 candidates    +0.134R    95% CI [+0.069, +0.199]   without top 5: +0.118R
+options break even at     ~+0.40R
+```
+
+The interval excludes zero and it survives the strip that has killed every other
+result in this document. That single line reconciles three findings that looked
+contradictory: the direction carries genuine information, nothing predicts which
+individual trade wins, and the book still loses. The edge is thin, real, and
+spread evenly — so there is no subset to select and no filter to build.
+
+#### What was tested and returned null
+
+| test | result | tool |
+|---|---|---|
+| 56 single features, Bonferroni-corrected | nothing survives with its sign | `feature_sweep.py` |
+| 2,278 feature pairs, best quadrant | 54.3% on discovery, **31.1% on holdout against a 31.3% base** | `feature_combination_sweep.py` |
+| regularised model, all 68 features | discovery AUC 0.740, **holdout AUC 0.433** — below a coin flip | `feature_combination_sweep.py` |
+| inverting the trigger | **−0.955R, 1% win rate.** The direction is firmly right | `inverted_trigger.py` |
+| entry delay, 5 windows | all worse than entering at the signal | `entry_timing_sweep.py` |
+| limit-order pullback, 5 windows | all worse; the first version was lookahead and is documented as such | `entry_timing_sweep.py` |
+
+**Selection cannot fix a generator.** Every one of these tried to pick winners
+from a pool where the edge is uniformly thin.
+
+#### The two things that did work
+
+**Entry timing score, threshold 55 not 70.** 22,954 resolved candidates:
+
+```
+<55     n=10,437    36% win    (35% / 36% across halves)
+55-70   n= 7,190    26% win    (23% / 27%)
+70+     n= 5,327    25% win    (25% / 25%)
+```
+
+Monotonic, stable in both halves, and stable across **five of six market
+regimes** — so one global number is defensible and per-regime fitting is
+unnecessary. Shipped as the code default in `60c5cb1`. It is a *ceiling*: the
+score predicts inversely, so lowering it refuses more (5,327 → 12,517).
+
+**Contract choice, worth 6.5 points a trade.** Every contract on every recorded
+chain, 1,944 candidates:
+
+```
+0-10d OTM   -10.36%   <- what the app was buying
+11-25d ITM   -3.86%   <- best
+```
+
+**100% of 11-25d ITM contracts cost more than the $500 cap**, so the ranker's own
+preference was unbuyable. Cap raised to 1500, preferred DTE 7-21 → 14-25. No arm
+is positive, so this reduces the bleed rather than curing it — the best arm at
+−3.86% is close to simply paying the §1a toll, which is what a +0.13R signal
+cannot cover.
+
+#### Issue 3's fix failed
+
+`EXIT_BREAKEVEN_TRIGGER_R` 1.0 → 0.25 gave 222 trades against 191, identical mean
+R, and a worse total (−280.0% against −227.7%). Closing early frees the symbol to
+re-enter and the extra trades give the gain back. The median did improve, −2.0%
+against −3.0%.
+
+**Untried, and different in mechanism:** `PROFIT_LOCK_MIN_MFE_R` 1.0 → 0.5. It
+ratchets a stop rather than closing a position, so it cannot create the extra
+trades that broke the breakeven test. Both protections currently share a cliff at
+1.0R, leaving the 0.1–1.0R band — half the book — with nothing.
+
+#### What this does to the dates
+
+| gate | was | now |
+|---|---|---|
+| **A** — entry boundary | Aug 21 | **answered.** Boundary protective (§5.1), six further levers null, one threshold shipped |
+| **B** — does anything beat random enough to pay for options | Sep 18 | **largely answered no.** The four hypotheses were pre-empted; selection is closed |
+| **C** — instrument | Oct 9 | **answered for options.** No contract on these chains carries a +0.13R signal. Shares are out of scope by the operator's decision |
+
+**The decisive evidence arrives Monday, not in October.** Three changes are live —
+timing ceiling 55, cost cap 1500, preferred DTE 14-25 — and all three are
+attributable afterwards: timing refusals log `ENTRY_TIMING_TOO_EARLY`, and cost
+and DTE are captured per trade in `trade_review`.
+
+**What Gate D becomes.** If Monday's sessions show the surviving entries behaving
+like the 36% band and the contracts shifting to 11-25d, the frozen forward run of
+§5.4 can start in early September rather than October. If they do not, the honest
+conclusion is available immediately: a +0.13R signal cannot be traded through
+options, and the remaining question is whether the signal can be made larger —
+which nothing measured on 2026-08-15 suggests it can.
+
 ### 5.6 Standing rules for the period
 
 §3's four gates continue to apply. These are added, each because it was violated:
@@ -1075,3 +1172,252 @@ the calendar.
   exits firing early, and "47% of trades never move" — each because the first cut
   of a number was reported before its obvious confound was tested. The confound
   was cheap to check every time.
+
+## §5.10 — 2026-08-15 validation replay: the deployed changes land, and lose
+
+Old settings against new, sequentially, 10 sessions (2026-07-31 to 2026-08-13),
+real chains and real fills. `tools/replay_forward.py`.
+
+```
+                trades   mean opt   median   total    win    R mean   days
+old settings        91     -1.54%   -3.11%  -140.0%   29%    +0.113    10
+new settings       127     -1.69%   -2.74%  -214.1%   24%    +0.038    10
+
+old CI by day  [-3.13, +0.37]   -top5 -3.05%
+new CI by day  [-2.44, -0.90]   -top5 -2.50%
+```
+
+**The changes did what they were designed to do.** Contract DTE moved 9 → 16,
+into the 14-25 band. Contract cost moved $298 → $820, so the raised cap is
+reaching contracts it previously refused. Moneyness moved +2.5% OTM → −0.2%.
+Selection attempts fell 1,187 → 636, which is the timing ceiling at 55 refusing
+candidates as intended, while the fill rate rose 7.7% → 20% as the cost cap
+predicted.
+
+**And the result is worse.** Per trade the two are within noise of each other, but
+the new arm takes 40% more trades at that rate, so the total loss grows by half.
+The new arm's interval **excludes zero**; the old arm's does not. On this evidence
+the change is reliably negative rather than merely unproven.
+
+Two things it did not achieve. Moneyness landed at −0.2%, which is at the money,
+not the ITM the sweep measured as best (< −2%). And **spread was never a
+selection criterion in either arm** — see `REBUILD_PLAN.md` §13, where the
+tightest contract in a chain runs 1.70% against 2.18% for what the app accepts.
+The lever that matters most to per-trade economics is the one neither arm pulled.
+
+**Recommendation:** do not treat Monday as a test of these settings on their own.
+The comparison to make is against a selector that ranks by spread, which is
+cheaper to build than either change already deployed and is the only one with a
+measured effect on break-even.
+
+## §5.11 — Entry quality measured as the product is actually sold
+
+Every earlier measurement scored a **fixed entry-and-exit policy** and reported
+its average. That is not the product. The product is: the app gives an entry, the
+subscriber takes profit at their own level, and the app signals an exit only when
+the trade goes against them. Under that design the round-trip cost is close to
+irrelevant — a couple of percent on an instrument held for twenty or more.
+
+`tools/entry_quality.py` measures the right thing: buy at the ask, track forward,
+and record **how high the bid gets before the protective stop fires**. A level
+counts only if it was available before the stop, because after that the
+subscriber is out.
+
+The control is a **random entry on the same day, same symbol, same contract, same
+stop distance, and the same number of forward bars.** The horizon match matters:
+signals arrive later in the session, so an unmatched control would hold more clock
+and clear any level more often for that reason alone. Correcting that bias made
+the result worse for the app, not better.
+
+```
+arm                 n     +10%   +20%   +30%   +50%   +100%   median   stopped
+app entry        1,315     16%     6%     3%     2%      1%    +1.7%      58%
+random entry     6,569     21%     9%     5%     2%      1%    +2.0%      50%
+```
+
+**The app's entries are worse than random at every profit level**, and they get
+stopped out more often — 58% against 50%.
+
+Only **6% of signals ever offer the subscriber a chance to take 20%**. A random
+moment on the same contract offers it 9% of the time.
+
+### What this rules out and what it opens
+
+**Ruled out:** that transaction cost was hiding a good entry. Cost plays no part
+in this measurement. The entry is the problem on its own terms.
+
+**Opened, and this is the useful part:** the entries are not merely uninformative,
+they are **worse than random**. Something is being read backwards. That is
+consistent with two findings already in the repo — the entry timing score predicts
+inversely (§5.9), and `avoid_chasing` blocks candidates that lose three times the
+book average. Both say the app fires late in a move, after the easy part is gone,
+which is exactly when an immediate reversal is most likely and is why the stop
+rate is 8 points above random.
+
+A signal that is reliably worse than random contains information. The open
+question is whether it can be turned around without inverting the direction, which
+is already known to fail (1% win rate, §5.9).
+
+**Next test, on this metric rather than on average return:** entry delay was
+measured null against a fixed-exit average, which is a different question from
+whether waiting improves the chance of reaching +20%. It is worth re-running here.
+
+## §5.13 — The exit rules replayed on the real book, with real option prices
+
+`tools/exit_replay_live.py`. All 41 closed trades with an option ticker, replayed
+on **the traded contract's own 5-minute bars**. No Black-Scholes, no synthetic
+contract, no assumed spread. Every arm starts from the same recorded
+`option_entry_mid`, so the only thing that differs is the exit.
+
+Two contaminants were found and handled before reading anything.
+
+**The book's headline loss is one broken trade.** The 9-day SMCI orphan booked
+−27.45%, which is 43% of the entire recorded loss, from a position the system was
+never supposed to hold overnight. Every arm here exits it on day one, so leaving
+it in would credit these rules for fixing a bug rather than for exiting better.
+Excluding it and the one other multi-day trade:
+
+```
+rule           n     mean    -top5   median     total   win   hold  ROUNDTRIP
+ACTUAL        39   +1.34%   -0.71%   -0.22%    +52.4%   41%     --     48%
+ema9_like     39   -1.07%   -3.37%   -2.36%    -41.9%   38%    33m      9%
+atr_only      39   +2.09%   -4.02%   -2.06%    +81.4%   44%   154m     25%
+giveback_50   39   +2.45%   -1.05%   +2.59%    +95.5%   56%   106m      0%
+giveback_33   39   +2.66%   -0.32%   +2.86%   +103.8%   56%    92m      0%
+```
+
+**The real book was positive without the orphan.** +52.4% total rather than
+−63.9%. The app's recorded trades are close to break-even carried by a few
+winners — the median is −0.22% — not the disaster the raw total suggests.
+
+### What survives the top-5 strip, and what does not
+
+**Nothing does, on the profit figures.** Every arm including ACTUAL goes negative
+once five trades are removed from thirty-nine. The profit improvement from
++52.4% to +95.5% is real in this sample and **is not established** — 39 trades is
+too few, and 13% of them carry the result.
+
+**The round-trip rate does survive, and it is the number that matters here.**
+48% → 0% is a count over 20 events, not a mean over outliers, so it is not an
+artifact of a few large winners. Twenty trades were ever up 10% or more; under the
+current rules about ten of them finished at or below zero, and under a give-back
+rule none did.
+
+### The honest summary
+
+- **Profit effect: promising, unproven.** Do not quote the +43-point improvement
+  as a result.
+- **Gain protection: demonstrated.** The specific failure the operator described
+  — a winner turning into a loser — goes from half the winners to none, on real
+  option prices.
+- **`ema9_like` is the worst arm by total**, at −41.9%, which is consistent with
+  the live exits firing on MACD and EMA9 wiggles at a 21-minute median hold.
+
+The give-back rule should be judged on the protection it demonstrably provides,
+not on the profit swing it has not earned the right to claim.
+
+## §5.14 — Why there is no entry fix, and the two filters that do survive
+
+The question worth answering first: **if nothing fixes entry, is entry really the
+problem?** Yes, and the proof is that the app does *worse than nothing*. A random
+moment reaches +10% on the option 20.7% of the time; the app's entries reach it
+**15.6%**. Switching the entry logic off would improve the product. That is a
+negative signal, not an absent one.
+
+The reason no fix appeared: every previous test asked **"which candidates win"**.
+For a bought option that is the wrong question. A 50/50 trade that travels is a
+good option trade; a 60/40 trade that barely moves is a bad one. Direction and
+movement are different properties and only direction had ever been tested.
+
+`tools/entry_movement.py` scores conditions at the signal against **the share
+reaching +10%**, split by date.
+
+```
+                    DISCOVERY (< 2026-08-11)          HOLDOUT (>= 2026-08-11)
+condition      Q1    Q2    Q3    Q4    Q5        Q1    Q2    Q3    Q4    Q5
+minute       32.3  21.5  16.1  12.9   2.1      15.1  24.3  21.7   7.2   5.8
+range_today  24.7  23.7  17.2  15.1   4.2      11.8  25.0  17.1  13.2   7.1
+iv           20.4  33.3  15.1   3.2  12.5      38.2  10.5   2.6  14.5   8.4
+atr_pct      20.4   6.5  18.3  14.0  25.0      13.2  13.2  17.1  15.1  15.5
+ext_ema9     21.5  17.2  16.1  14.0  15.6      11.8  13.8  12.5  18.4  17.4
+rvol         15.1  17.2  20.4  20.4  11.5       8.6  21.1  13.2  17.8  13.5
+```
+
+**Two survive both halves, and they agree with each other.**
+
+- **Time of day.** The last two quintiles of the session collapse — 12.9% and
+  2.1% in discovery, 7.2% and 5.8% in holdout. Early entries run 21–32%.
+- **Range already used.** When the day's range is mostly spent, the rate falls to
+  4.2% and 7.1%. Both halves, same direction.
+
+These are the same fact seen twice: **late in the session the day's move has
+already happened, and there is nothing left for the option to capture.**
+
+**Four fail.** `iv` looked like the strongest single cell at 30.1% overall but is
+unstable — best quintile Q2 in discovery, Q1 in holdout, with the middle jumping
+around. `atr_pct` peaks at Q5 in discovery and is flat in holdout, which kills the
+"select for volatility" hypothesis in the simple form it was posed. `ext_ema9` and
+`rvol` are noise.
+
+### What the fix is worth, stated honestly
+
+Removing the bad quintiles lifts the rate from **15.6% to roughly 22%**. The
+random baseline is **20.7%**.
+
+**So the filter recovers the deficit and does not create an edge.** It stops the
+app doing something actively harmful; it does not make it better than chance. That
+is a real improvement to the product -- about 40% more signals that give the
+subscriber something to work with -- and it is not a trading edge, and should
+never be described as one.
+
+**Concrete rule:** do not open in the final third of the session, and do not open
+when the session's range is already largely spent. Both are computable at scan
+time from data the app already holds.
+
+## §6 — What this app is, stated by the operator and binding on future work
+
+Re-stated on 2026-08-16 after a session that repeatedly drifted away from it.
+
+**This is a signal-detection product.** It reads the market and tells a subscriber
+when to enter and when to get out. The subscriber holds the position and decides
+when to take profit. Round-trip cost is not the subject and is not to be
+reintroduced as a framing: it is already enforced inside the option gates as a
+spread ceiling and a cost cap, and re-deriving it as a reason the product cannot
+work is how three days were spent.
+
+The requirement, in the operator's terms:
+
+1. read the technicals, market conditions, indicators and news, and produce a
+   **correct entry signal**
+2. **detect the entry moment**, not merely the direction
+3. once in, **detect when the signal has changed**
+4. **do not give back profit that was made**
+5. **do not let a trade run into a large loss**
+6. **signal the exit** at the right moment
+7. **distinguish chop and small reversals from real ones** — know when to hold
+   and when to alert
+
+Item 7 is the hardest and is the one today's work actually addressed.
+
+### Where each item stands, 2026-08-16
+
+| | state |
+| --- | --- |
+| 1 entry signal | **weakest part.** Only the 14:05 cutoff survived testing. Entries reach +10% on the option 18.4% of the time against 20.7% for a random moment — still below chance. |
+| 1 news | **not implemented at all.** The app reads no news. Polygon serves it on the current plan (verified 2026-08-15) and nothing consumes it. |
+| 2 entry moment | seven experiments null. Delay, features, ranking, generators all failed. |
+| 3 signal changed | partly — the volume flush detects a turn; nothing detects a thesis breaking. |
+| 4 give back profit | **53% → 32%** of winners finishing at or below zero. |
+| 5 large loss | hard stop, unchanged, working. |
+| 6 exit timing | flush + floor, both measured on the live book. |
+| 7 chop vs real | **this is what the flush does.** Heavy volume with real range separates a conviction turn from drift; every structural definition tried (swing break, lower low, EMA9, EMA20, 15m EMA) fires after the money has gone. |
+
+### Two honest gaps
+
+**News is absent.** It is in the requirement, the data is available, and nothing
+in the pipeline touches it. That is the largest untouched item on this list.
+
+**Item 7 is measured on intraday trades only.** The flush is armed for MULTIDAY
+positions too, where a single heavy bar could end a multi-day thesis. There are 9
+MULTIDAY trades and 8 closed the same session, so there is nothing yet to measure
+it against. Revisit once `EXIT_MOMENTUM_ENABLED=false` lets them actually run.

@@ -677,6 +677,218 @@ def _timing_score_refused(row):
     return score >= timing_gate_max_score()
 
 
+def late_session_cutoff_et():
+    """No new position after this wall-clock time, ET. Empty string disables it.
+
+    **14:05**, chosen by the operator over the 13:05 the data prefers. Measured
+    on 1,231 archived candidates, scored on whether the option ever offered a 10%
+    gain before the protective stop:
+
+        10:25-11:25   21.5%
+        11:25-12:15   24.8%
+        12:15-13:05   19.1%
+        13:05-14:05    8.1%
+        14:05-15:35    4.5%
+
+    A random entry on the same contract with the same horizon reaches 10% about
+    20.7% of the time, so both afternoon bands sit far below chance. Late in the
+    session the day's move has already happened and there is nothing left for a
+    bought option to capture before the bell.
+
+    The two candidate cutoffs, and the trade-off between them:
+
+        cutoff    kept              discarded
+        13:05     755 at 21.7%      476 at 5.9%
+        14:05     988 at 18.4%      243 at 4.1%
+
+    **13:05 is the better number and 14:05 is the shipped one.** It blocks the
+    4.5% band, which is the worst of the session, while keeping the 8.1% band and
+    233 more candidates. At 18.4% the book still sits *below* the 20.7% random
+    baseline, so this setting narrows the deficit rather than closing it -- 13:05
+    is what closes it.
+
+    That is the operator's call and it is a reasonable one: 13:05 refuses new
+    positions for the last three hours of a six-and-a-half hour session, which is
+    a large amount of the day to give up on seven days of evidence. Monday adds
+    an eighth. If the afternoon band keeps underperforming, 13:05 is one variable
+    away.
+
+    A range-used filter measured slightly better in combination with 13:05 (714
+    kept at 22.3%) but needs the session high and low in the decision payload,
+    which are recorded now but not yet available for the archive period. The
+    clock carries most of the effect on its own.
+    """
+
+    # Deliberately `os.getenv` rather than `get_secret_env`, which folds an
+    # empty value into the default. Here empty is a *choice* -- it is how the
+    # operator turns the cutoff off -- and folding it into "13:05" would
+    # silently re-enable the rule someone had just disabled.
+    import os
+
+    value = os.getenv("ENTRY_LATE_SESSION_CUTOFF_ET")
+
+    return "14:05" if value is None else value
+
+
+def _late_session_refused(row):
+    """True when this candidate arrives too late in the session to be worth taking.
+
+    **MULTIDAY candidates are exempt.** The cutoff was measured on one question --
+    does the option reach +10% before its stop, *inside the session* -- and the
+    mechanism is that late in the day there is no session left to move in. A
+    position held for days does not have that problem, so the evidence does not
+    transfer to it.
+
+    This is not hypothetical. Five of the nine MULTIDAY trades in the book opened
+    between 14:19 and 14:48 on 2026-07-30, and without this exemption all five
+    would be refused on evidence that says nothing about them.
+    """
+
+    profile = str(
+        _row_get(row, "Holding Profile", "holding_profile", default="")
+    ).strip().upper()
+
+    if profile == "MULTIDAY":
+        return False
+
+    cutoff = (late_session_cutoff_et() or "").strip()
+
+    if not cutoff:
+        return False
+
+    raw = _row_get(row, "Data Timestamp ET", "data_timestamp_et")
+
+    if raw is None or str(raw).strip().lower() in {"", "nan", "none"}:
+        return False
+
+    text = str(raw).strip()
+
+    # "2026-07-28 19:56:00 EDT" -- take the clock field only. A timestamp we
+    # cannot parse must not silently refuse every candidate, so anything
+    # unexpected falls through to allowed.
+    parts = text.split()
+
+    if len(parts) < 2:
+        return False
+
+    clock = parts[1]
+
+    try:
+        hour, minute = int(clock[:2]), int(clock[3:5])
+        limit_hour, limit_minute = int(cutoff[:2]), int(cutoff[3:5])
+    except (ValueError, IndexError):
+        return False
+
+    return (hour * 60 + minute) > (limit_hour * 60 + limit_minute)
+
+
+def max_range_placement_pct():
+    """Retained for analysis only. **This filter does not work and is not wired in.**
+
+    The observation looked damning: across 41 live trades the median entry sat
+    **68% of the way into the session's range** in the trade's own direction --
+    buying near the high on calls, near the low on puts. That is the textbook
+    description of chasing, and it was expected to be the entry defect.
+
+    It is not. Scored on whether the option ever offered a 10% gain, placement
+    carries no signal at all:
+
+        32-62%   15.4%      78-84%   16.3%
+        62-71%   18.7%      84-100%  14.2%
+        71-78%   13.4%
+
+    Refusing above 80% keeps 825 candidates at 15.5% and discards 406 at
+    **15.8%** -- the ones thrown away do slightly *better*. Combined with the
+    13:05 cutoff it actively hurts: 20.8% against 21.7% for the clock alone,
+    while discarding 216 more candidates to get there.
+
+    So "the app buys at 68% of the range" is true and is not a cause. It
+    describes where entries land without predicting what they do, and a filter
+    built on it would cost trades and buy nothing. `Session High` and
+    `Session Low` are still recorded in the payload, because the measurement
+    should be repeatable on a larger sample later.
+
+    Kept as a function so the refutation has somewhere to live. Wiring it into
+    `evaluate_entry_gate` would make the book worse.
+    """
+
+    from app.config.settings import get_float_env
+
+    return get_float_env("ENTRY_MAX_RANGE_PLACEMENT_PCT", 100.0)
+
+
+def min_trade_quality_score():
+    """Trade Quality Score a candidate must reach. **48.** Zero disables it.
+
+    TQS has been computed and published on every candidate for months and has
+    never gated anything. It is the weighted blend already in `trade_ranker`:
+    setup 0.25, timing 0.20, trend 0.20, relative strength 0.10, plus option
+    quality, liquidity and leverage. Every term is known at the scan, so there is
+    no lookahead in using it.
+
+    **It is the only entry signal in this project that survives a holdout split.**
+    Seven experiments -- 56 single features, 2,278 pairs, a regularised model,
+    trigger inversion, entry delay, limit-order pullback, and eleven bar and
+    market-context features -- all returned null. 1,315 candidates scored on
+    whether the option ever offered a 10% gain before its stop:
+
+        quintile          option +10%   underlying 2R   median spread
+        Q1  26-37             7.6%          20.9%           2.43%
+        Q2  37-40             6.8%          25.5%           1.92%
+        Q3  40-42            12.9%          31.2%           2.17%
+        Q4  42-48             9.9%          25.5%           1.62%
+        Q5  48-83            41.4%          36.9%           1.32%
+
+    **Part of that is a contract effect and is stated rather than hidden.** Median
+    spread halves across the quintiles, so a high score partly means a better
+    contract was available, and the option column overstates how much better the
+    *entry* is. The underlying-2R column is the control -- contract quality cannot
+    touch it -- and it still rises, monotonically in the holdout half: 16.0, 17.2,
+    24.5, 30.7, 40.2. Both effects are real and both are known at scan time, so a
+    gate on the blend captures both legitimately.
+
+    On the trades actually taken it is far less brutal than the quintiles imply,
+    because the option gates already reject 98% of candidates. Of 27 trades
+    matched to a score it drops three -- NVDA at -$79.50 and two that booked
+    exactly zero -- keeps all eight winners, and takes the total from +$118.50 to
+    +$198.00.
+
+    **48 is not a tuned number.** Thresholds of 44, 46, 48 and 52 give identical
+    results on the live book: nothing sits between 40.6 and 48, so the cut lands
+    in a gap rather than on a fitted edge.
+    """
+
+    from app.config.settings import get_float_env
+
+    return get_float_env("ENTRY_MIN_TRADE_QUALITY", 48.0)
+
+
+def _trade_quality_refused(row):
+    """True when the candidate scores below the quality bar.
+
+    A missing score never refuses. TQS is written by `rank_candidates`, and a
+    caller that has not run the ranker would otherwise have its whole book
+    rejected by a field it never populated.
+    """
+
+    minimum = min_trade_quality_score()
+
+    if minimum <= 0:
+        return False
+
+    raw = _row_get(row, "Trade Quality Score", "trade_quality_score")
+
+    if raw is None or str(raw).strip().lower() in {"", "nan", "none"}:
+        return False
+
+    score = safe_float(raw, default=None)
+
+    if score is None:
+        return False
+
+    return score < minimum
+
+
 def evaluate_entry_gate(
     row,
     config: EntryGateConfig,
@@ -746,6 +958,14 @@ def evaluate_entry_gate(
     if _timing_score_refused(row):
 
         return False, "ENTRY_TIMING_TOO_EARLY"
+
+    if _late_session_refused(row):
+
+        return False, "ENTRY_TOO_LATE_IN_SESSION"
+
+    if _trade_quality_refused(row):
+
+        return False, "TRADE_QUALITY_BELOW_THRESHOLD"
 
     if option_quality < config.min_option_quality:
 

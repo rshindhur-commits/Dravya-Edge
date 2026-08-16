@@ -205,7 +205,28 @@ def daily_context(symbol, force_refresh=False, now=None):
         print(f"[DAILY CONTEXT WARNING] {symbol}: {exc}")
         context = empty_context("DAILY_CONTEXT_ERROR")
 
-    _cache[key] = context
+    # Only a real context is cached. Caching the failure was the whole defect:
+    # the key is (symbol, trading day), so one empty fetch pinned UNKNOWN for
+    # that symbol for the rest of the session and no later scan ever retried.
+    #
+    # The archive is unambiguous about the cost. Across 2,266 directional
+    # candidates `Daily Trend` reads UNKNOWN on 1,882 of 1,883, and
+    # `Daily ATR %` and `Daily Realised Vol %` are populated on **one**. Called
+    # directly the same code returns BULL with a 3.08% ATR and 30.5% realised
+    # vol, so nothing was wrong with the fetch or the maths -- the first call of
+    # each session failed, most likely in premarket before the day's aggregate
+    # existed, and every subsequent call was served the cached failure.
+    #
+    # It did NOT disable `iv_richness`, which was the first guess and is wrong:
+    # that gate falls back to intraday ATR and records `IV_RV_SOURCE` as
+    # INTRADAY_ATR on 1,882 rows against DAILY on 1. It has been evaluating
+    # throughout, on the weaker of its two inputs. Fixing this promotes it to the
+    # daily source it was designed around.
+    #
+    # Retrying costs one Polygon call per symbol per scan in the failure case
+    # only, and stops as soon as one succeeds.
+    if context.get("daily_trend") != "UNKNOWN":
+        _cache[key] = context
 
     return context
 

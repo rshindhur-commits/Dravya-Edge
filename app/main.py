@@ -1079,6 +1079,30 @@ def _safe_metric(df, column):
         return None
 
 
+def _session_extremes(df):
+    """(high, low) of the session so far, from the intraday frame.
+
+    Only what has already printed. The frame passed here ends at the decision
+    candle, so there is no way for a later bar to leak in -- which matters,
+    because a placement measured against the *whole* day's range would be
+    hindsight and would make every entry look well placed.
+    """
+
+    if df is None or not len(df):
+        return None, None
+
+    try:
+        high = float(df["High"].max())
+        low = float(df["Low"].min())
+    except (KeyError, TypeError, ValueError):
+        return None, None
+
+    if high != high or low != low or high <= low:
+        return None, None
+
+    return round(high, 4), round(low, 4)
+
+
 def _decision_candle_snapshot(df):
 
     if df is None or df.empty:
@@ -6243,9 +6267,20 @@ def _run_scanner_impl():
 
 
 
+            # The session's range so far, so the entry gate can tell where in
+            # today's move this candidate sits. Measured on 41 live trades the
+            # median entry landed 68% of the way into the range in the trade's
+            # own direction -- buying near the high on calls and near the low on
+            # puts. Nothing in the payload could see that before now.
+            session_high, session_low = _session_extremes(df_5m)
+
             result_row = {
 
                 "Symbol": symbol,
+
+                "Session High": session_high,
+
+                "Session Low": session_low,
 
                 "__Regression Market Snapshot": _regression_market_snapshot(
                     df_5m,

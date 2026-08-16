@@ -407,6 +407,235 @@ def trend_still_valid(df, direction, ignore=None):
     return bool(vwap_ok and ema_ok and rsi_ok)
 
 
+def option_giveback_arm_pct():
+    """Gain on the option, in percent, before give-back protection engages.
+
+    **25.** This is a floor on noise, not a profit target, and the number was
+    arrived at by getting it wrong first. Armed at 10 it looked excellent on the
+    round-trip count and was useless: on a real PLTR call it exited at +4.8% out
+    of a trade that went on to +69.3%, because giving back half of a 16% peak
+    means selling at 8%, and 16% on an option is one bad print rather than a
+    move.
+
+    Measured on the 39 single-day trades in the live book, priced on the traded
+    contract's own bars:
+
+        arm at     round-trip     big winners kept
+        (app)          48%              9%
+        10%             5%             18%
+        25%            24%             55%
+        40%            29%             64%
+
+    Round-trip is, of trades ever up 10%, the share finishing at or below zero.
+    Big-winners-kept is, of trades that reached +25%, how often the rule was
+    still holding at +25% or better. They pull against each other -- exiting
+    instantly scores a perfect round-trip and keeps nothing -- so 25 is chosen as
+    the balance, halving the give-back while keeping six times as many winners
+    running as the book does today.
+    """
+
+    return _env_float("EXIT_OPTION_GIVEBACK_ARM_PCT", 25.0)
+
+
+def option_giveback_keep():
+    """Share of the peak option gain the rule tries to hold on to. 0.5."""
+
+    return _env_float("EXIT_OPTION_GIVEBACK_KEEP", 0.5)
+
+
+def option_breakeven_arm_pct():
+    """Gain at which the position is no longer allowed to become a loss. 10."""
+
+    return _env_float("EXIT_OPTION_BREAKEVEN_ARM_PCT", 10.0)
+
+
+def _giveback_floor(peak_gain):
+    """The lowest gain this trade may fall to, or None while unprotected.
+
+    Two levels, because one cannot do both jobs.
+
+    Arming a *proportional* give-back at a small gain destroys winners: at 15%
+    with half kept it books -7.3% total across the live trades and keeps only 18%
+    of the trades that reached +25%, because an option wobbling between +12% and
+    +20% is noise and half of a small peak sits inside it.
+
+    Leaving small gains unprotected entirely is the hole the operator found: a
+    trade up 20% that reverses has nothing but the hard stop beneath it.
+
+    A **breakeven floor** resolves it. It is far looser than a proportional one --
+    it only fires if the whole gain is gone -- so it survives the wobble while
+    still refusing to let a winner become a loser.
+
+        rule                  total    round-trip   kept >= 25%
+        the book today       +52.4%       48%            9%
+        arm 15, keep half     -7.3%       19%           18%
+        arm 25, keep half    +98.7%       24%           55%
+        two-tier 10 / 25    +143.4%       29%           45%
+
+    So: past 10%, never let it go red. Past 25%, never give back more than half.
+    The second floor always sits above the first by the time it engages, so they
+    ratchet rather than fight.
+
+    39 trades is thin and the profit figures are not established -- the top-5
+    strip is still negative at -1.56%. The round-trip and winners-kept columns are
+    counts rather than means and are the part worth trusting.
+    """
+
+    if peak_gain is None:
+        return None
+
+    if peak_gain >= option_giveback_arm_pct():
+        return peak_gain * option_giveback_keep()
+
+    if peak_gain >= option_breakeven_arm_pct():
+        return 0.0
+
+    return None
+
+
+def _option_giveback_exit(trade_state, option_peak_mid):
+    """(should_exit, peak_gain_pct, floor_pct) for the option give-back rule.
+
+    Reads the option directly rather than converting through R. The subscriber
+    watches premium, and the conversion is contract-specific enough that a rule
+    expressed in R would arm at a different real gain on every trade.
+
+    Silent no-op when the option prices are absent, so a caller that does not
+    carry them is unaffected rather than broken.
+    """
+
+    if not trade_state:
+        return False, None, None
+
+    entry_mid = _float_or_none(
+        trade_state.get("option_entry_mid")
+        or trade_state.get("option_mid")
+    )
+    current_mid = _float_or_none(
+        trade_state.get("option_current_mid")
+        or trade_state.get("option_mid_price")
+    )
+
+    if not entry_mid or entry_mid <= 0 or not current_mid or current_mid <= 0:
+        return False, None, None
+
+    peak = option_peak_mid if option_peak_mid and option_peak_mid > 0 else current_mid
+    peak_gain = (peak - entry_mid) / entry_mid * 100.0
+    current_gain = (current_mid - entry_mid) / entry_mid * 100.0
+
+    floor_gain = _giveback_floor(peak_gain)
+
+    if floor_gain is None:
+        return False, peak_gain, None
+
+    return current_gain <= floor_gain, peak_gain, floor_gain
+
+
+def volume_flush_enabled():
+    return _env_bool("EXIT_VOLUME_FLUSH_ENABLED", True)
+
+
+def volume_flush_arm_pct():
+    """Gain the trade must already show before a reversal may close it. 10.
+
+    The flush is a reversal detector and it was switched off once, correctly,
+    because armed on every trade it books below the book it was meant to improve.
+    The damage was entirely on positions that never gained: it cut them early,
+    where the hard stop would have handled them.
+
+    Arming it only once there is profit to protect removes that failure and keeps
+    the benefit. 39 intraday trades, each on its own recorded stop:
+
+        arm                    total   w/o best 3   gave back   kept>=25%
+        the book             +443.67      +0.00        53%         36%
+        floor only           +818.00     +31.83        32%         82%
+        floor + flush @10    +902.00     +75.46        32%         82%
+        floor + flush @25    +873.00     +46.46        32%         82%
+        floor + flush @40    +812.00     +12.83        32%         82%
+        floor + flush always +757.00     -69.54        37%         82%
+
+    Armed at 10 it wins every column, and more than doubles floor-only on the
+    strip that removes the best three trades -- the test that has killed most
+    results in this project.
+
+    **This is what answers "the trend reversed, get me out".** The floor alone
+    requires a trade up 40% to fall back to 20% before it acts. With the flush
+    armed, a genuine reversal -- a bar closing against the position on heavy
+    volume with real range -- ends it at once, at any profit above 10%, without
+    waiting for half the gain to disappear.
+    """
+
+    return _env_float("EXIT_FLUSH_ARM_PCT", 10.0)
+
+
+def _volume_flush_reversal(df, latest, is_short):
+    """A bar closing against the position, on conviction volume, with real range.
+
+    The reversal signal that actually fires in time. Every structural definition
+    tested -- swing break, lower low, EMA9 and EMA20 crosses, a 15-minute EMA --
+    fires *after* the profit has gone, because they all confirm a turn that has
+    already happened. Measured on the live book by the share of trades that were
+    up 10% and finished at or below zero:
+
+        swing break                48%
+        lower low                  52%
+        EMA9 cross (15m)           62%
+        the book as it runs today  48%
+        volume flush               33%
+        the two-tier P&L floor     33%
+
+    Volume is what makes the difference. Heavy volume against the position prints
+    on the bar the turn happens, not three bars later, so it is the one pattern
+    that catches a reversal while there is still profit to protect.
+
+    Three conditions, all required, so ordinary drift cannot trigger it:
+
+        direction   the bar closes against us -- red on a call, green on a put
+        conviction  volume above EXIT_FLUSH_VOLUME_MULT times its own average
+        size        the bar's range exceeds one ATR
+
+    **Measured on 5-minute bars; the engine runs this on the 15-minute frame.**
+    Both tests are relative to the bar's own history rather than absolute, so
+    they translate, but a 15-minute bar is a rarer and larger event and this will
+    fire less often than the measurement implies. That difference is unmeasured
+    and is the first thing to check against Monday's exits.
+    """
+
+    if not volume_flush_enabled():
+        return False
+
+    close = _float_or_none(latest.get("Close"))
+    open_ = _float_or_none(latest.get("Open"))
+    high = _float_or_none(latest.get("High"))
+    low = _float_or_none(latest.get("Low"))
+    volume = _float_or_none(latest.get("Volume"))
+    atr = _float_or_none(latest.get("ATR"))
+
+    if None in (close, open_, high, low, volume, atr) or atr <= 0:
+        return False
+
+    against = (close > open_) if is_short else (close < open_)
+
+    if not against:
+        return False
+
+    if (high - low) <= atr:
+        return False
+
+    lookback = int(_env_float("EXIT_FLUSH_VOLUME_LOOKBACK", 20))
+
+    try:
+        recent = df["Volume"].tail(lookback + 1).head(lookback)
+        average = float(recent.mean())
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    if not average or average != average or average <= 0:
+        return False
+
+    return volume > _env_float("EXIT_FLUSH_VOLUME_MULT", 1.5) * average
+
+
 def _momentum_exits_allowed(holding_profile, bars_in_trade):
     """Whether minute-scale invalidation may close this position yet.
 
@@ -865,6 +1094,62 @@ def evaluate_exit(
             exit_signal = True
             exit_reason = primary_exit["reason"]
 
+    # The option's own high-water mark, ratcheted the same way `highest_price`
+    # is, because the give-back rule needs a peak that survives between scans.
+    option_peak_mid = _float_or_none(
+        (trade_state or {}).get("option_peak_mid")
+    )
+    option_current_mid = _float_or_none(
+        (trade_state or {}).get("option_current_mid")
+        or (trade_state or {}).get("option_mid_price")
+    )
+
+    if option_current_mid and option_current_mid > 0:
+        option_peak_mid = (
+            option_current_mid if option_peak_mid is None
+            else max(option_peak_mid, option_current_mid)
+        )
+
+    if not exit_signal:
+
+        giveback_hit, peak_gain, floor_gain = _option_giveback_exit(
+            trade_state,
+            option_peak_mid,
+        )
+
+        if giveback_hit:
+
+            exit_reasons.append(_exit_diagnostic(
+                "PROFIT_PROTECTION",
+                f"Option giveback: {peak_gain:.0f}% peak fell through {floor_gain:.0f}%",
+            ))
+            primary_exit = _select_primary_exit(exit_reasons)
+            exit_signal = True
+            exit_reason = primary_exit["reason"]
+            profit_protection_active = True
+
+    # The reversal half of the pair. The floor catches a slow bleed the flush
+    # never sees; the flush catches a sharp turn before the floor is reached.
+    # Neither covers the other's case, which is why both are on.
+    if not exit_signal:
+
+        _hit, flush_peak, _floor = _option_giveback_exit(trade_state, option_peak_mid)
+
+        # Only once there is a gain to protect. Armed on every trade the flush
+        # books below the book -- the damage is all on positions that never
+        # gained, where the hard stop is the right tool.
+        if (flush_peak is not None
+                and flush_peak >= volume_flush_arm_pct()
+                and _volume_flush_reversal(df, latest, is_short)):
+
+            exit_reasons.append(_exit_diagnostic(
+                "PROFIT_PROTECTION",
+                f"Reversal on heavy volume, {flush_peak:.0f}% peak protected",
+            ))
+            primary_exit = _select_primary_exit(exit_reasons)
+            exit_signal = True
+            exit_reason = primary_exit["reason"]
+
     momentum_exits_allowed = _momentum_exits_allowed(holding_profile, bars_in_trade)
 
     if momentum_exits_allowed:
@@ -1138,6 +1423,7 @@ def evaluate_exit(
         # definition, so nothing else records it.
         "current_price": _round_float(current_price),
         "highest_price": _round_float(highest_price),
+        "option_peak_mid": _round_float(option_peak_mid),
         "lowest_price": _round_float(lowest_price),
         "bars_in_trade": int(bars_in_trade),
         "partial_profit_taken": partial_profit_taken,
