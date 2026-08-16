@@ -1315,3 +1315,61 @@ rule none did.
 
 The give-back rule should be judged on the protection it demonstrably provides,
 not on the profit swing it has not earned the right to claim.
+
+## §5.14 — Why there is no entry fix, and the two filters that do survive
+
+The question worth answering first: **if nothing fixes entry, is entry really the
+problem?** Yes, and the proof is that the app does *worse than nothing*. A random
+moment reaches +10% on the option 20.7% of the time; the app's entries reach it
+**15.6%**. Switching the entry logic off would improve the product. That is a
+negative signal, not an absent one.
+
+The reason no fix appeared: every previous test asked **"which candidates win"**.
+For a bought option that is the wrong question. A 50/50 trade that travels is a
+good option trade; a 60/40 trade that barely moves is a bad one. Direction and
+movement are different properties and only direction had ever been tested.
+
+`tools/entry_movement.py` scores conditions at the signal against **the share
+reaching +10%**, split by date.
+
+```
+                    DISCOVERY (< 2026-08-11)          HOLDOUT (>= 2026-08-11)
+condition      Q1    Q2    Q3    Q4    Q5        Q1    Q2    Q3    Q4    Q5
+minute       32.3  21.5  16.1  12.9   2.1      15.1  24.3  21.7   7.2   5.8
+range_today  24.7  23.7  17.2  15.1   4.2      11.8  25.0  17.1  13.2   7.1
+iv           20.4  33.3  15.1   3.2  12.5      38.2  10.5   2.6  14.5   8.4
+atr_pct      20.4   6.5  18.3  14.0  25.0      13.2  13.2  17.1  15.1  15.5
+ext_ema9     21.5  17.2  16.1  14.0  15.6      11.8  13.8  12.5  18.4  17.4
+rvol         15.1  17.2  20.4  20.4  11.5       8.6  21.1  13.2  17.8  13.5
+```
+
+**Two survive both halves, and they agree with each other.**
+
+- **Time of day.** The last two quintiles of the session collapse — 12.9% and
+  2.1% in discovery, 7.2% and 5.8% in holdout. Early entries run 21–32%.
+- **Range already used.** When the day's range is mostly spent, the rate falls to
+  4.2% and 7.1%. Both halves, same direction.
+
+These are the same fact seen twice: **late in the session the day's move has
+already happened, and there is nothing left for the option to capture.**
+
+**Four fail.** `iv` looked like the strongest single cell at 30.1% overall but is
+unstable — best quintile Q2 in discovery, Q1 in holdout, with the middle jumping
+around. `atr_pct` peaks at Q5 in discovery and is flat in holdout, which kills the
+"select for volatility" hypothesis in the simple form it was posed. `ext_ema9` and
+`rvol` are noise.
+
+### What the fix is worth, stated honestly
+
+Removing the bad quintiles lifts the rate from **15.6% to roughly 22%**. The
+random baseline is **20.7%**.
+
+**So the filter recovers the deficit and does not create an edge.** It stops the
+app doing something actively harmful; it does not make it better than chance. That
+is a real improvement to the product -- about 40% more signals that give the
+subscriber something to work with -- and it is not a trading edge, and should
+never be described as one.
+
+**Concrete rule:** do not open in the final third of the session, and do not open
+when the session's range is already largely spent. Both are computable at scan
+time from data the app already holds.
