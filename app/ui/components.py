@@ -66,9 +66,12 @@ def operator_bar(title: str, pills):
         )
         for text, tone in pills
     )
+    # The pill group needs a class of its own: an unclassed div is a flex item
+    # that cannot shrink past its widest nowrap pill, which is what pushed the
+    # bar off the side of a phone screen.
     st.markdown(
         f'<div class="op-bar"><div class="op-bar-title">{escape(str(title))}</div>'
-        f'<div>{rendered}</div></div>',
+        f'<div class="op-pills">{rendered}</div></div>',
         unsafe_allow_html=True,
     )
 

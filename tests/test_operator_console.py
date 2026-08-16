@@ -261,3 +261,55 @@ def test_a_deliberately_disabled_writer_reads_as_off():
                  FakeContext(db_state="OFF"))}
 
     assert cells["DB writes"] == ("OFF", "bad")
+
+
+def _capture(module, call):
+    """Run `call` with the module's streamlit swapped for a recorder."""
+
+    rendered = []
+    module.st = type("Stub", (), {
+        "markdown": staticmethod(lambda html, **kwargs: rendered.append(html))
+    })
+    try:
+        call()
+    finally:
+        import streamlit
+        module.st = streamlit
+
+    return rendered
+
+
+def test_the_operator_bar_gives_its_pills_a_class_they_can_wrap_in():
+    """A phone is narrower than the title plus every pill.
+
+    Pills are nowrap by design, so a status never splits mid-phrase. That makes
+    the pill group a floor the flex row cannot shrink under, and as an unclassed
+    div it stayed one unbreakable item -- so the bar ran off the side of the
+    screen instead of moving the pills to a line of their own.
+    """
+
+    rendered = _capture(components, lambda: components.operator_bar(
+        "Operator Console",
+        [("2026-08-16", "post"), ("POST-MARKET", "post"),
+         ("WORKER ENGINE DOWN", "bad")],
+    ))
+
+    assert 'class="op-pills"' in rendered[0]
+    assert "WORKER ENGINE DOWN" in rendered[0]
+
+
+def test_every_row_carrying_a_nowrap_child_is_allowed_to_wrap():
+    """The stylesheet half of the same fix.
+
+    .pos-head is here too. It stayed off the phone screenshot only because the
+    book was empty; a symbol, its contract line and the R figure share that row
+    as soon as a position opens.
+    """
+
+    from app import dashboard
+
+    css = _capture(dashboard, dashboard._inject_compact_dashboard_css)[0]
+
+    for selector in (".op-bar {", ".op-pills {", ".pos-head {"):
+        block = css.split(selector, 1)[1].split("}", 1)[0]
+        assert "flex-wrap: wrap" in block, f"{selector} cannot wrap"

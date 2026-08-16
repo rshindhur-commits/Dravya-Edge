@@ -117,7 +117,7 @@ if str(ROOT_DIR) not in sys.path:
 _HEADER_CSS = """<style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
 
-  .de-header { display:flex; align-items:center; gap:22px; width:100%;
+  .de-header { display:flex; align-items:center; flex-wrap:wrap; gap:22px; width:100%;
     padding:14px 2px 18px;
     /* .block-container's top padding is trimmed to 1.3rem, under the ~3.75rem
        Streamlit reserves for its fixed toolbar, and this is the first element
@@ -5356,6 +5356,12 @@ def _inject_compact_dashboard_css():
             display: flex;
             align-items: center;
             justify-content: space-between;
+            /* A flex item will not shrink below its content's min-content
+               width, and a pill is nowrap by design so a status never splits
+               mid-phrase. Without wrap the pill group is therefore a floor the
+               row cannot go under, and on a phone the bar runs off the page
+               rather than moving the pills to a line of their own. */
+            flex-wrap: wrap;
             gap: 0.6rem;
             border: 1px solid rgba(148, 163, 184, 0.25);
             border-radius: 10px;
@@ -5368,6 +5374,15 @@ def _inject_compact_dashboard_css():
             font-size: 0.95rem;
             font-weight: 800;
             letter-spacing: 0.02em;
+            min-width: 0;
+        }
+
+        .op-pills {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.35rem;
+            min-width: 0;
         }
 
         .op-pill {
@@ -5397,6 +5412,10 @@ def _inject_compact_dashboard_css():
             display: flex;
             align-items: baseline;
             justify-content: space-between;
+            /* Same guard as .op-bar. This one is only invisible today because
+               the book is empty -- a long symbol and its contract line share a
+               row with the R figure. */
+            flex-wrap: wrap;
             gap: 0.5rem;
         }
 
