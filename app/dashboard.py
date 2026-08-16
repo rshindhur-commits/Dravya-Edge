@@ -5344,7 +5344,7 @@ def _inject_compact_dashboard_css():
             margin-top: 0.18rem;
             font-size: 0.76rem;
             font-weight: 650;
-            color: #475569;
+            color: #cbd5e1;
         }
 
         /* Operator console. Reuses the compact-card tones so the Trading page
@@ -5492,24 +5492,16 @@ def _inject_compact_dashboard_css():
         div[data-testid="stSidebar"] .caption,
         div[data-testid="stAppViewContainer"] small,
         div[data-testid="stAppViewContainer"] .caption {
-            color: #475569 !important;
+            /* Unconditional, and it has to stay that way. This used to be the
+               slate #475569 with a @media (prefers-color-scheme: dark) block
+               below lifting it to #cbd5e1. That worked only while the theme
+               followed the same signal the media query does. .streamlit/
+               config.toml now pins base="dark", so a reader whose OS is set to
+               light would have taken the light branch -- dark slate captions on
+               dark navy -- while the page stayed dark around them. */
+            color: #cbd5e1 !important;
             opacity: 1 !important;
             font-weight: 600 !important;
-        }
-
-        @media (prefers-color-scheme: dark) {
-            div[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-            div[data-testid="stSidebar"] [data-testid="stCaptionContainer"] *,
-            div[data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"],
-            div[data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"] *,
-            div[data-testid="stSidebar"] small,
-            div[data-testid="stSidebar"] .caption,
-            div[data-testid="stAppViewContainer"] small,
-            div[data-testid="stAppViewContainer"] .caption,
-            .download-status-note {
-                color: #cbd5e1 !important;
-                opacity: 1 !important;
-            }
         }
 
         div[data-testid="stToggle"] label,
