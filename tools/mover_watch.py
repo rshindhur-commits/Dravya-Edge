@@ -35,11 +35,24 @@ at all:
 
 Names already in the watchlist are excluded: the question is what to ADD.
 
-## Cost
+## Cost, counted rather than estimated
 
-Each candidate that produces an entry signal costs roughly 150 Polygon requests
-to price its chain. A dozen movers is a few thousand requests, which is why this
-is post-close only and why `--top` defaults low. `--dry-run` costs one request.
+Every entry signal prices the chain, and that is **72 option-quote requests per
+signal** -- `SelectionConfig.max_priced_contracts`. Measured end to end on AAOI,
+2026-08-14:
+
+    cadence  signals  requests   verdict
+    5m            15      1081   CHAIN TOO WIDE, best 4.40%, needs 6%
+    15m            4       288   CHAIN TOO WIDE, best 4.55%, needs 6%
+
+**The 15-minute grid costs a quarter as much and returns the same answer**, so it
+is the default here. `mover_check.py` keeps the 5-minute grid for when a single
+symbol is being examined closely and precision is worth the quota.
+
+Budget roughly **300 requests per mover that signals**, and none for one that
+does not. A `--top 10` night is typically 1,000-3,000 requests and about 10,000
+in the worst case where every name signals all day. `--dry-run` costs exactly
+one.
 """
 
 import argparse
@@ -288,7 +301,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--day", default=None, help="YYYY-MM-DD, default today")
     parser.add_argument("--top", type=int, default=10)
-    parser.add_argument("--cadence", type=int, default=5)
+    # 15 rather than 5: a quarter of the quota for the same verdict, measured
+    # on AAOI above. This runs nightly and unattended, so the default should
+    # be the cheap one.
+    parser.add_argument("--cadence", type=int, default=15)
     parser.add_argument("--min-move", type=float, default=MIN_MOVE_PCT)
     parser.add_argument("--dry-run", action="store_true",
                         help="print the shortlist and stop, costing one request")
