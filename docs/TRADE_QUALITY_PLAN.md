@@ -630,6 +630,11 @@ enclosing question is already answered *no*.
 |---|---|---|---|
 | `OPTION_MAX_SPREAD_PCT` | 3 | **2** | §1.4b, +2.33sd, holdout positive |
 
+> **Superseded 2026-08-16 — this row now says the opposite of what is deployed.**
+> Re-measured under the exit rules and the contract selector shipped that day, 3
+> beats 2 on every column (−16.8% against −144.2% total). See **§7.3**, which
+> states why the two measurements disagree and what would send it back to 2.
+
 `OPTION_MAX_CONTRACT_COST` was checked on 2026-08-13 and is **already 500**;
 §1.1 was applied on 2026-08-09 and needs nothing. An earlier draft of this
 section listed it as still at 1200, which was wrong.
@@ -1421,3 +1426,187 @@ in the pipeline touches it. That is the largest untouched item on this list.
 positions too, where a single heavy bar could end a multi-day thesis. There are 9
 MULTIDAY trades and 8 closed the same session, so there is nothing yet to measure
 it against. Revisit once `EXIT_MOMENTUM_ENABLED=false` lets them actually run.
+
+## §7 — Deployed 2026-08-16: the five rules, the environment they need, and what Monday tests
+
+Merged `Claude_POA` → `main` and deployed to Render and Streamlit on 2026-08-16.
+26 commits, 1,256 tests passing, 2 skipped. This section is the durable record of
+**what changed, what it was measured on, and what would falsify it** — written
+the day it shipped so that a later "what changed?" does not have to be
+reconstructed from git.
+
+### 7.1 The five changes
+
+| | change | measured on | expected effect |
+|---|---|---|---|
+| 1 | **late-session cutoff 14:05** (`entry_gate.late_session_cutoff_et`) | 1,231 archived candidates | keeps 988 at 18.4% reaching +10%, discards 243 at 4.1% |
+| 2 | **Trade Quality Score floor 48** (`entry_gate.min_trade_quality_score`) | quintiles, split by date | Q5 reaches +10% at 41.4% against 15.7% base; the underlying-2R control rises monotonically in holdout, 16.0 → 40.2 |
+| 3 | **two-tier profit floor** — breakeven armed at +10%, half-give-back at +25% (`exit_engine._giveback_floor`) | 39 live intraday trades, the traded contract's own bars | round-trip winners 48% → 29%; total +52.4% → +143.4% |
+| 4 | **volume-flush reversal exit, armed at +10%** (`exit_engine._volume_flush_reversal`) | the same 39 | best arm in every column, and **+75.46 after stripping the best three** |
+| 5 | **prefer the tightest fully-qualified contract** (`contract_ranker.prefer_tightest_qualified`) | 1,764 scans that bought nothing | 323 (18.3%) had a usable contract at 1.71% median while the app reported 9.76% |
+
+Plus one defect fix that is not a rule change and matters more than any of them:
+
+**The daily context was caching its own failures.** The cache key is (symbol,
+trading day), so one empty premarket fetch pinned `daily_trend = UNKNOWN` for that
+symbol for the rest of the session and no later scan retried. `Daily Trend` reads
+UNKNOWN on **1,882 of 1,883** archived candidates and `Daily ATR %` is populated on
+**1 of 2,266**; called directly the same code returns BULL with a 3.08% ATR and
+30.5% realised vol. Fixed in `27ef45b` — only a real context is now cached.
+
+It did **not** disable `iv_richness`, which was the first guess and is wrong: that
+gate falls back to intraday ATR and records `IV_RV_SOURCE = INTRADAY_ATR` on 1,882
+rows against DAILY on 1. It has been evaluating throughout, on the weaker of its
+two inputs. This promotes it to the source it was designed around, and **that is
+itself an unmeasured change to gate behaviour** — watch it.
+
+### 7.2 The environment, as deployed
+
+*Set explicitly in Render — these differ from the code default or from what was
+previously set:*
+
+```
+EXIT_MOMENTUM_ENABLED                 false
+OPTION_MAX_SPREAD_PCT                 3
+OPTION_MAX_CONTRACT_COST              1000
+OPTION_PREFERRED_MAX_CONTRACT_COST    800
+OPTION_AGGRESSIVE_MAX_CONTRACT_COST   1500
+```
+
+`EXIT_MOMENTUM_ENABLED=false` is load-bearing and its code default is `true`.
+Without it, MACD and EMA9 exits fire at a 21-minute median hold and **none of
+changes 3 and 4 ever engage** — §5.13 measures `ema9_like` as the worst arm in the
+book at −41.9%. It is also the largest available fix for MULTIDAY, which §6's
+item 7 gap depends on.
+
+*Code defaults, shipped in source, no Render entry required:*
+
+```
+ENTRY_LATE_SESSION_CUTOFF_ET      14:05
+ENTRY_MIN_TRADE_QUALITY              48
+EXIT_OPTION_BREAKEVEN_ARM_PCT        10
+EXIT_OPTION_GIVEBACK_ARM_PCT         25
+EXIT_OPTION_GIVEBACK_KEEP           0.5
+EXIT_VOLUME_FLUSH_ENABLED          true
+EXIT_FLUSH_ARM_PCT                   10
+EXIT_FLUSH_VOLUME_MULT              1.5
+OPTION_PREFER_TIGHTEST_QUALIFIED   true
+```
+
+**Verified by popping every one of these from the environment and reading the
+value the code returns.** An explicit Render value silently beats the code
+default, which is how `ENTRY_TIMING_MAX_SCORE` behaved the week before — so a
+stale Render entry for any of these is a live hazard, not a theoretical one.
+
+Two of these read `os.getenv` **directly** rather than through `get_secret_env`,
+because `get_secret_env` folds the empty string into the default and these need
+empty to mean *disabled*: `ENTRY_LATE_SESSION_CUTOFF_ET` is one.
+
+*Deliberately unchanged, each with the measurement that says so:*
+
+| | value | why not touched |
+|---|---|---|
+| `IV_RICHNESS_ENFORCE` | false | enforcing removes the **best** candidates — the 26 it would block reach +10% at 50.0% against 15.1% for those kept |
+| `OPTION_MIN_OPEN_INTEREST` | 500 | removing it **entirely** buys 17 chains of 2,169. Its 57.4% rejection share is a short-circuit artifact — it is tested first (§0.2) |
+| `OPTION_MIN_VOLUME` | 100 | removing it entirely buys 6 |
+| `OPTION_MAX_DTE` | 30 | untested, and every longer-hold experiment has failed (§2.2d, §2.2f) |
+| `OPTION_MIN_CONTRACT_COST` | 100 | unchanged |
+| `ENTRY_TIMING_MAX_SCORE` | 55 | §5.9, shipped in `60c5cb1` |
+| `MAX_ACTIVE_PER_DIRECTION` | 2 | measured to earn its keep |
+
+### 7.3 The spread ceiling is now 3, and this contradicts §5.1
+
+**§5.1 records `OPTION_MAX_SPREAD_PCT = 2` as "proven, restore first", on §1.4b's
++2.33sd with a positive holdout. It has been set to 3 instead. That reversal needs
+to be defensible or reverted, so it is written down in full.**
+
+`tools/spread_ceiling_ab.py`, 2,169 candidates with a recorded chain, every other
+gate held fixed, walked to an exit under **the rules shipped today**:
+
+```
+ceiling  trades  days     mean    -top5      total   win  med spread   95% CI (by day)
+2.0         224     5   -0.64%   -1.97%   -144.2%   33%      1.20%   [-7.10, +4.77]
+3.0         354     6   -0.05%   -1.07%    -16.8%   34%      1.56%   [-4.89, +4.78]
+4.0         470     6   -2.13%   -2.97%  -1000.2%   31%      2.12%   [-6.65, +2.71]
+6.0         723     7   -3.30%   -4.89%  -2384.9%   31%      3.08%   [-7.83, +2.26]
+10.0        919     7   -5.55%   -7.66%  -5099.1%   29%      3.88%   [-9.85, +2.87]
+```
+
+3.0 wins **every column** — mean, the top-5 strip, total, and win rate — and the
+degradation above it is steep and monotonic, which is the shape a real cost
+relationship makes.
+
+**Why the two measurements disagree, stated rather than waved away.** They are not
+the same experiment. §1.4b scored *return on capital* through the old exit engine
+and the old ranker on 21 pooled replay sessions. This scores *percent return on
+premium* under the give-back floor, the volume flush and tightest-qualified
+selection, on chains from `scanner_snapshot`. Changing the exit rules changes which
+contracts are worth holding, and tightest-qualified changes which contract a given
+ceiling actually buys — so a ceiling optimum moving is expected, not anomalous.
+
+**What is not settled, and must not be glossed:** 3.0's interval spans zero
+([−4.89, +4.78]) and every arm is negative. This is a choice between two losing
+settings on the evidence that the loss is smaller at 3. It is **not** a finding
+that a 3% ceiling works. Both this and §1.4b are honest measurements of different
+systems and only one of those systems is now deployed.
+
+**Falsifier:** if Monday's fills come in above ~2% median spread *and* the book is
+worse than the 2-ceiling weeks on return on capital, revert to 2 and re-run this
+A/B against a freshly-run control (§5.8 — the code has moved, so no pre-08-16 arm
+is comparable).
+
+### 7.4 Three things refuted before they were built
+
+Recorded because each was recommended by me and killed by its own check, and the
+pattern is what §5.6's last standing rule exists to catch.
+
+**A correlation check on concurrent positions.** Refuted before writing any code:
+across the archive there are **10 overlapping pairs**, of which 1 was additive —
+and that one was NVDA against NVDA, the same symbol, which `MAX_ACTIVE_PER_DIRECTION`
+already governs. Median effective correlation across the pairs is **−0.13**. There
+is nothing here to gate.
+
+**A range-placement filter.** Built, measured, reverted. Placement quintiles are
+flat (15.4 / 18.7 / 13.4 / 16.3 / 14.2) and the trades it would have dropped do
+*better*. `Session High` and `Session Low` were kept in `result_row` because they
+are cheap and worth having; the filter was not. **`max_range_placement_pct`
+remains at 100, disabled, with the refutation in its own docstring.** The error
+was quoting placement as evidence for a diagnosis before testing it — see §5.14,
+where "range already used" survives as a *time-of-day* effect and placement does
+not.
+
+**Raising the cost cap to $4,000.** Recommended citing §5.9's ITM finding, then
+retracted: those contracts are 38–99 DTE and are blocked by `OPTION_MAX_DTE=30`,
+not by cost. The caps were **lowered** instead, to fit the subscriber bands the
+operator named — roughly 61% of alerts under $500 and 39% in the $500–1,000 band.
+
+### 7.5 What Monday actually tests
+
+Three numbers, in order of what they can falsify:
+
+1. **Exit reasons.** Should be give-back and volume-flush. **If MACD or EMA9
+   appears at all, `EXIT_MOMENTUM_ENABLED` did not take**, and nothing else on this
+   page is being tested.
+2. **Contract cost and spread.** Costs mostly sub-$500; median entry spread at or
+   under ~1.6%. If spread lands near 2.4% — the live figure from §5.6a —
+   `prefer_tightest_qualified` is not reaching the chain.
+3. **Trade count.** §5.10 is the warning: the last deployment made the total loss
+   *worse* by taking 40% more trades at the same per-trade rate. Two changes here
+   cut trades (cutoff, quality floor) and one adds them (tightest-qualified). The
+   net is unknown and the count is the first thing to read.
+
+**The flush is measured on 5-minute bars and the engine runs it on the 15-minute
+frame.** Both its tests are relative to the bar's own history so they translate,
+but a 15m bar is a rarer and larger event — it will fire **less often** than the
+measurement implies. That gap is unmeasured and is the first thing to check
+against Monday's exits.
+
+### 7.6 Still open after this deployment
+
+| | item | why it is still open |
+|---|---|---|
+| news | **zero implementation.** In the operator's requirement (§6 item 1), Polygon serves it on the current plan, nothing consumes it. Largest untouched item on the list |
+| per-band contract selection | the ranker picks **one** contract and cannot serve a $2,000 and a $10,000 account at once. Both tiers fill on 216 chains (10%). Deferred past Monday by agreement |
+| regime blocker | returns `False` on all 2,266 archived candidates. Needs a **positive** test to distinguish working from dead |
+| `OPTION_REQUIRED_LEVERAGE` | is 0.0, so the gate cannot refuse anything. Give it a threshold or delete it |
+| MULTIDAY | 9 trades, 8 closed same session. Nothing to measure until `EXIT_MOMENTUM_ENABLED=false` lets them run |
