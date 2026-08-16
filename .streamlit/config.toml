@@ -1,0 +1,22 @@
+# Dravya Edge palette, mapped onto Streamlit's theme.
+#
+# The header mark is lit against this navy, so leaving the app on Streamlit's
+# near-black default puts a visible seam around anything carrying the brand
+# ground. Pinning it here also means every viewer sees the same page, rather
+# than whatever their operating system's colour scheme happens to be.
+#
+# That last part is the catch worth remembering: `base` is pinned, but the CSS
+# media query `prefers-color-scheme` still follows the reader's OS. The two are
+# no longer the same signal. Any rule in app/dashboard.py that branches on
+# prefers-color-scheme will disagree with the theme for a reader whose OS is set
+# to light -- which is why the caption colours there are unconditional now.
+#
+# .gitignore excludes .streamlit/secrets.toml only, not this file, so this ships.
+
+[theme]
+base = "dark"
+backgroundColor = "#0A1A2F"
+secondaryBackgroundColor = "#102741"
+primaryColor = "#16A470"
+textColor = "#F2EFE6"
+font = "sans serif"
