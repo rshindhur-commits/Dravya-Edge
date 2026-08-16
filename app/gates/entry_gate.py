@@ -677,6 +677,79 @@ def _timing_score_refused(row):
     return score >= timing_gate_max_score()
 
 
+def late_session_cutoff_et():
+    """No new position after this wall-clock time, ET. Empty string disables it.
+
+    **13:05.** Measured on 1,231 archived candidates, scored on whether the
+    option ever offered the subscriber a 10% gain before the protective stop:
+
+        10:25-11:25   21.5%
+        11:25-12:15   24.8%
+        12:15-13:05   19.1%
+        13:05-14:05    8.1%
+        14:05-15:35    4.5%
+
+    A random entry on the same contract with the same horizon reaches 10% about
+    20.7% of the time, so the last two bands are not merely weak, they are far
+    below chance. The reason is structural rather than statistical: late in the
+    session the day's move has already happened, and there is nothing left for a
+    bought option to capture before the bell.
+
+    Cutting here keeps 755 of 1,231 candidates at 21.7% and discards 476 at
+    5.9%. That lifts the book from 15.6% to roughly the random baseline -- it
+    removes a deficit rather than creating an edge, and should not be described
+    as one.
+
+    A range-used filter measured slightly better in combination (714 kept at
+    22.3%) but needs the session high and low in the decision payload, which are
+    not recorded yet. The clock carries most of the effect on its own.
+    """
+
+    # Deliberately `os.getenv` rather than `get_secret_env`, which folds an
+    # empty value into the default. Here empty is a *choice* -- it is how the
+    # operator turns the cutoff off -- and folding it into "13:05" would
+    # silently re-enable the rule someone had just disabled.
+    import os
+
+    value = os.getenv("ENTRY_LATE_SESSION_CUTOFF_ET")
+
+    return "13:05" if value is None else value
+
+
+def _late_session_refused(row):
+    """True when this candidate arrives too late in the session to be worth taking."""
+
+    cutoff = (late_session_cutoff_et() or "").strip()
+
+    if not cutoff:
+        return False
+
+    raw = _row_get(row, "Data Timestamp ET", "data_timestamp_et")
+
+    if raw is None or str(raw).strip().lower() in {"", "nan", "none"}:
+        return False
+
+    text = str(raw).strip()
+
+    # "2026-07-28 19:56:00 EDT" -- take the clock field only. A timestamp we
+    # cannot parse must not silently refuse every candidate, so anything
+    # unexpected falls through to allowed.
+    parts = text.split()
+
+    if len(parts) < 2:
+        return False
+
+    clock = parts[1]
+
+    try:
+        hour, minute = int(clock[:2]), int(clock[3:5])
+        limit_hour, limit_minute = int(cutoff[:2]), int(cutoff[3:5])
+    except (ValueError, IndexError):
+        return False
+
+    return (hour * 60 + minute) > (limit_hour * 60 + limit_minute)
+
+
 def evaluate_entry_gate(
     row,
     config: EntryGateConfig,
@@ -746,6 +819,10 @@ def evaluate_entry_gate(
     if _timing_score_refused(row):
 
         return False, "ENTRY_TIMING_TOO_EARLY"
+
+    if _late_session_refused(row):
+
+        return False, "ENTRY_TOO_LATE_IN_SESSION"
 
     if option_quality < config.min_option_quality:
 

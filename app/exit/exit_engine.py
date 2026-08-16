@@ -407,6 +407,80 @@ def trend_still_valid(df, direction, ignore=None):
     return bool(vwap_ok and ema_ok and rsi_ok)
 
 
+def option_giveback_arm_pct():
+    """Gain on the option, in percent, before give-back protection engages.
+
+    **25.** This is a floor on noise, not a profit target, and the number was
+    arrived at by getting it wrong first. Armed at 10 it looked excellent on the
+    round-trip count and was useless: on a real PLTR call it exited at +4.8% out
+    of a trade that went on to +69.3%, because giving back half of a 16% peak
+    means selling at 8%, and 16% on an option is one bad print rather than a
+    move.
+
+    Measured on the 39 single-day trades in the live book, priced on the traded
+    contract's own bars:
+
+        arm at     round-trip     big winners kept
+        (app)          48%              9%
+        10%             5%             18%
+        25%            24%             55%
+        40%            29%             64%
+
+    Round-trip is, of trades ever up 10%, the share finishing at or below zero.
+    Big-winners-kept is, of trades that reached +25%, how often the rule was
+    still holding at +25% or better. They pull against each other -- exiting
+    instantly scores a perfect round-trip and keeps nothing -- so 25 is chosen as
+    the balance, halving the give-back while keeping six times as many winners
+    running as the book does today.
+    """
+
+    return _env_float("EXIT_OPTION_GIVEBACK_ARM_PCT", 25.0)
+
+
+def option_giveback_keep():
+    """Share of the peak option gain the rule tries to hold on to. 0.5."""
+
+    return _env_float("EXIT_OPTION_GIVEBACK_KEEP", 0.5)
+
+
+def _option_giveback_exit(trade_state, option_peak_mid):
+    """(should_exit, peak_gain_pct, floor_pct) for the option give-back rule.
+
+    Reads the option directly rather than converting through R. The subscriber
+    watches premium, and the conversion is contract-specific enough that a rule
+    expressed in R would arm at a different real gain on every trade.
+
+    Silent no-op when the option prices are absent, so a caller that does not
+    carry them is unaffected rather than broken.
+    """
+
+    if not trade_state:
+        return False, None, None
+
+    entry_mid = _float_or_none(
+        trade_state.get("option_entry_mid")
+        or trade_state.get("option_mid")
+    )
+    current_mid = _float_or_none(
+        trade_state.get("option_current_mid")
+        or trade_state.get("option_mid_price")
+    )
+
+    if not entry_mid or entry_mid <= 0 or not current_mid or current_mid <= 0:
+        return False, None, None
+
+    peak = option_peak_mid if option_peak_mid and option_peak_mid > 0 else current_mid
+    peak_gain = (peak - entry_mid) / entry_mid * 100.0
+
+    if peak_gain < option_giveback_arm_pct():
+        return False, peak_gain, None
+
+    floor_gain = peak_gain * option_giveback_keep()
+    current_gain = (current_mid - entry_mid) / entry_mid * 100.0
+
+    return current_gain <= floor_gain, peak_gain, floor_gain
+
+
 def _momentum_exits_allowed(holding_profile, bars_in_trade):
     """Whether minute-scale invalidation may close this position yet.
 
@@ -865,6 +939,40 @@ def evaluate_exit(
             exit_signal = True
             exit_reason = primary_exit["reason"]
 
+    # The option's own high-water mark, ratcheted the same way `highest_price`
+    # is, because the give-back rule needs a peak that survives between scans.
+    option_peak_mid = _float_or_none(
+        (trade_state or {}).get("option_peak_mid")
+    )
+    option_current_mid = _float_or_none(
+        (trade_state or {}).get("option_current_mid")
+        or (trade_state or {}).get("option_mid_price")
+    )
+
+    if option_current_mid and option_current_mid > 0:
+        option_peak_mid = (
+            option_current_mid if option_peak_mid is None
+            else max(option_peak_mid, option_current_mid)
+        )
+
+    if not exit_signal:
+
+        giveback_hit, peak_gain, floor_gain = _option_giveback_exit(
+            trade_state,
+            option_peak_mid,
+        )
+
+        if giveback_hit:
+
+            exit_reasons.append(_exit_diagnostic(
+                "PROFIT_PROTECTION",
+                f"Option giveback: {peak_gain:.0f}% peak fell through {floor_gain:.0f}%",
+            ))
+            primary_exit = _select_primary_exit(exit_reasons)
+            exit_signal = True
+            exit_reason = primary_exit["reason"]
+            profit_protection_active = True
+
     momentum_exits_allowed = _momentum_exits_allowed(holding_profile, bars_in_trade)
 
     if momentum_exits_allowed:
@@ -1138,6 +1246,7 @@ def evaluate_exit(
         # definition, so nothing else records it.
         "current_price": _round_float(current_price),
         "highest_price": _round_float(highest_price),
+        "option_peak_mid": _round_float(option_peak_mid),
         "lowest_price": _round_float(lowest_price),
         "bars_in_trade": int(bars_in_trade),
         "partial_profit_taken": partial_profit_taken,
