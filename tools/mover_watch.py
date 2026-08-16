@@ -35,11 +35,29 @@ at all:
 
 Names already in the watchlist are excluded: the question is what to ADD.
 
-## Cost
+## Cost, counted rather than estimated
 
-Each candidate that produces an entry signal costs roughly 150 Polygon requests
-to price its chain. A dozen movers is a few thousand requests, which is why this
-is post-close only and why `--top` defaults low. `--dry-run` costs one request.
+Every entry signal prices the chain, and that is **72 option-quote requests per
+signal** -- `SelectionConfig.max_priced_contracts`. Measured end to end on AAOI,
+2026-08-14:
+
+    cadence  signals  requests   verdict
+    5m            15      1081   CHAIN TOO WIDE, best 4.40%, needs 6%
+    15m            4       288   CHAIN TOO WIDE, best 4.55%, needs 6%
+
+**The 15-minute grid costs a quarter as much and returns the same answer**, so it
+is the default here. `mover_check.py` keeps the 5-minute grid for when a single
+symbol is being examined closely and precision is worth the quota.
+
+Budget roughly **300 requests per mover that signals**, and none for one that
+does not. `--top 5` is typically 500-1,500 requests a night. `--dry-run` costs
+exactly one.
+
+**Requests are not billed.** The data plan (massive.com Options Advanced, $199/mo,
+verified 2026-08-16) is *Unlimited API Calls* with real-time data; the only
+constraint is `POLYGON_RATE_LIMIT_PER_MINUTE`, set to 1200. So the reason to keep
+this small is wall-clock time and not competing with the live scanner -- **not
+cost**. Do not "optimise" this job for request count.
 """
 
 import argparse
@@ -237,31 +255,84 @@ def check(symbols, day, cadence):
     return results
 
 
-def review():
-    """What the accumulated log says, which is the point of keeping it."""
+def _deliver(text):
+    """Send the review to the OPERATOR, never to the subscriber channel.
+
+    `TELEGRAM_CHAT_ID` is where signals go. A research summary posted there
+    would be an internal note delivered to paying subscribers, so it is not used
+    as a fallback -- deliberately, and this must stay that way. Set
+    `MOVER_WATCH_TELEGRAM_CHAT_ID` to a private chat to get the review pushed;
+    leave it unset and the file on disk is the only output.
+
+    Never raises. This runs unattended from Task Scheduler, and a delivery
+    failure must not lose the review that was already written to disk.
+    """
+
+    import os
+
+    chat_id = (os.getenv("MOVER_WATCH_TELEGRAM_CHAT_ID") or "").strip()
+
+    if not chat_id:
+        return None
+
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+
+    if not token:
+        return "MOVER_WATCH_TELEGRAM_CHAT_ID is set but TELEGRAM_BOT_TOKEN is not"
+
+    if chat_id == (os.getenv("TELEGRAM_CHAT_ID") or "").strip():
+        return "refused: that is the subscriber channel, not an operator chat"
+
+    try:
+        import requests
+
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": "<b>Mover watch review</b>\n<pre>" + text + "</pre>",
+                "parse_mode": "HTML",
+            },
+            timeout=20,
+        )
+        return None if response.ok else f"telegram said {response.status_code}"
+    except Exception as exc:
+        return f"delivery failed: {str(exc)[:100]}"
+
+
+def build_review():
+    """The accumulated log as text. Returns None when nothing is logged yet."""
 
     files = sorted(LOG_DIR.glob("*.json"))
 
     if not files:
-        print(f"\n  nothing logged yet in {LOG_DIR}\n")
-        return
+        return None
 
     verdicts = defaultdict(Counter)
     needs = defaultdict(list)
     seen_days = set()
 
     for path in files:
-        payload = json.loads(path.read_text())
-        seen_days.add(payload["day"])
-        for symbol, row in payload["results"].items():
-            verdicts[symbol][row["verdict"]] += 1
+        try:
+            payload = json.loads(path.read_text())
+        except Exception:
+            continue
+        seen_days.add(payload.get("day"))
+        for symbol, row in (payload.get("results") or {}).items():
+            verdicts[symbol][row.get("verdict")] += 1
             if row.get("needs_ceiling"):
                 needs[symbol].append(row["needs_ceiling"])
 
-    print(f"\n  {len(seen_days)} sessions logged, {len(verdicts)} distinct movers\n")
-    print(f"  {'symbol':8}{'seen':>6}{'traded':>8}{'too wide':>10}"
-          f"{'no setup':>10}{'needs':>8}")
-    print(f"  {'':-<52}")
+    if not verdicts:
+        return None
+
+    lines = [
+        f"{len(seen_days)} sessions logged, {len(verdicts)} distinct movers",
+        "",
+        f"{'symbol':8}{'seen':>6}{'traded':>8}{'too wide':>10}"
+        f"{'no setup':>10}{'needs':>8}",
+        "-" * 50,
+    ]
 
     ranked = sorted(
         verdicts.items(),
@@ -270,25 +341,56 @@ def review():
 
     for symbol, counts in ranked[:30]:
         total = sum(counts.values())
-        ceiling = (
-            f"{min(needs[symbol]):g}%" if needs.get(symbol) else "-"
+        ceiling = f"{min(needs[symbol]):g}%" if needs.get(symbol) else "-"
+        lines.append(
+            f"{symbol:8}{total:>6}{counts['TRADED']:>8}"
+            f"{counts['CHAIN TOO WIDE']:>10}{counts['NO SETUP']:>10}{ceiling:>8}"
         )
-        print(f"  {symbol:8}{total:>6}{counts['TRADED']:>8}"
-              f"{counts['CHAIN TOO WIDE']:>10}{counts['NO SETUP']:>10}"
-              f"{ceiling:>8}")
 
-    print("\n  'needs' is the LOWEST ceiling that would have bought it on any day")
-    print("  logged. A symbol appearing often with a low `needs` is the case for")
-    print("  a per-symbol spread exception -- and TRADE_QUALITY_PLAN 7.3a is the")
-    print("  evidence against loosening globally. Bring the list, not one day.\n")
+    lines += [
+        "",
+        "'needs' is the LOWEST ceiling that would have bought it on any day",
+        "logged. A symbol appearing often with a low needs is the case for a",
+        "per-symbol spread exception -- and TRADE_QUALITY_PLAN 7.3a is the",
+        "evidence against loosening globally. Bring the list, not one day.",
+    ]
+
+    return "\n".join(lines)
+
+
+def review():
+    """Print the review, keep a dated copy, and deliver it if configured."""
+
+    text = build_review()
+
+    if text is None:
+        print(f"\n  nothing logged yet in {LOG_DIR}\n")
+        return
+
+    print("\n" + "\n".join("  " + line for line in text.splitlines()) + "\n")
+
+    destination = LOG_DIR / "review" / f"{datetime.now():%Y-%m-%d}.txt"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(text)
+    print(f"  written to {destination}")
+
+    problem = _deliver(text)
+
+    if problem:
+        print(f"  telegram: {problem}")
+
+    print()
 
 
 def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--day", default=None, help="YYYY-MM-DD, default today")
-    parser.add_argument("--top", type=int, default=10)
-    parser.add_argument("--cadence", type=int, default=5)
+    parser.add_argument("--top", type=int, default=5)
+    # 15 rather than 5: a quarter of the quota for the same verdict, measured
+    # on AAOI above. This runs nightly and unattended, so the default should
+    # be the cheap one.
+    parser.add_argument("--cadence", type=int, default=15)
     parser.add_argument("--min-move", type=float, default=MIN_MOVE_PCT)
     parser.add_argument("--dry-run", action="store_true",
                         help="print the shortlist and stop, costing one request")

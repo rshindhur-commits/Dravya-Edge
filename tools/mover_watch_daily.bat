@@ -19,5 +19,5 @@ if exist ".venv\Scripts\python.exe" (
 )
 
 echo [%date% %time%] mover_watch starting >> "data\mover_watch\run.log"
-%PY% tools\mover_watch.py --top 10 >> "data\mover_watch\run.log" 2>&1
+%PY% tools\mover_watch.py --top 5 >> "data\mover_watch\run.log" 2>&1
 echo [%date% %time%] mover_watch exit=%ERRORLEVEL% >> "data\mover_watch\run.log"

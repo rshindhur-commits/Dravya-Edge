@@ -140,6 +140,49 @@ on anyone remembering to update this file.
 This file is still the place for **why**. The payload records what; only a
 person records the reasoning.
 
+## Verifying Render from the database — **use this instead of guessing**
+
+`scanner_runs.payload->'config'` records the thresholds **each scan actually
+enforced**, written by `app/runtime/config_snapshot.py`. That is the only
+read-back of Render's environment available from outside the dashboard, and it
+settles questions this file previously answered from memory:
+
+```sql
+SELECT DISTINCT ON (started_at::date)
+       started_at::date AS day, payload->'config'
+FROM scanner_runs
+WHERE payload->'config' IS NOT NULL
+ORDER BY started_at::date DESC, started_at DESC;
+```
+
+**Read 2026-08-16, and it corrects two entries below:**
+
+```
+day          max_spread_pct   max_contract_cost
+2026-08-11        2.0               500
+2026-08-12        2.0               500
+2026-08-13        2.0               500
+2026-08-14        3.0               500
+```
+
+* **`OPTION_MAX_SPREAD_PCT` moved 2 → 3 on Render on 2026-08-14**, not on
+  2026-08-16 as the entry below states. The 08-16 "change" was to the local
+  `.env`, which had drifted from production. Production was already at 3 for
+  Friday's session.
+* **`OPTION_MAX_CONTRACT_COST` was still 500 through 2026-08-14.** The 2026-08-15
+  entry raising it to 1500 was never exercised by a live scan — 08-15 and 08-16
+  are not trading days — so the real transition tomorrow is **500 → 1000**, not
+  1500 → 1000. Friday's contracts at $131-$500 confirm the 500 cap was binding.
+
+Neither changes what should be set now. Both mean the *old* values recorded below
+were the local file's, not Render's, and that distinction is exactly what this
+file exists to keep straight.
+
+**Check the config block again after the first scan tomorrow.** It is the only
+way to confirm the 16 variables took.
+
+---
+
 ## 2026-08-16 — `OPTION_MAX_CONTRACT_COST_BY_SYMBOL` introduced ⚠️ **not yet set in Render**
 
 | | |

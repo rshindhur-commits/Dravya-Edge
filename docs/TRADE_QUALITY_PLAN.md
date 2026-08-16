@@ -1639,6 +1639,18 @@ later, then signalled a CALL eight more times and was refused every one. The
 operator's question: why give up a strong later setup because the ticker already
 traded?
 
+> **Correction, 2026-08-16.** This section first stated the live cap as **1** and
+> the symbol cooldown as **60 minutes**. Both were read from code defaults rather
+> than `.env`, where they are **`MAX_TRADES_PER_SYMBOL_PER_DAY = 2`** and
+> **`AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES = 45`**. The sweep below is unaffected in
+> its conclusion — its `per-sym 2 / daily 5` row *is* the live configuration and
+> is identical to the 1 and 3 rows — but the mechanism described for SMCI was
+> wrong. Those eight refusals were the **45-minute cooldown** (signals at 17:40,
+> 17:45, 17:50, minutes after a 17:35 close) and then the **daily cap of 5**,
+> already reached by SPCX at 18:30. Not the per-symbol cap, which had a slot left.
+> The simulation used a 60-minute cooldown, so it is slightly *more* restrictive
+> than live, which does not flatter the loosened arms.
+
 `tools/per_symbol_cap_ab.py` sweeps it against `MAX_DAILY_ENTRIES`, because the
 two interact and testing either alone answers nothing. Candidates are walked in
 time order under the live gates — 60-minute symbol cooldown, 4 open, 3 per
@@ -1657,7 +1669,9 @@ per-sym  daily  trades    mean    -top5    total  win   the EXTRA trades
 
 **Changing it alone does literally nothing.** Rows 1-3 are byte-identical:
 `MAX_DAILY_ENTRIES = 5` binds first, so raising the per-symbol cap only changes
-*which* five trades are taken, and on this archive it does not even do that.
+*which* five trades are taken, and on this archive it does not even do that. The
+live setting is already 2, so there was never a single-trade-per-symbol rule to
+relax in the first place.
 
 **Changing both makes the book worse.** Every loosened cell moves the mean from
 −0.13% to between −1.20% and −1.84%, and the win rate from 40% to 29-32%.
