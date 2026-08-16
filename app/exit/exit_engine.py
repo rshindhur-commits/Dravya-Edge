@@ -531,6 +531,78 @@ def _option_giveback_exit(trade_state, option_peak_mid):
     return current_gain <= floor_gain, peak_gain, floor_gain
 
 
+def volume_flush_enabled():
+    return _env_bool("EXIT_VOLUME_FLUSH_ENABLED", True)
+
+
+def _volume_flush_reversal(df, latest, is_short):
+    """A bar closing against the position, on conviction volume, with real range.
+
+    The reversal signal that actually fires in time. Every structural definition
+    tested -- swing break, lower low, EMA9 and EMA20 crosses, a 15-minute EMA --
+    fires *after* the profit has gone, because they all confirm a turn that has
+    already happened. Measured on the live book by the share of trades that were
+    up 10% and finished at or below zero:
+
+        swing break                48%
+        lower low                  52%
+        EMA9 cross (15m)           62%
+        the book as it runs today  48%
+        volume flush               33%
+        the two-tier P&L floor     33%
+
+    Volume is what makes the difference. Heavy volume against the position prints
+    on the bar the turn happens, not three bars later, so it is the one pattern
+    that catches a reversal while there is still profit to protect.
+
+    Three conditions, all required, so ordinary drift cannot trigger it:
+
+        direction   the bar closes against us -- red on a call, green on a put
+        conviction  volume above EXIT_FLUSH_VOLUME_MULT times its own average
+        size        the bar's range exceeds one ATR
+
+    **Measured on 5-minute bars; the engine runs this on the 15-minute frame.**
+    Both tests are relative to the bar's own history rather than absolute, so
+    they translate, but a 15-minute bar is a rarer and larger event and this will
+    fire less often than the measurement implies. That difference is unmeasured
+    and is the first thing to check against Monday's exits.
+    """
+
+    if not volume_flush_enabled():
+        return False
+
+    close = _float_or_none(latest.get("Close"))
+    open_ = _float_or_none(latest.get("Open"))
+    high = _float_or_none(latest.get("High"))
+    low = _float_or_none(latest.get("Low"))
+    volume = _float_or_none(latest.get("Volume"))
+    atr = _float_or_none(latest.get("ATR"))
+
+    if None in (close, open_, high, low, volume, atr) or atr <= 0:
+        return False
+
+    against = (close > open_) if is_short else (close < open_)
+
+    if not against:
+        return False
+
+    if (high - low) <= atr:
+        return False
+
+    lookback = int(_env_float("EXIT_FLUSH_VOLUME_LOOKBACK", 20))
+
+    try:
+        recent = df["Volume"].tail(lookback + 1).head(lookback)
+        average = float(recent.mean())
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    if not average or average != average or average <= 0:
+        return False
+
+    return volume > _env_float("EXIT_FLUSH_VOLUME_MULT", 1.5) * average
+
+
 def _momentum_exits_allowed(holding_profile, bars_in_trade):
     """Whether minute-scale invalidation may close this position yet.
 
@@ -1022,6 +1094,19 @@ def evaluate_exit(
             exit_signal = True
             exit_reason = primary_exit["reason"]
             profit_protection_active = True
+
+    # The reversal half of the pair. The floor catches a slow bleed the flush
+    # never sees; the flush catches a sharp turn before the floor is reached.
+    # Neither covers the other's case, which is why both are on.
+    if not exit_signal and _volume_flush_reversal(df, latest, is_short):
+
+        exit_reasons.append(_exit_diagnostic(
+            "PROFIT_PROTECTION",
+            "Reversal: heavy volume against the position",
+        ))
+        primary_exit = _select_primary_exit(exit_reasons)
+        exit_signal = True
+        exit_reason = primary_exit["reason"]
 
     momentum_exits_allowed = _momentum_exits_allowed(holding_profile, bars_in_trade)
 
