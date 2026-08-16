@@ -1632,6 +1632,49 @@ affected. The rule that follows: *a tool written against one chain source must
 assert its schema before using it, because both of these failed as plausible
 numbers rather than as errors.*
 
+### 7.3g `MAX_TRADES_PER_SYMBOL_PER_DAY` — **tested, do not change it**
+
+Raised after 2026-08-14, where SMCI traded a PUT at 17:30, closed four minutes
+later, then signalled a CALL eight more times and was refused every one. The
+operator's question: why give up a strong later setup because the ticker already
+traded?
+
+`tools/per_symbol_cap_ab.py` sweeps it against `MAX_DAILY_ENTRIES`, because the
+two interact and testing either alone answers nothing. Candidates are walked in
+time order under the live gates — 60-minute symbol cooldown, 4 open, 3 per
+direction — with each position holding its slot until its own exit.
+
+```
+per-sym  daily  trades    mean    -top5    total  win   the EXTRA trades
+      1      5      25  -0.13%   -6.46%    -3.3%  40%   baseline
+      2      5      25  -0.13%   -6.46%    -3.3%  40%   baseline -- IDENTICAL
+      3      5      25  -0.13%   -6.46%    -3.3%  40%   baseline -- IDENTICAL
+      1      8      38  -1.84%   -6.16%   -70.1%  29%   13 at -5.13% (strip -9.22%)
+      2      8      38  -1.20%   -5.42%   -45.6%  32%   13 at -3.25% (strip -8.82%)
+      2     99      43  -1.60%   -5.32%   -68.9%  30%   18 at -3.64% (strip -7.98%)
+      3     99      44  -1.57%   -5.19%   -69.2%  30%   19 at -3.47% (strip -7.50%)
+```
+
+**Changing it alone does literally nothing.** Rows 1-3 are byte-identical:
+`MAX_DAILY_ENTRIES = 5` binds first, so raising the per-symbol cap only changes
+*which* five trades are taken, and on this archive it does not even do that.
+
+**Changing both makes the book worse.** Every loosened cell moves the mean from
+−0.13% to between −1.20% and −1.84%, and the win rate from 40% to 29-32%.
+
+**The trades a looser cap admits are the bad ones.** Isolated, the extra trades
+average **−3.25% to −5.13%**, and −7.50% to −9.22% after the top-5 strip — against
+a baseline that is roughly flat. The second signal of the day on a symbol is
+worse than the first, consistently across all six loosened cells.
+
+That is the answer to the intuition behind the question. Later same-day setups
+*feel* strong, and are measurably not: they are either chasing a name that has
+already moved or re-entering one that just stopped out.
+
+**Sample: 25 baseline trades over 5 sessions**, which is small — only five days
+in the archive produce a buyable contract at ceiling 3. The direction is
+consistent across every cell, which is what carries it, not the count.
+
 ### 7.3a Does the ceiling filter out the biggest movers? — **asked by the operator, tested, no**
 
 The objection, and it is a good one: NBIS ran **9.3%** on 2026-08-14, its four
