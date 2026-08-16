@@ -1602,6 +1602,73 @@ def _option_cost(scanner_context, option_mid):
     return premium * 100 if premium is not None else None
 
 
+def _moneyness_label(strike, spot, is_put):
+    """"1.2% OTM", "0.4% ITM", or "ATM". None when either price is missing.
+
+    Signed so positive always means *out* of the money whichever way the trade
+    leans: a call struck above spot and a put struck below it are both OTM.
+
+    The ATM band is -1% to +1%, matching the bands section 7.3d measured its
+    break-even accuracy requirements over, so a subscriber reading "ATM" here and
+    a reader of that table are talking about the same thing.
+    """
+
+    strike = _number(strike)
+    spot = _number(spot)
+
+    if strike is None or spot is None or spot <= 0:
+        return None
+
+    pct = (strike - spot) / spot * 100.0
+
+    if is_put:
+        pct = -pct
+
+    if -1.0 <= pct <= 1.0:
+        return "ATM"
+
+    return f"{abs(pct):.1f}% {'OTM' if pct > 0 else 'ITM'}"
+
+
+def _option_profile_line(trade, scanner_context, option_strike, is_put):
+    """Delta and moneyness, so a subscriber can substitute a strike knowingly.
+
+    Alerts printed the contract as `78.0P` and nothing else, which tells a
+    subscriber who cannot afford it nothing about what to buy instead -- and
+    tells one who can nothing about what they are holding. Delta is the axis the
+    tiering design in section 7.4a is built on, so publishing it also starts the
+    habit before the tiers exist.
+
+    Display only. Returns None rather than a half-empty line when neither value
+    is available, because an alert that reads "Delta: None" is worse than one
+    that omits it.
+    """
+
+    delta = _number(
+        trade.get("option_delta")
+        or scanner_context.get("Option Delta")
+        or scanner_context.get("option_delta")
+    )
+    spot = (
+        trade.get("entry_price")
+        or scanner_context.get("Candidate Entry Price")
+        or scanner_context.get("Entry Price")
+    )
+    moneyness = _moneyness_label(option_strike, spot, is_put)
+
+    parts = []
+
+    if delta is not None:
+        # Puts carry a negative delta; the sign duplicates the P in the contract
+        # name and reads as an error to anyone who does not know that.
+        parts.append(f"Delta: {abs(delta):.2f}")
+
+    if moneyness:
+        parts.append(moneyness)
+
+    return " · ".join(parts) if parts else None
+
+
 def _option_lifecycle_lines(trade, scanner_context=None):
 
     trade = trade or {}
@@ -1624,12 +1691,21 @@ def _option_lifecycle_lines(trade, scanner_context=None):
     )
     option_cost = _option_cost(scanner_context, option_mid)
 
-    return [
+    lines = [
         "<b>OPTION</b>",
         f"Contract: {contract}",
         f"Expiry: {_fmt(expiration)}",
         f"Contract Cost: {_money(option_cost)}",
     ]
+
+    profile = _option_profile_line(
+        trade, scanner_context, option_strike, contract_type == "P"
+    )
+
+    if profile:
+        lines.append(profile)
+
+    return lines
 
 
 def _entry_reasons(scanner_context, setup):

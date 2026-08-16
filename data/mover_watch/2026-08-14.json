@@ -1,0 +1,66 @@
+{
+  "day": "2026-08-14",
+  "generated_at": "2026-08-16T11:13:04",
+  "filter": {
+    "min_move_pct": 4.0,
+    "price": [
+      15.0,
+      600.0
+    ],
+    "min_dollar_volume_m": 200.0
+  },
+  "movers": [
+    {
+      "symbol": "HTFL",
+      "change_pct": 35.891647855530465,
+      "price": 42.08,
+      "dollar_volume_m": 417.16108991999994
+    },
+    {
+      "symbol": "AAOX",
+      "change_pct": 29.849137931034498,
+      "price": 24.1,
+      "dollar_volume_m": 324.2024785
+    },
+    {
+      "symbol": "UMAC",
+      "change_pct": 25.03671071953012,
+      "price": 34.06,
+      "dollar_volume_m": 543.6402090600001
+    },
+    {
+      "symbol": "AAOI",
+      "change_pct": 16.37453874538744,
+      "price": 150.28,
+      "dollar_volume_m": 2821.480701
+    }
+  ],
+  "results": {
+    "HTFL": {
+      "verdict": "CHAIN TOO WIDE",
+      "signals": 1,
+      "bought": 0,
+      "best_spread": 47.37,
+      "best_cost": 380,
+      "needs_ceiling": null
+    },
+    "AAOX": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "UMAC": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "AAOI": {
+      "verdict": "CHAIN TOO WIDE",
+      "signals": 15,
+      "bought": 0,
+      "best_spread": 4.4,
+      "best_cost": 910,
+      "needs_ceiling": 6.0
+    }
+  }
+}
