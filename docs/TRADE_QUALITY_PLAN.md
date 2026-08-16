@@ -1948,6 +1948,69 @@ the universe, which is why they are profitable at all. And there are **no 3-6% o
 6%+ OTM contracts on their chains** that pass the filters. Far OTM is not a
 choice available on them.
 
+### 7.3e MU, META and ARM on the far-OTM condition — **the condition is not met**
+
+The operator asked for the three removed names back, trading far OTM, under the
+same standard: acceptable **so long as the direction is called correctly**. That
+is the right condition and it is the one that fails.
+
+#### Direction is right 10% of the time, and never when a contract exists
+
+```
+                        right   wrong   accuracy
+MU / META / ARM            29     274      10%
+universe                  511     972      34%
+AVGO / SMH / GOOGL         90      30      75%
+```
+
+Inside those 29 correct calls, the number of contracts passing the gates in
+**every** moneyness band is **zero**. The 121 tradeable contracts these names
+produced all sit in the WRONG bucket, losing 10.7% to 11.7% at a 0-1% win rate.
+
+Break-even needs roughly **42%** accuracy (§7.3d). These names have **10%**. The
+gap is 32 points, against 5-8 for the rest of the book.
+
+#### Far OTM is not purchasable on them either
+
+Which is a different problem from it losing money, and worth separating. Every
+contract quoted on their chains, each gate applied alone:
+
+```
+band        quoted  $100-2500  spr<=3  OI>=500  vol>=100   ALL   median cost
+ITM           4065        25%     23%      25%       25%    0%        $4,715
+ATM          11622        24%     29%      27%       38%    1%        $5,185
+OTM 1-3%      3923        36%     22%      24%       31%    2%        $3,765
+OTM 3-6%       481        57%     14%      33%       20%    0%        $1,945
+OTM 6%+          0   -- none quoted at this moneyness
+```
+
+**Their far-OTM contracts are affordable and untradeable.** At 3-6% OTM, 57% sit
+inside $2,500 — but only **14%** are inside a 3% spread and **20%** carry volume,
+so **0%** pass together. Cheapness was never the blocker on these names.
+
+Against the three that work:
+
+```
+NVDA / TSLA / PLTR, OTM 3-6%:  1129 quoted, 70% affordable, 62% tight, 21% pass ALL
+```
+
+**Nothing beyond 6% OTM is quoted for any name**, in any group — the selector's
+`max_moneyness_pct` does not reach that far. "Further out than 6%" is not a
+setting away; it is not in the chain the app builds.
+
+#### What adding them back would actually do
+
+Two options, both measured, neither good:
+
+| | outcome |
+|---|---|
+| add back, gates unchanged | **431 candidates, 0 trades** — exactly what they did before. Harmless, pointless, and it consumes scan budget and Polygon quota |
+| add back, gates relaxed for them | measured at **−8% to −12% per trade, 0-1% win rate** across 122 trades (§7.3c) |
+
+**What would change this answer:** directional accuracy on these three rising
+above ~42%. It is 10%. That is the thing to watch, and it is not a contract
+setting.
+
 #### Before acting on the first group
 
 26 trades over 21 sessions is roughly one a day and is **below §3's bar of 80**.
