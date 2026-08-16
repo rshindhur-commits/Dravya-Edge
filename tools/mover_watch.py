@@ -13,7 +13,8 @@ by what* -- is answered from a log rather than from memory.
 Runs quietly and exits on weekends and holidays, so a daily trigger is safe.
 To schedule it on this machine, once, from an elevated prompt:
 
-    schtasks /create /tn "DravyaMoverWatch" /tr "d:\Dravya_Trade_Works	ools\mover_watch_daily.bat" /sc daily /st 16:45
+    schtasks /create /tn "DravyaMoverWatch" ^
+      /tr "d:\Dravya_Trade_Works\tools\mover_watch_daily.bat" /sc daily /st 16:45
 
 16:45 local is after the 15:30 ET entry window and the close. Deliberately NOT
 on the Render worker: this shares Polygon quota with the live scanner, and a
