@@ -1876,6 +1876,78 @@ reconstructs its own strikes and assumes open interest, so it rejects these on
 `LOW_VOLUME` where the live chain does not. The measurement above uses the
 chains live actually examined. Monday is the real test of which is right.
 
+### 7.3d Far OTM, on the operator's own condition — **run 2026-08-16**
+
+The standard, stated twice: cheaper, further-OTM contracts are fine **provided
+the direction is called correctly**. §7.3c answered the unconditional version and
+found far OTM losing, but that blends the trades the app called right with the
+ones it did not, and the condition is precisely about the first group.
+
+`tools/moneyness_by_outcome.py` splits every candidate by what the underlying did
+first -- target before stop, or stop before target -- and prices every moneyness
+band inside each. 2,169 candidates, 1,483 resolving to a verdict.
+
+```
+verdict  band          n     mean    -top5   median   win   med cost
+RIGHT    ITM         385  +13.58%  +13.17%  +12.87%   87%     $1,070
+         ATM         596  +12.72%  +12.36%  +11.19%   83%       $975
+         OTM 1-3%    363  +14.57%  +14.02%  +12.77%   82%       $645
+         OTM 3-6%    182  +11.74%  +10.89%  +12.02%   82%       $400
+         OTM 6%+      57   +9.65%   +8.44%   +9.61%   82%       $310
+WRONG    ITM         645   -8.88%   -9.07%   -8.69%    2%     $1,170
+         ATM         780   -9.90%  -10.10%   -9.65%    3%       $980
+         OTM 1-3%    514  -10.37%  -10.62%  -10.01%    4%       $688
+         OTM 3-6%    245   -8.52%   -8.99%   -9.46%    8%       $425
+```
+
+**No band is broken.** Every one pays 10-15% when the call is right, including
+6%+ OTM at a $310 median. The operator's condition is the correct one and the
+answer under it is yes.
+
+#### The number this reduces to
+
+What separates the bands is not whether they work but **how often the direction
+must be right for each to break even**:
+
+```
+band        upside    downside   ratio   break-even accuracy   med cost
+ITM        +13.58%     -8.88%     1.53          39.5%            $1,070
+OTM 1-3%   +14.57%    -10.37%     1.41          41.6%              $645
+OTM 3-6%   +11.74%     -8.52%     1.38          42.1%              $400
+ATM        +12.72%     -9.90%     1.29          43.8%              $975
+
+the app is directionally right                  34.0%
+```
+
+**Going further OTM raises the accuracy requirement, it does not lower it.** The
+upside shrinks faster than the downside does, because a stopped-out trade loses
+roughly 9% of premium whatever the strike, while the winner's payoff falls with
+moneyness. Cheapness is an affordability gain, not an edge gain, and it was
+worth measuring rather than assuming in either direction.
+
+**The whole gap is 5 to 8 points of directional accuracy**, and it is the same
+gap for every contract choice. That is the project, and no strike selection
+substitutes for it.
+
+#### One free improvement, deliberately not shipped yet
+
+`prefer_tightest_qualified` selects on spread, which lands the app **ATM -- the
+worst band on this table**, needing 43.8%. ITM needs **39.5%**. Preferring
+slightly ITM among already-qualified contracts is worth roughly **4.3 points of
+required accuracy for nothing**, and it agrees with §5.9's independent finding
+that 11-25d ITM was the best arm at −3.86% against −10.36% for 0-10d OTM.
+
+Not shipped, because §5.6's standing rule is that no new switch is committed
+until the one before it is measured, and six changes went live on 2026-08-16 with
+none measured. **This is the first candidate for the change after Monday.**
+
+#### AVGO, SMH and GOOGL do not have this option anyway
+
+Run on the three alone: **75% directionally right, 90 of 120** -- against 34% for
+the universe, which is why they are profitable at all. And there are **no 3-6% or
+6%+ OTM contracts on their chains** that pass the filters. Far OTM is not a
+choice available on them.
+
 #### Before acting on the first group
 
 26 trades over 21 sessions is roughly one a day and is **below §3's bar of 80**.
