@@ -2007,9 +2007,17 @@ Two options, both measured, neither good:
 | add back, gates unchanged | **431 candidates, 0 trades** — exactly what they did before. Harmless, pointless, and it consumes scan budget and Polygon quota |
 | add back, gates relaxed for them | measured at **−8% to −12% per trade, 0-1% win rate** across 122 trades (§7.3c) |
 
-**What would change this answer:** directional accuracy on these three rising
-above ~42%. It is 10%. That is the thing to watch, and it is not a contract
-setting.
+**DECIDED 2026-08-16, by the operator: leave them out.** Not a deferral — the
+question was asked with the measurements in front of it and answered. Reopen only
+on directional accuracy above ~42%, which is a property of the entry engine and
+not of any contract setting. Do not reopen it from a single session in which one
+of these names moves.
+
+**Also decided: the 6% moneyness window stays.** Widening it was offered and
+declined. Every band measured needs *more* accuracy the further out it goes
+(§7.3d), and pricing a wider chain costs quota per scan for contracts that fail
+volume anyway. If it is ever revisited, measure on the archive first — the
+replay tooling can widen `max_moneyness_pct` without touching the live selector.
 
 #### Before acting on the first group
 
