@@ -56,7 +56,10 @@ from app.indicators.technical_indicators import (
     MIN_5M_BARS_FOR_15M_INDICATORS,
     compute_indicators
 )
-from app.strategies.momentum_strategy import analyze_setup
+from app.strategies.momentum_strategy import (
+    analyze_setup,
+    relative_strength_benchmark_enabled,
+)
 from app.ai.trade_analyzer import generate_trade_summary
 #from app.options.options_recommender import recommend_option
 from app.state.state_manager import should_call_ai
@@ -4645,10 +4648,19 @@ def _run_scanner_impl():
 
             with stage_timer.stage("Strategy"):
 
-                analysis_5m = analyze_setup(df_5m)
+                # The sector reference move is already in hand from
+                # _sector_strength above -- no extra fetch. None keeps
+                # analyze_setup on its old behaviour of comparing against zero.
+                benchmark_move_pct = (
+                    sector_context["sector_reference_move_pct"]
+                    if relative_strength_benchmark_enabled()
+                    else None
+                )
+
+                analysis_5m = analyze_setup(df_5m, benchmark_move_pct)
 
                 analysis_15m = (
-                    analyze_setup(df_15m)
+                    analyze_setup(df_15m, benchmark_move_pct)
                     if not df_15m.empty
                     else {
                         "signal": "NEUTRAL",
@@ -4659,7 +4671,7 @@ def _run_scanner_impl():
                 )
 
                 analysis_1h = (
-                    analyze_setup(df_1h)
+                    analyze_setup(df_1h, benchmark_move_pct)
                     if not df_1h.empty
                     else {
                         "signal": "NEUTRAL",

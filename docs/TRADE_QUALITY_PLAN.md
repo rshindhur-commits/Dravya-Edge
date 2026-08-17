@@ -1434,6 +1434,73 @@ positions too, where a single heavy bar could end a multi-day thesis. There are 
 MULTIDAY trades and 8 closed the same session, so there is nothing yet to measure
 it against. Revisit once `EXIT_MOMENTUM_ENABLED=false` lets them actually run.
 
+### §6a — The operator's thesis, restated 2026-08-16, and where the evidence stands on it
+
+> *"If the app can send the right alerts when direction changes or continues for
+> a given contract, throughout its life cycle, it automatically makes the
+> contract win or lose less."*
+
+**This is the product, and it is binding.** Round-trip cost is not the subject
+and is not to be reintroduced — it is already enforced as a spread ceiling and a
+cost cap inside the option gates. Any future analysis that re-derives it as a
+reason the product cannot work is out of scope by this section.
+
+**The lifecycle half is already evidenced, by our own numbers.**
+
+| | evidence |
+|---|---|
+| right alert → smaller loss | the hard stop works, unchanged, §6 item 5 |
+| right alert → less given back | winners finishing at or below zero went **53% → 32%** |
+| the room still left | only **29.5%** of MFE is kept at exit (n=18, weak, §3a) |
+
+Managing the lifecycle demonstrably moved the second row. That is the thesis
+working, on live trades, and it is the strongest positive result the project has.
+
+**Two things must stay visible beside it, and neither is a cost argument.**
+
+**1. The "if" at the front is the whole problem.** An alert cannot be more right
+than the direction detection driving it. Entries currently reach +10% on the
+option **18.4%** of the time against **20.7%** for a random minute. Lifecycle
+alerting on a below-random entry makes the app faster at managing positions it
+should not have opened. This is why direction gates everything in
+`PATH_TO_PRODUCTION.md` §1, and why Phase 2 is the critical path.
+
+**2. Direction being right does not by itself make a bought contract win.**
+§5.14 established it: direction and movement are different properties. **48% of
+trades never travel past 0.10R and average −7.05%** — those are not wrong-way
+calls, they are right-or-neutral calls that did not move far enough or fast
+enough. "Lose less" follows from good alerting almost automatically. "Win" also
+needs magnitude, which is what §2.3's expected-move-versus-implied-move test is
+for.
+
+So: alerting well is necessary and is where the one clear win has come from.
+It is not sufficient on its own, and the plan is ordered accordingly —
+**direction first, then magnitude, then capture.**
+
+#### The target variable, defined once
+
+Clarified with the operator 2026-08-16. The ask is **accurate direction**, not
+"find a profitable contract". Those are different problems and only the first is
+in scope. Cost is enforced in the gates and is not a subject of analysis.
+
+But "accurate direction" needs one operational detail or the project measures
+three different things and compares them. For a bought option, a call that is
+directionally right and does not travel still loses. So:
+
+> **The target is: correct direction, with enough movement, inside the window
+> the contract is held.**
+
+Not direction alone, and not profit. Concretely, the label every experiment
+scores against is **"did the underlying move far enough in the signalled
+direction, within the holding window, for the contract to gain"** — which is
+what the +10%-on-the-option measure already approximates, and what IC at a
+stated horizon measures continuously.
+
+This is still entirely rule-based and entirely computable from data already
+held. It rules nothing out. It only stops "direction" being scored as a coin
+flip on sign, which would pass a signal that is right about the way a stock is
+going and wrong about whether it is worth buying an option on.
+
 ## §7 — Deployed 2026-08-16: the five rules, the environment they need, and what Monday tests
 
 Merged `Claude_POA` → `main` and deployed to Render and Streamlit on 2026-08-16.
