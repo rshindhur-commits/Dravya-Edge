@@ -1477,6 +1477,30 @@ So: alerting well is necessary and is where the one clear win has come from.
 It is not sufficient on its own, and the plan is ordered accordingly —
 **direction first, then magnitude, then capture.**
 
+#### The target variable, defined once
+
+Clarified with the operator 2026-08-16. The ask is **accurate direction**, not
+"find a profitable contract". Those are different problems and only the first is
+in scope. Cost is enforced in the gates and is not a subject of analysis.
+
+But "accurate direction" needs one operational detail or the project measures
+three different things and compares them. For a bought option, a call that is
+directionally right and does not travel still loses. So:
+
+> **The target is: correct direction, with enough movement, inside the window
+> the contract is held.**
+
+Not direction alone, and not profit. Concretely, the label every experiment
+scores against is **"did the underlying move far enough in the signalled
+direction, within the holding window, for the contract to gain"** — which is
+what the +10%-on-the-option measure already approximates, and what IC at a
+stated horizon measures continuously.
+
+This is still entirely rule-based and entirely computable from data already
+held. It rules nothing out. It only stops "direction" being scored as a coin
+flip on sign, which would pass a signal that is right about the way a stock is
+going and wrong about whether it is worth buying an option on.
+
 ## §7 — Deployed 2026-08-16: the five rules, the environment they need, and what Monday tests
 
 Merged `Claude_POA` → `main` and deployed to Render and Streamlit on 2026-08-16.
