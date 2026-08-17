@@ -102,19 +102,123 @@ def trade_efficiency_summary(trades):
         return {"trades": 0}
 
     def _mean(column):
+        """Mean and the count it was taken over.
+
+        The count is not decoration. `trend_capture` and `left_on_table` come
+        from the post-market review, which has not run for every closed trade, so
+        their averages are taken over a smaller set than `trades`. Reporting the
+        mean alone puts a figure measured on 21 trades under a panel that says 29.
+        """
+
+        if column not in frame.columns:
+            return None, 0
+
+        values = pd.to_numeric(frame[column], errors="coerce").dropna()
+
+        return (
+            round(float(values.mean()), 3) if len(values) else None,
+            int(len(values)),
+        )
+
+    trend_capture, trend_capture_trades = _mean("trend_capture")
+    left_on_table, left_on_table_trades = _mean("left_on_table")
+    mfe_r, mfe_r_trades = _mean("mfe_r")
+
+    # Capture is bounded above at 100 and unbounded below, so its mean is at the
+    # mercy of a couple of trades: on the first 17 measured, two exits at -880%
+    # and -558% pulled the average to -90.9% while the median sat at 0.0. The
+    # mean alone would have read as a strategy that gives back nine times the
+    # move it catches. Both are reported for the same reason bootstrap CIs sit
+    # beside any mean return here.
+    def _median(column):
         if column not in frame.columns:
             return None
 
         values = pd.to_numeric(frame[column], errors="coerce").dropna()
 
-        return round(float(values.mean()), 3) if len(values) else None
+        return round(float(values.median()), 3) if len(values) else None
 
     return {
         "trades": int(len(frame)),
-        "trend_capture": _mean("trend_capture"),
-        "left_on_table": _mean("left_on_table"),
-        "mfe_r": _mean("mfe_r"),
+        # Percent of the available move the exit kept. Unbounded below: an exit
+        # that gave back more than the move was ever worth reads under -100.
+        "trend_capture": trend_capture,
+        "trend_capture_median": _median("trend_capture"),
+        "trend_capture_trades": trend_capture_trades,
+        # Absolute price points per share, not a percent and not a fraction --
+        # `max(highest - exit_price, 0)` on the underlying. Averaging it across
+        # symbols mixes a $40 stock with a $400 one, so it is reported with its
+        # unit and read per trade rather than as a headline.
+        "left_on_table": left_on_table,
+        "left_on_table_trades": left_on_table_trades,
+        "mfe_r": mfe_r,
+        "mfe_r_trades": mfe_r_trades,
     }
+
+
+def exit_reason_summary(trades):
+    """Which exit rule is producing the losses.
+
+    `exit_reason` has been on every closed trade the whole time and nothing on the
+    Validation page read it, so the page could say the book lost money without
+    saying what closed the trades. The first window it was run on answered
+    immediately: profit targets returned +19.9% and the invalidation rules -3 to
+    -5% each, on comparable trade counts.
+
+    Grouped over all strategy trades, with cash and premium scoped to the priced
+    subset -- a reason can have trades that no premium figure covers, and folding
+    those in as zero would understate it. `trades` and `priced` are both reported
+    so the denominators are visible rather than inferred.
+
+    Ordered worst cash first. The question this answers is which rule to look at,
+    and that is the one bleeding the most money, not the one appearing most often.
+    """
+
+    frame = strategy_trades_only(trades if trades is not None else pd.DataFrame())
+
+    if frame is None or not len(frame) or "exit_reason" not in frame.columns:
+        return []
+
+    frame = frame.copy()
+    frame["exit_reason"] = frame["exit_reason"].fillna("(not recorded)").astype(str)
+    priced = _premium_measurable(frame)
+
+    # Grouped once rather than re-filtered inside the loop, which was a full pass
+    # over the priced frame per exit reason. Invisible at 17 trades; the window
+    # selector now reaches 90 days, and this is the slowest step on the page.
+    priced_groups = (
+        {reason: group for reason, group in priced.groupby("exit_reason", dropna=False)}
+        if len(priced) else {}
+    )
+    empty = priced.iloc[0:0]
+    rows = []
+
+    for reason, group in frame.groupby("exit_reason", dropna=False):
+        r = pd.to_numeric(group.get("r_multiple", pd.Series(dtype=float)), errors="coerce").dropna()
+        priced_group = priced_groups.get(reason, empty)
+        net = pd.to_numeric(
+            priced_group.get("option_pnl_pct_net", pd.Series(dtype=float)), errors="coerce"
+        ).dropna()
+        dollars = pd.to_numeric(
+            priced_group.get("option_pl_dollars", pd.Series(dtype=float)), errors="coerce"
+        ).dropna()
+
+        rows.append({
+            "exit_reason": reason,
+            "trades": int(len(group)),
+            "priced": int(len(net)),
+            "avg_r": round(float(r.mean()), 2) if len(r) else None,
+            "avg_premium_pct": round(float(net.mean()), 1) if len(net) else None,
+            "total_dollars": round(float(dollars.sum()), 2) if len(dollars) else None,
+        })
+
+    # None sorts last: a reason with no priced trade is not evidence of a cheap
+    # rule, it is an absence of measurement, and it does not belong at the top of
+    # a table read worst-first.
+    return sorted(
+        rows,
+        key=lambda row: (row["total_dollars"] is None, row["total_dollars"] or 0),
+    )
 
 
 def spread_calibration_from_db(days=30, reference=None, repository=None):
@@ -235,6 +339,18 @@ def build_performance_statistics(trades):
     gross_profit = float(wins.sum()) if len(wins) else 0.0
     gross_loss = abs(float(losses.sum())) if len(losses) else 0.0
 
+    # R concentrates the same way premium does, and on the window that prompted
+    # this it concentrated harder: one orphaned SMCI position booked -23.67R
+    # against a -21.78R total, so the other 27 trades summed to +1.89R. "Total R
+    # -21.78" and "+1.89R across everything except one accident" support opposite
+    # decisions, and only the first was ever on screen.
+    worst_r = float(r.min()) if len(r) else None
+    worst_r_is_a_loss = worst_r is not None and worst_r < 0
+    worst_r_symbol = (
+        str(trades.loc[r.idxmin()].get("symbol") or "")
+        if worst_r_is_a_loss else None
+    )
+
     # Premium figures are only meaningful for trades whose entry ask was frozen
     # at open (`eb56f75`). Before that, `option_pnl_pct_net` read the entry ask
     # and the close ask from the same live-refreshed key and evaluated to minus
@@ -247,6 +363,29 @@ def build_performance_statistics(trades):
     spread = pd.to_numeric(priced.get("option_spread_cost_pct", pd.Series(dtype=float)), errors="coerce").dropna()
     net_wins = net[net > 0]
 
+    # The book in cash, and how much of it is one position.
+    #
+    # A percentage average is silent about size. On the first clean window the
+    # page reported -6.7% average premium P&L across 17 trades, which reads as a
+    # strategy that loses steadily. In cash it was -$143 total, of which a single
+    # SMCI position was -$207: every other trade combined made +$64. Those are
+    # opposite conclusions from the same 17 trades, and only one of them was on
+    # screen.
+    dollars = pd.to_numeric(
+        priced.get("option_pl_dollars", pd.Series(dtype=float)), errors="coerce"
+    ).dropna()
+    worst_position = dollars.idxmin() if len(dollars) else None
+    worst_dollars = float(dollars.min()) if len(dollars) else None
+
+    # Only meaningful when the extreme is a loss. On an all-winning window the
+    # minimum is the smallest gain and "total excluding it" says nothing.
+    worst_is_a_loss = worst_dollars is not None and worst_dollars < 0
+    worst_symbol = (
+        str(priced.loc[worst_position].get("symbol") or "")
+        if worst_is_a_loss and worst_position is not None
+        else None
+    )
+
     return {
         "completed_trades": int(len(r)),
         "wins": int(len(wins)),
@@ -256,10 +395,27 @@ def build_performance_statistics(trades):
         "total_r": round(float(r.sum()), 2) if len(r) else 0,
         "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss else None,
         "max_drawdown_r": round(float((r.cumsum().cummax() - r.cumsum()).max()), 2) if len(r) else None,
+        "worst_r": round(worst_r, 2) if worst_r_is_a_loss else None,
+        "worst_r_symbol": worst_r_symbol,
+        "total_r_ex_worst": (
+            round(float(r.sum()) - worst_r, 2) if worst_r_is_a_loss else None
+        ),
         # Premium terms. These are the ones that decide whether the day made money.
         "priced_trades": int(len(net)),
         "net_win_rate": round(float(len(net_wins) / len(net) * 100), 1) if len(net) else None,
         "total_option_pnl_pct": round(float(net.sum()), 2) if len(net) else None,
         "average_option_pnl_pct": round(float(net.mean()), 2) if len(net) else None,
+        # Beside the mean, because the mean of a premium series with a -99.5%
+        # in it describes no trade that was actually taken.
+        "median_option_pnl_pct": round(float(net.median()), 2) if len(net) else None,
         "average_spread_cost_pct": round(float(spread.mean()), 2) if len(spread) else None,
+        # Cash.
+        "priced_dollar_trades": int(len(dollars)),
+        "total_option_pl_dollars": round(float(dollars.sum()), 2) if len(dollars) else None,
+        "average_option_pl_dollars": round(float(dollars.mean()), 2) if len(dollars) else None,
+        "worst_trade_dollars": round(worst_dollars, 2) if worst_is_a_loss else None,
+        "worst_trade_symbol": worst_symbol,
+        "total_ex_worst_dollars": (
+            round(float(dollars.sum()) - worst_dollars, 2) if worst_is_a_loss else None
+        ),
     }

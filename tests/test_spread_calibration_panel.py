@@ -21,6 +21,7 @@ class _Captured:
         self.info = []
         self.warning = []
         self.dataframe = []
+        self.caption = []
 
 
 def _render(calibration):
@@ -31,6 +32,7 @@ def _render(calibration):
         "info": staticmethod(lambda text, **_k: captured.info.append(text)),
         "warning": staticmethod(lambda text, **_k: captured.warning.append(text)),
         "dataframe": staticmethod(lambda frame, **_k: captured.dataframe.append(frame)),
+        "caption": staticmethod(lambda text, **_k: captured.caption.append(text)),
     })
 
     with patch.object(dashboard, "st", fake), patch.object(

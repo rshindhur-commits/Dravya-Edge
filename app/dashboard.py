@@ -56,6 +56,7 @@ from app.config.performance import (
     TRADING_CACHE_TTL,
     TRADING_DASHBOARD_STATE_ONLY,
     VALIDATION_CACHE_TTL,
+    VALIDATION_TRADE_CACHE_TTL,
 )
 from app.gates import (
     EntryGateConfig,
@@ -1316,6 +1317,57 @@ def _load_validation_cached_state(filename, mtime):
     return _read_cached_state_file(filename)
 
 
+@st.cache_data(ttl=VALIDATION_TRADE_CACHE_TTL, show_spinner=False, max_entries=8)
+def _load_validation_config_changes(start_day, end_day):
+    """Config changes inside the window, cached like the trades are.
+
+    This shipped uncached and cost a 153ms round trip on *every* rerun -- the
+    auto-refresh timer included, so an idle tab re-asked the archive all session
+    for an answer that changes when someone edits a setting in Render. Dates are
+    passed as ISO strings because the cache key has to be hashable and stable.
+
+    None (unreadable) is returned as-is and, like the trade read, is evicted by
+    the caller so an outage is not pinned on screen for the rest of the TTL.
+    """
+
+    from datetime import date
+
+    from app.analytics.config_timeline import config_changes_between
+
+    return config_changes_between(
+        date.fromisoformat(start_day), date.fromisoformat(end_day)
+    )
+
+
+@st.cache_data(ttl=VALIDATION_TRADE_CACHE_TTL, show_spinner=False, max_entries=8)
+def _load_validation_trades(days, trading_day):
+    """The Validation page's closed-trade window, cached, with its fetch time.
+
+    `trading_day` is a cache key, not an argument: the window inside
+    `closed_trades_from_db` is anchored to the current ET date, so without it a
+    tab left open across midnight would serve yesterday's window for another TTL.
+
+    The timestamp is taken here, inside the cached call, so it records when the
+    query really ran rather than when the page was drawn. Those differ by up to
+    the TTL, and a page that auto-refreshes every five minutes while its data is
+    fifteen minutes old must say which number it is reporting.
+
+    Failures are not cached -- see the caller. Pinning "the database could not be
+    read" on screen for fifteen minutes after the database came back is the
+    inverse of the bug this page was rebuilt to fix.
+    """
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.analytics.performance_statistics import closed_trades_from_db
+
+    return (
+        closed_trades_from_db(days),
+        datetime.now(ZoneInfo("America/New_York")).isoformat(),
+    )
+
+
 @st.cache_data
 def _load_static_cached_state(filename, mtime):
 
@@ -1650,6 +1702,10 @@ def _render_spread_calibration(calibration):
     measurable = int(calibration.get("measurable_trades") or 0)
 
     st.markdown("### Option Quality vs Spread Paid")
+    st.caption(
+        "Whether the contract quality score predicts what the round trip really "
+        "cost — one row per priced trade."
+    )
 
     if not measurable:
 
@@ -3820,14 +3876,31 @@ def _scanner_output_age_minutes():
 
 
 def _auto_refresh_defaults():
+    """Arm the toggle from the session, and re-arm it when the session changes.
 
-    if "auto_refresh_enabled" not in st.session_state:
+    This ran once per browser session, so a tab opened at 09:30 was still firing
+    a refresh every minute at midnight and through the weekend -- the engine
+    quiet, the closed-trade window frozen, the queries still going out. Re-arming
+    on the open/close transition means a tab left open overnight costs nothing,
+    while an operator who deliberately switches it back on after the close keeps
+    it until the next transition rather than having it snatched back on the next
+    rerun.
 
-        st.session_state["auto_refresh_enabled"] = _is_market_hours()
+    The interval defaults to the scan cadence. At 1 minute four of every five
+    refreshes redrew the same scan: the worker only produces new data every five
+    minutes, so a faster page cannot show anything a slower one would miss.
+    """
+
+    market_open = _is_market_hours()
+
+    if st.session_state.get("auto_refresh_armed_for") != market_open:
+
+        st.session_state["auto_refresh_armed_for"] = market_open
+        st.session_state["auto_refresh_enabled"] = market_open
 
     if "refresh_interval_label" not in st.session_state:
 
-        st.session_state["refresh_interval_label"] = "1 min"
+        st.session_state["refresh_interval_label"] = "5 min"
 
 
 
@@ -7656,12 +7729,17 @@ def main():
             st.caption("Trading page rendered from dashboard_state.json. Auto-refresh controls are in the sidebar.")
             return
 
+    # `validation_state.json` is a gate here, not a source: the page reads
+    # Postgres either way, and the caption used to name the file as though its
+    # contents were on screen. They are not -- the file is gitignored, so on
+    # Streamlit Cloud it never exists and this branch never fires, while locally
+    # it made a live query look like a week-old cache.
     if page == "Validation" and _load_cached_state("validation_state.json", profile="validation"):
 
         from app.ui.pages.validation import render
 
         render(pd.DataFrame())
-        st.caption("Validation page rendered from validation_state.json. Auto-refresh controls are in the sidebar.")
+        st.caption("Auto-refresh controls are in the sidebar.")
         return
 
     if page == "Research":
