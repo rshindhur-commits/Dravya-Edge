@@ -166,6 +166,117 @@ instrument for a signal this weak" — which §2.2e already bounds.
 **Gate C, Oct 23:** does the composite signal beat random on direction, on
 holdout, with a day-resampled CI excluding zero?
 
+### 4a. Build timelines for the three untried information sources
+
+Requested 2026-08-16. The dates differ by a lot, and the reason is not effort —
+it is **whether the archive can already answer the question.** A feature testable
+on 14 archived sessions is days of work. One that needs forward collection
+cannot report until the collection window closes, however fast it is built.
+
+Data status checked in the database on 2026-08-16, not assumed:
+
+| | archive support | evidence |
+|---|---|---|
+| Cross-sectional ranking | **complete** | 17,069 snapshots, bars for all symbols, 14 sessions |
+| Expected vs implied move | **1.7%** | `Option IV` on **408** rows of 23,689; `ATR %` on 21,463 |
+| News | **none** | zero news keys in 322; no client method exists |
+
+---
+
+#### A. Cross-sectional ranking · build **Aug 17–26**, first read **Aug 28**
+
+The cheapest of the three and the only one with no data dependency at all. The
+forward-return machinery already exists in `tools/relative_strength_ab.py`.
+
+| step | days |
+|---|---|
+| per-scan universe ranking (return vs the universe over a lookback) | 3 |
+| join ranks to forward returns across the archive; IC by horizon | 2 |
+| null-model comparison, both halves | 2 |
+
+**Pass:** IC on the rank is positive with a day-resampled CI excluding zero, at a
+horizon the app trades, **and** it beats a matched random entry on both halves.
+
+This runs during a live trading week, which §5.6 permits: it is measurement
+against the archive and changes no running config.
+
+#### B. Expected move versus implied · biased read **Aug 26**, clean read **mid-October**
+
+Split in two because the data is split in two. The *realised* side is well
+populated; the *implied* side is not, and the reason matters.
+
+`Option IV`, `Option Delta` and `Expected Option Profit %` each appear on
+exactly **408** rows — they exist only where contract selection actually
+succeeded. That is the 7.7% fill rate from
+[[regime-escalation-is-not-the-trade-constraint]]. **So the 408 rows are
+conditioned on the very funnel stage that is the app's known bottleneck**, and a
+result from them is biased toward contracts that were cheap and tight enough to
+be picked.
+
+Option chains are **not** archived — `option_leg_replay` holds 29 rows and
+`quote_attribution` is empty — so this cannot be backfilled from storage.
+
+| route | work | first read | worth |
+|---|---|---|---|
+| **B1** measure on the 408 as they stand | 2 days | **Aug 26** | directional hint only; state the bias every time it is quoted |
+| **B2** archive IV for every *examined* contract, not only the selected one | 3 days, ships **Sep 1** | n≈1,000 by **mid-Oct** | the honest test |
+
+B2 ships after Gate A and after the live week. `CHAIN_EXAMINED` already counts
+examined contracts, so the write path knows what it is skipping.
+
+**Pass (B2 only):** the share of trades whose realised move exceeds the implied
+move differs across quintiles **on holdout**. §5.14 rates `iv` the least stable
+of six conditions tested — best quintile Q2 in discovery, Q1 in holdout — so the
+prior here is failure, and B1 exists mainly to decide whether B2 is worth
+three days.
+
+#### C. News · feasibility **Aug 18**, build **Sep 28 – Oct 16**, first read **Oct 23 or mid-December**
+
+Zero implementation and zero archived data. The date swings by six weeks on one
+fact nobody has checked:
+
+> **Does the current data plan serve *historical* news?**
+
+That is a one-call check and it should happen on **Aug 18**, outside the market
+window, before anything is designed. It decides the whole shape:
+
+| answer | route | first read |
+|---|---|---|
+| historical available | backfill the same 14 sessions and measure like any other feature | **Oct 23** |
+| live only | ship collection, then wait for the window to fill | **mid-December** |
+
+| build step | days |
+|---|---|
+| provider client + storage table | 4 |
+| **time-alignment: join on publication timestamp, never on trading day** | 3 |
+| feature extraction (presence, recency, count, tone if available) | 5 |
+| measurement harness | 3 |
+
+**The correctness risk is the alignment, not the integration.** A headline joined
+to the day it belongs to rather than the minute it was published is lookahead,
+and it will manufacture an edge that does not exist. This is the same class of
+error as the 0-DTE contamination in §7.3a, which produced a +758% trade the app
+could never have bought. Build the alignment test before the feature.
+
+**Pass:** candidates with a fresh catalyst beat those without, against a matched
+random entry, on holdout.
+
+---
+
+#### What this ordering means
+
+**A is first because it is free.** No new data, no new writes, no provider
+dependency, and the measurement machinery exists. If cross-sectional ranking has
+anything in it, that is known by **Aug 28** — the earliest any of the three can
+report.
+
+**B's honest version is gated on a write change**, so it cannot report properly
+before mid-October whatever the effort.
+
+**C is last and is the only one that can slip to December**, on a fact that costs
+one API call to establish. Check it on Aug 18 so the December branch, if it is
+real, is known in August rather than in October.
+
 ### Phase 4 — frozen forward validation · **Oct 26 – Nov 27**
 
 Runs only if Gate C passed. **No config changes for the entire window** — §5.6,
