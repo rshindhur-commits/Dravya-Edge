@@ -173,6 +173,17 @@ and the research package is not imported by the scanner.
 
 ---
 
+## Deferred — revisit when the data grows
+
+Not blocking anything today. Recorded so they are found by looking rather than by
+hitting them.
+
+| item | trigger to act | why it can wait |
+|---|---|---|
+| Index `paper_trades.closed_at` | ~a few thousand closed trades | The Validation page filters every window read on `closed_at` and there is no index, so it is a sequential scan. 42 rows today; the read is 211 ms and all of it is the Neon round trip, not the scan. |
+| Index `scanner_runs.started_at` | ~50k runs, or if the config panel slows | The config-change panel range-scans it. 1,204 rows today, and the result is cached for 15 minutes, so it runs at most ~4×/hour. Lower priority than the above. |
+| Per-row `.iloc` in `build_spread_calibration` | if a 90-day window gets slow | Row-at-a-time `.iloc` over the priced trades. Measured 60 ms per render at 38 trades, 272 ms at 1,000 — acceptable on a page that redraws every 5 minutes, so not worth the risk of rewriting working analytics yet. |
+
 ## Branch points, stated in advance
 
 | if | then |

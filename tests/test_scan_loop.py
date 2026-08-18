@@ -107,6 +107,89 @@ class IntervalTests(unittest.TestCase):
         self.assertEqual(session, "REGULAR")
 
 
+class SessionBoundaryWaitTests(unittest.TestCase):
+    """A sleep must not carry the worker through a session that scans faster.
+
+    On 2026-08-17 a premarket scan finished at 09:22:50, took PREMARKET's 1800s,
+    and the next scan ran at 09:52:50 -- past the open, past the whole
+    OPENING_RANGE window, and seven minutes into the 09:45 entry window. The
+    week before it landed at 09:54, 09:33, 09:43, 09:36, 09:36 and 09:37, decided
+    only by where the last premarket scan fell.
+    """
+
+    def _wait_at(self, when, session):
+        """`_bounded_wait` reads the clock itself, so the boundary lookup is
+        pinned to a fixed instant rather than the test's wall time."""
+
+        with patch.object(
+            scan_loop,
+            "seconds_to_next_session_change",
+            side_effect=lambda now=None, horizon=None: _real_boundary(when, horizon),
+        ):
+            return scan_loop._bounded_wait(scan_loop.interval_for_session(session))
+
+    def test_premarket_sleep_stops_at_the_opening_bell(self):
+
+        seconds, upcoming = _real_boundary(datetime(2026, 8, 17, 9, 22, 50, tzinfo=ET))
+        self.assertEqual(upcoming, "OPENING_RANGE")
+        # 09:22:50 -> 09:30:00 exactly, not 09:30:59 and not 1800s later.
+        self.assertEqual(seconds, 430)
+
+    def test_the_closed_to_premarket_boundary_is_also_caught(self):
+
+        seconds, upcoming = _real_boundary(datetime(2026, 8, 17, 3, 50, 0, tzinfo=ET))
+        self.assertEqual(upcoming, "PREMARKET")
+        self.assertEqual(seconds, 600)
+
+    def test_a_tightening_boundary_shortens_the_sleep(self):
+
+        self.assertEqual(
+            self._wait_at(datetime(2026, 8, 17, 9, 22, 50, tzinfo=ET), "PREMARKET"),
+            430,
+        )
+
+    def test_the_post_close_archive_scan_is_left_alone(self):
+        """`idle_reason` guarantees one scan after the bell by keeping the tail
+        wider than the REGULAR interval, so a 15:59 scan schedules ~16:04. That
+        scan writes the closing archive. Clamping to the 16:00 boundary would pull
+        it to 16:00:00 and archive a close the provider may not have settled --
+        and waking early into a *slower* session buys nothing anyway."""
+
+        self.assertEqual(
+            self._wait_at(datetime(2026, 8, 17, 15, 59, 0, tzinfo=ET), "REGULAR"),
+            scan_loop.interval_for_session("REGULAR"),
+        )
+
+    def test_a_widening_boundary_never_shortens_the_sleep(self):
+
+        for when, session in (
+            (datetime(2026, 8, 17, 9, 44, 30, tzinfo=ET), "OPENING_RANGE"),
+            (datetime(2026, 8, 17, 16, 5, 0, tzinfo=ET), "AFTERHOURS"),
+        ):
+            with self.subTest(session=session):
+                self.assertEqual(
+                    self._wait_at(when, session),
+                    scan_loop.interval_for_session(session),
+                )
+
+    def test_mid_session_cadence_is_untouched(self):
+
+        self.assertEqual(
+            self._wait_at(datetime(2026, 8, 17, 11, 0, 0, tzinfo=ET), "REGULAR"),
+            scan_loop.interval_for_session("REGULAR"),
+        )
+
+
+# Bound at import, before any test patches the module attribute -- otherwise the
+# helper would call whatever the patch installed and recurse.
+_REAL_SECONDS_TO_NEXT_SESSION_CHANGE = scan_loop.seconds_to_next_session_change
+
+
+def _real_boundary(when, horizon=None):
+
+    return _REAL_SECONDS_TO_NEXT_SESSION_CHANGE(when, horizon)
+
+
 class LoopTests(unittest.TestCase):
 
     def setUp(self):
