@@ -111,6 +111,75 @@ def interval_for_session(session, override=None):
     return SESSION_INTERVALS.get(str(session).upper(), DEFAULT_INTERVAL)
 
 
+def seconds_to_next_session_change(now=None, horizon=None):
+    """Seconds until `get_market_session` returns something else, and what.
+
+    Found by probing minute by minute rather than restating the boundary table
+    here. That table lives in `app/main.py:1319`; a second copy would stay correct
+    only by luck, which is the failure the Setup % rewrite had to undo. Boundaries
+    all fall on the minute, so a 60s probe finds them exactly, and subtracting
+    `now.second` lands the wake on the change rather than up to 59s past it.
+
+    Returns `(horizon, None)` when nothing changes inside the horizon.
+    """
+
+    from app.main import get_market_session
+
+    now = now or datetime.now(ET)
+    horizon = int(horizon or max(SESSION_INTERVALS.values()))
+    session = get_market_session(now)
+
+    for offset in range(60, horizon + 60, 60):
+
+        upcoming = get_market_session(now + timedelta(seconds=offset))
+
+        if upcoming != session:
+
+            # 30s floor so a boundary one second away cannot spin the loop.
+            return max(30, offset - now.second), upcoming
+
+    return horizon, None
+
+
+def _bounded_wait(wait, interval_override=None):
+    """Do not sleep through a session change that wants a finer cadence.
+
+    The interval is chosen from the session in force *when the scan ends*, then
+    slept in full. On 2026-08-17 a premarket scan finished at 09:22:50, took
+    PREMARKET's 1800s, and the worker did not look at the market again until
+    09:52:50 -- through the open, the whole OPENING_RANGE window it is meant to
+    sample every 120s, and the first seven minutes of the 09:45 entry window.
+    Nothing was executable at 09:52, so no trade is known to have been lost;
+    there is also no data for 09:30-09:52, so that cannot be said for certain.
+
+    Not new and not consistent: first post-open scans over the preceding week
+    landed at 09:54, 09:33, 09:43, 09:36, 09:36 and 09:37, decided entirely by
+    where the last premarket scan happened to fall.
+
+    **Only shortens a sleep when the next session scans more often.** Clamping
+    every boundary would pull the post-close scan from ~16:04 back to 16:00:00,
+    and that scan writes the closing archive -- `idle_reason` guarantees it by
+    keeping the tail wider than the REGULAR interval, and it wants the close to
+    have settled. Waking early into a *slower* session buys nothing and risks
+    archiving a bar the provider has not finished. So AFTERHOURS and CLOSED
+    boundaries are left alone; PREMARKET -> OPENING_RANGE and CLOSED ->
+    PREMARKET, where cadence tightens, are the ones that matter.
+
+    Costs at most one extra wake per tightening boundary -- twice a day.
+    """
+
+    wait = int(wait)
+    seconds, upcoming = seconds_to_next_session_change()
+
+    if upcoming is None or seconds >= wait:
+        return max(5, wait)
+
+    if interval_for_session(upcoming, interval_override) >= wait:
+        return max(5, wait)
+
+    return max(5, seconds)
+
+
 def _publish_heartbeat(status, **fields):
     """Tell Postgres this engine is alive. Never allowed to break the loop.
 
@@ -451,9 +520,13 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
 
         if declared_owner and declared_owner != "worker":
 
-            wait = interval_for_session(current_session(), interval_override)
+            interval = interval_for_session(current_session(), interval_override)
+            wait = _bounded_wait(interval)
+            # `interval_seconds` stays the session's nominal cadence -- it is what
+            # the dashboard reports as "how often this engine scans". Only the
+            # sleep and `next_due_at` take the clamped value.
             _publish_heartbeat(
-                "STANDBY", scans=scans, failures=failures, interval_seconds=wait,
+                "STANDBY", scans=scans, failures=failures, interval_seconds=interval,
                 next_due_at=(datetime.now(ET) + timedelta(seconds=wait)).isoformat(),
             )
             print(
@@ -474,12 +547,13 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
         idle = idle_reason(session, datetime.now(ET)) if skip_closed else None
 
         if idle:
-            wait = interval_for_session(session, interval_override)
+            interval = interval_for_session(session, interval_override)
+            wait = _bounded_wait(interval)
             # Still report. A quiet engine and a dead one look identical from the
             # dashboard otherwise, and the reason is the answer to that question.
             _publish_heartbeat(
                 idle, session=session, scans=scans, failures=failures,
-                interval_seconds=wait,
+                interval_seconds=interval,
                 next_due_at=(datetime.now(ET) + timedelta(seconds=wait)).isoformat(),
             )
             # Idle is the only safe window for a batched DELETE: it competes with
@@ -538,7 +612,7 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
 
         interval = interval_for_session(session, interval_override)
         elapsed = result["seconds"]
-        wait = max(5, interval - elapsed)
+        wait = _bounded_wait(max(5, interval - elapsed))
 
         _publish_heartbeat(
             "IDLE" if result["ok"] else "FAILED",

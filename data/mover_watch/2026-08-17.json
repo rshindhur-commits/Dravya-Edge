@@ -1,0 +1,80 @@
+{
+  "day": "2026-08-17",
+  "generated_at": "2026-08-17T16:46:41",
+  "filter": {
+    "min_move_pct": 4.0,
+    "price": [
+      15.0,
+      600.0
+    ],
+    "min_dollar_volume_m": 200.0
+  },
+  "movers": [
+    {
+      "symbol": "WETO",
+      "change_pct": 313.625304136253,
+      "price": 24.59,
+      "dollar_volume_m": 825.08122893
+    },
+    {
+      "symbol": "SNDU",
+      "change_pct": 17.520858164481513,
+      "price": 29.75,
+      "dollar_volume_m": 291.0214615
+    },
+    {
+      "symbol": "SNXX",
+      "change_pct": 17.04756022235947,
+      "price": 19.06,
+      "dollar_volume_m": 2078.11763236
+    },
+    {
+      "symbol": "AXTI",
+      "change_pct": 16.866731994120524,
+      "price": 95.97,
+      "dollar_volume_m": 1464.73310382
+    },
+    {
+      "symbol": "CBRS",
+      "change_pct": 15.174901817517592,
+      "price": 251.98,
+      "dollar_volume_m": 3748.49933244
+    }
+  ],
+  "results": {
+    "WETO": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "SNDU": {
+      "verdict": "TOO THIN / TOO WIDE",
+      "signals": 1,
+      "bought": 0,
+      "best_spread": null,
+      "best_cost": null,
+      "needs_ceiling": null
+    },
+    "SNXX": {
+      "verdict": "CHAIN TOO WIDE",
+      "signals": 3,
+      "bought": 0,
+      "best_spread": 5.08,
+      "best_cost": 295,
+      "needs_ceiling": 6.0
+    },
+    "AXTI": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "CBRS": {
+      "verdict": "TOO EXPENSIVE",
+      "signals": 2,
+      "bought": 0,
+      "best_spread": null,
+      "best_cost": null,
+      "needs_ceiling": null
+    }
+  }
+}

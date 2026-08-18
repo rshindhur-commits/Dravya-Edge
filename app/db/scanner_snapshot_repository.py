@@ -134,6 +134,75 @@ class ScannerSnapshotRepository:
             # it was never told.
             return None if strict else []
 
+    def load_latest_scan(self):
+        """The most recent archived scan, as the scanner's own row dicts.
+
+        Exists because the dashboard cannot read the scanner's output file in
+        production. `_load_scanner_output` looks for `data/live/scanner_output_
+        latest.{csv,xlsx}`, both gitignored, and the worker that writes them runs
+        on Render while Streamlit Cloud serves the page from a different
+        container. The file never crosses, so the lookup fell through to the
+        `scanner_output.xlsx` committed to the repo -- on 2026-08-17 that was a
+        snapshot from 2026-08-08 carrying `NO_RECOMMENDATION` and
+        `STALE_MARKET_DATA` on every row. The page refreshed on schedule and
+        could not change, because it was re-reading a file in the image.
+
+        `payload` is the scanner's full row, not a projection: 323 keys covering
+        all 129 columns the spreadsheet carries, so a frame rebuilt from here is
+        the same frame, not a subset.
+
+        Returns None when nothing is archived or the read fails -- the caller
+        keeps its file path for local use and must be able to tell "no archive"
+        from "empty scan".
+        """
+
+        try:
+            with get_engine().connect() as connection:
+                rows = connection.execute(text("""
+                    WITH latest AS (
+                        SELECT scan_id
+                        FROM scanner_snapshot
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    )
+                    SELECT s.payload, s.scan_id, s.scan_timestamp, s.created_at
+                    FROM scanner_snapshot s
+                    JOIN latest l ON s.scan_id = l.scan_id
+                    ORDER BY s.symbol
+                """)).mappings().all()
+        except Exception as exc:
+            print(f"[SCANNER SNAPSHOT WARNING] load_latest_scan() failed: {exc}")
+            return None
+
+        if not rows:
+            return None
+
+        records = []
+
+        for row in rows:
+            payload = row["payload"]
+
+            # JSONB comes back decoded; a text column would not. Tolerating both
+            # keeps this working if the column type is ever migrated.
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except ValueError:
+                    continue
+
+            if isinstance(payload, dict):
+                records.append(payload)
+
+        if not records:
+            return None
+
+        return {
+            "scan_id": rows[0]["scan_id"],
+            "scan_timestamp": rows[0]["scan_timestamp"],
+            "created_at": rows[0]["created_at"],
+            "rows": records,
+        }
+
     def archive_status(self, trading_day):
         try:
             with get_engine().connect() as connection:

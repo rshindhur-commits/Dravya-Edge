@@ -1166,19 +1166,80 @@ def _backfill_affordability_columns(df):
     return df
 
 
+@st.cache_data(ttl=TRADING_CACHE_TTL, show_spinner=False)
+def _load_scanner_output_from_db():
+    """The latest archived scan as a frame, for hosts with no scanner file.
+
+    Streamlit Cloud has neither `data/live/scanner_output_latest.*` (gitignored)
+    nor a scanner writing them -- `SCAN_ENGINE_OWNER=worker` moved scanning to
+    Render, which writes those files to its own disk. Postgres is the only
+    surface both hosts share.
+
+    Cached on the trading TTL (5s) rather than uncached, because this sits on the
+    rerun path that auto-refresh drives.
+    """
+
+    from app.db.scanner_snapshot_repository import ScannerSnapshotRepository
+
+    try:
+        latest = ScannerSnapshotRepository().load_latest_scan()
+    except Exception as exc:
+        print(f"[DASHBOARD WARNING] scanner archive unreadable: {exc}")
+        return pd.DataFrame(), None
+
+    if not latest:
+        return pd.DataFrame(), None
+
+    return pd.DataFrame(latest["rows"]), latest.get("scan_timestamp")
+
+
+def _scanner_file_for_display():
+    """Which scanner file to read, or None to fall back to the archive.
+
+    `SCANNER_FILE` -- `scanner_output.xlsx` in the repo root -- is deliberately
+    *not* a fallback here. It is committed, so it exists on every host including
+    the ones that have no scanner, and it is whatever was last committed rather
+    than whatever last ran. That is how the Trading page served a 2026-08-08
+    snapshot all day on 2026-08-17 while refreshing every five minutes: the file
+    was present, so nothing else was ever consulted. It is used only when the
+    archive has nothing either, and the caller says so on screen.
+    """
+
+    if LIVE_SCANNER_CSV_FILE.exists():
+        return LIVE_SCANNER_CSV_FILE
+
+    if LIVE_SCANNER_FILE.exists():
+        return LIVE_SCANNER_FILE
+
+    return None
+
+
 def _load_scanner_output():
 
-    scanner_file = (
-        LIVE_SCANNER_CSV_FILE
-        if LIVE_SCANNER_CSV_FILE.exists()
-        else LIVE_SCANNER_FILE
-        if LIVE_SCANNER_FILE.exists()
-        else SCANNER_FILE
-    )
+    scanner_file = _scanner_file_for_display()
 
-    if not scanner_file.exists():
+    if scanner_file is None:
 
-        return pd.DataFrame()
+        df, scan_timestamp = _load_scanner_output_from_db()
+
+        if not df.empty:
+
+            return _decorate_scanner_frame(df, source=f"archive ({scan_timestamp})")
+
+        # Nothing live and nothing archived. The committed workbook is the last
+        # resort and is stale by construction, so it is labelled as such.
+        if SCANNER_FILE.exists():
+
+            st.warning(
+                "No live scanner output and no archived scan could be read. "
+                f"Showing {SCANNER_FILE.name} from the repository, which is a "
+                "committed snapshot and is not today's market."
+            )
+            scanner_file = SCANNER_FILE
+
+        else:
+
+            return pd.DataFrame()
 
     try:
 
@@ -1208,9 +1269,20 @@ def _load_scanner_output():
         )
         return pd.DataFrame()
 
-    if df.empty:
+    return _decorate_scanner_frame(df, source=scanner_file.name)
 
-        return df
+
+def _decorate_scanner_frame(df, source=None):
+    """The derived columns the Trading page reads, added to either source.
+
+    Extracted when the Postgres fallback landed. The file path and the archive
+    path have to produce the same frame, and one function is the only way to
+    guarantee that -- two copies agree on the day they are written and not after.
+    """
+
+    if df is None or df.empty:
+
+        return df if df is not None else pd.DataFrame()
 
     df = df.copy()
     df["Signal"] = df.get("Final Signal", "NEUTRAL")
@@ -1250,6 +1322,10 @@ def _load_scanner_output():
     df["Trend Phase"] = df["Signal"].apply(_trend_from_signal)
     df["Volume Score"] = df.get("Relative Volume", "N/A")
     df = _add_shadow_diagnostics(df)
+
+    # Set last: the helpers above return new frames, and `attrs` does not
+    # reliably survive every pandas operation that builds one.
+    df.attrs["scanner_source"] = source
 
     return df
 
