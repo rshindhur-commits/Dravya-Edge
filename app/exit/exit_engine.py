@@ -1438,3 +1438,158 @@ def evaluate_exit(
         "profit_lock_active": profit_lock_active,
         "v1_ema_grace_pending": grace_zone_active,
     }
+
+def evaluate_price_exits(
+    risk_setup,
+    trade_state,
+    current_price,
+    option_mid=None
+):
+    """The exit rules that need only a price, for the fast position monitor.
+
+    ``evaluate_exit`` needs ``df_15m`` and its analysis, so it can only run on
+    the scan cycle -- 300s in the regular session. On 2026-08-18 SPCX peaked at
+    **+0.75R at 10:16** and was back to **+0.09R by 10:21**: the entire reversal
+    happened inside one gap and the engine never saw a print of it. Recorded
+    intrabar peaks run 2-6x the best price any scan observed, so the engine is
+    blind to most of the move it is meant to be managing.
+
+    Three rules need nothing but the current price and the trade's own record --
+    the hard stop, the breakeven move, and the option give-back floor. They are
+    exposed here so a monitor can run them every few seconds without rebuilding
+    a fifteen-minute frame.
+
+    **This is not a second exit engine.** It calls the same helpers, reads the
+    same environment, and deliberately omits every rule that reads bars:
+    momentum (EMA/MACD/VWAP), volume flush and ``trend_still_valid`` stay in
+    ``evaluate_exit``, because a bar cannot update faster than it closes.
+    ``paper_position_lifecycle`` carries the same warning for the same reason,
+    and the way to honour it is to widen this function's callers, never to
+    reimplement a rule inside one.
+
+    Returns None when nothing fires. A None is not "the trade is fine" -- it is
+    "no price-level rule fired", and the scan cycle must still run the full
+    engine for the bar-based ones.
+    """
+
+    entry_price = _float_or_none(risk_setup.get("entry_price"))
+    stop_loss = _float_or_none(risk_setup.get("stop_loss"))
+    take_profit = _float_or_none(risk_setup.get("take_profit"))
+    price = _float_or_none(current_price)
+
+    if entry_price is None or stop_loss is None or price is None:
+        return None
+
+    state = trade_state or {}
+
+    # `paper_trades` stores PUT/CALL in `direction`; the scanner passes a setup
+    # name ("VWAP_REJECTION") in `entry_type`. `_is_short_entry` only understands
+    # the second. A monitor reading the trade row and passing "PUT" would have
+    # every short evaluated as a long -- stop on the wrong side, R inverted, and
+    # an immediate false stop-out. Resolved from whichever the caller supplied.
+    direction = str(state.get("direction") or "").upper()
+    is_short = (
+        direction == "PUT"
+        or _is_short_entry(state.get("entry_type"))
+    )
+
+    initial_stop_loss = (
+        risk_setup.get("initial_stop_loss")
+        or state.get("initial_stop_loss")
+        or stop_loss
+    )
+    risk_per_share = resolve_risk_per_share(
+        entry_price, initial_stop_loss, stop_loss
+    )
+
+    if not risk_per_share:
+        return None
+
+    progress = (
+        (entry_price - price) / risk_per_share
+        if is_short
+        else (price - entry_price) / risk_per_share
+    )
+
+    updated_stop = stop_loss
+    adjustment = None
+
+    # Breakeven, on the same trigger and the same peak/close choice the scan
+    # cycle uses. Read at call time so the switch moves without a restart.
+    trigger = _env_float("EXIT_BREAKEVEN_TRIGGER_R", 1.0)
+    judged = (
+        max(progress, _float_or_none(state.get("mfe_r")) or progress)
+        if _env_bool("EXIT_BREAKEVEN_ON_PEAK", False)
+        else progress
+    )
+
+    if trigger > 0 and judged >= trigger:
+
+        updated_stop = (
+            min(updated_stop, entry_price)
+            if is_short
+            else max(updated_stop, entry_price)
+        )
+
+        if updated_stop != stop_loss:
+            adjustment = "Moved stop to breakeven"
+
+    # The option floor reads premium directly; it is the one rule here that can
+    # fire while the underlying is still onside.
+    giveback_hit = False
+
+    if option_mid is not None:
+
+        state_for_giveback = dict(state)
+        state_for_giveback["option_current_mid"] = option_mid
+        giveback_hit, _peak, _floor = _option_giveback_exit(
+            state_for_giveback,
+            _float_or_none(state.get("option_peak_mid")),
+        )
+
+    stop_hit = price >= updated_stop if is_short else price <= updated_stop
+
+    if stop_hit:
+
+        # Labelled by where the stop actually sits, not by whether it moved on
+        # this call. A stop moved to breakeven three scans ago is still a
+        # breakeven exit, and the exit-mix comparisons this project runs are
+        # only readable if the two are never conflated.
+        code = (
+            "BREAKEVEN_STOP"
+            if entry_price is not None and abs(updated_stop - entry_price) < 1e-9
+            else "HARD_STOP"
+        )
+        return {
+            "exit": True,
+            "exit_code": code,
+            "reason": "Protective stop hit",
+            "fill_price": resolve_exit_fill(
+                code, is_short, price, updated_stop, take_profit
+            ),
+            "updated_stop": updated_stop,
+            "rr_progress": round(progress, 3),
+        }
+
+    if giveback_hit:
+
+        return {
+            "exit": True,
+            "exit_code": "OPTION_GIVEBACK",
+            "reason": "Option gave back its protected floor",
+            "fill_price": price,
+            "updated_stop": updated_stop,
+            "rr_progress": round(progress, 3),
+        }
+
+    if adjustment:
+
+        return {
+            "exit": False,
+            "exit_code": None,
+            "reason": adjustment,
+            "updated_stop": updated_stop,
+            "rr_progress": round(progress, 3),
+        }
+
+    return None
