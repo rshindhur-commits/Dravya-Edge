@@ -472,6 +472,90 @@ def test_a_stale_bar_may_not_decide_a_stop(monkeypatch):
             assert verdict is not None, f"{rule} is what this path exists for"
 
 
+# --------------------------------------------------------------------------
+# The end-of-day guard. 96% of the R ever lost past the -1R floor was two
+# positions nothing closed.
+# --------------------------------------------------------------------------
+
+def test_the_eod_guard_is_off_unless_switched_on():
+
+    assert pm.eod_close_enabled() is False
+
+
+def test_the_guard_uses_the_same_close_time_as_the_scanner():
+    """Two copies of a time is how the guard and the rule it backs up drift
+    apart, and this one only matters on the day the other has already failed."""
+
+    from app.runtime.paper_automation_support import AUTO_PAPER_EOD_CLOSE
+
+    assert pm.EOD_CLOSE_TIME == AUTO_PAPER_EOD_CLOSE
+
+
+def test_nothing_closes_before_the_close(monkeypatch):
+
+    monkeypatch.setattr(pm, "_open_positions",
+                        lambda: [{"symbol": "SPCX", "holding_profile": "INTRADAY"}])
+
+    with patch("app.state.paper_trade_manager.close_paper_trade") as close:
+        closed, carried = pm.force_close_intraday(
+            datetime(2026, 8, 19, 15, 54, tzinfo=ET)
+        )
+
+    assert not close.called
+    assert closed == []
+
+
+def test_an_intraday_position_still_open_at_the_close_is_closed(monkeypatch):
+    """SMCI #149 was INTRADAY, opened 08-05 and closed 08-13 at -23.67R. Policy
+    said close it that afternoon. Nothing did, for eight days."""
+
+    monkeypatch.setattr(pm, "_open_positions",
+                        lambda: [{"symbol": "SMCI", "holding_profile": "INTRADAY"}])
+    monkeypatch.setattr(pm, "_price_for", lambda symbol: (30.58, "rest"))
+
+    with patch("app.state.paper_trade_manager.close_paper_trade") as close:
+        closed, carried = pm.force_close_intraday(
+            datetime(2026, 8, 19, 15, 56, tzinfo=ET)
+        )
+
+    assert closed == ["SMCI"]
+    assert close.call_args.kwargs["close_price"] == 30.58
+    assert close.call_args.kwargs["notify_exit"] is True
+
+
+def test_a_multiday_carry_is_reported_and_left_alone(monkeypatch):
+    """The guard enforces the holding policy; it does not overrule it."""
+
+    monkeypatch.setattr(pm, "_open_positions",
+                        lambda: [{"symbol": "NVDA", "holding_profile": "MULTIDAY"}])
+    monkeypatch.setattr(pm, "_price_for", lambda symbol: (193.30, "rest"))
+
+    with patch("app.state.paper_trade_manager.close_paper_trade") as close:
+        closed, carried = pm.force_close_intraday(
+            datetime(2026, 8, 19, 15, 56, tzinfo=ET)
+        )
+
+    assert not close.called
+    assert closed == []
+    assert carried == ["NVDA"]
+
+
+def test_a_missing_price_never_closes_at_no_price(monkeypatch):
+    """Better a loud unmanaged position than a trade booked at None."""
+
+    monkeypatch.setattr(pm, "_open_positions",
+                        lambda: [{"symbol": "SMCI", "holding_profile": "INTRADAY"}])
+    monkeypatch.setattr(pm, "_price_for", lambda symbol: (None, None))
+
+    with patch("app.state.paper_trade_manager.close_paper_trade") as close:
+        closed, _carried = pm.force_close_intraday(
+            datetime(2026, 8, 19, 15, 56, tzinfo=ET)
+        )
+
+    assert not close.called
+    assert closed == []
+
+
 def _bars():
     import pandas as pd
 
