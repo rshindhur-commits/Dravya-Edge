@@ -60,10 +60,27 @@ LAST_MINUTE = 16 * 60
 _stopping = False
 
 
+def _log(message):
+    """Print, always flushed.
+
+    Render pipes stdout, so Python block-buffers it at 8KB. The scan worker
+    prints enough per cycle to keep filling that buffer; this process prints one
+    line and then sleeps for twenty seconds, so an unflushed line sits there
+    indefinitely and the service reads as dead in the dashboard while running
+    perfectly. A monitor whose log is invisible is not a monitor.
+
+    Belt and braces with PYTHONUNBUFFERED rather than instead of it -- the env
+    var is a property of the service and the next one will not have it.
+    """
+
+    print(message, flush=True)
+
+
+
 def _request_stop(signum, _frame):
     global _stopping
     _stopping = True
-    print(f"\n[POSITION MONITOR] signal {signum}; finishing this pass then exiting.")
+    _log(f"\n[POSITION MONITOR] signal {signum}; finishing this pass then exiting.")
 
 
 def enabled():
@@ -105,7 +122,7 @@ def _open_positions():
     try:
         return _open_paper_positions()
     except Exception as exc:
-        print(f"[POSITION MONITOR WARNING] could not load positions: {exc}")
+        _log(f"[POSITION MONITOR WARNING] could not load positions: {exc}")
         return []
 
 
@@ -162,7 +179,7 @@ def _price_for(symbol):
     try:
         return get_last_price(symbol), "rest"
     except Exception as exc:
-        print(f"[POSITION MONITOR WARNING] {symbol}: price unavailable: {exc}")
+        _log(f"[POSITION MONITOR WARNING] {symbol}: price unavailable: {exc}")
         return None, None
 
 
@@ -207,7 +224,7 @@ def check_once():
 
         decisions.append((trade, price, verdict))
 
-        print(
+        _log(
             f"[POSITION MONITOR] {symbol} @ {price} ({source}) "
             f"R={verdict.get('rr_progress')} "
             f"{verdict.get('exit_code') or verdict.get('reason')}"
@@ -257,9 +274,9 @@ def _act_on(trade, symbol, price, verdict):
                 ),
                 notify_exit=True,
             )
-            print(f"[POSITION MONITOR] CLOSED {symbol} at {fill or price}")
+            _log(f"[POSITION MONITOR] CLOSED {symbol} at {fill or price}")
         except Exception as exc:
-            print(f"[POSITION MONITOR ERROR] close failed for {symbol}: {exc}")
+            _log(f"[POSITION MONITOR ERROR] close failed for {symbol}: {exc}")
 
         return
 
@@ -274,12 +291,12 @@ def _act_on(trade, symbol, price, verdict):
             updated_stop=updated_stop,
             current_price=price,
         )
-        print(
+        _log(
             f"[POSITION MONITOR] {symbol} stop "
             f"{trade.get('stop_loss')} -> {updated_stop}"
         )
     except Exception as exc:
-        print(f"[POSITION MONITOR ERROR] stop update failed for {symbol}: {exc}")
+        _log(f"[POSITION MONITOR ERROR] stop update failed for {symbol}: {exc}")
 
 
 def main():
@@ -287,18 +304,46 @@ def main():
     signal.signal(signal.SIGINT, _request_stop)
 
     if not enabled():
-        print(
+        _log(
             "[POSITION MONITOR] POSITION_MONITOR_ENABLED is not set; exiting. "
             "The scan cycle continues to own exits."
         )
         return
 
     wait = interval_seconds()
-    print(f"[POSITION MONITOR] started; checking open positions every {wait}s.")
+    _log(f"[POSITION MONITOR] started; checking open positions every {wait}s.")
+
+    # A silent process and a dead one look identical in a dashboard. This one is
+    # silent by design -- it prints only when a rule fires, which on a day with
+    # no positions is never. So it says it is alive on a slow clock, and says so
+    # again whenever the session window opens or closes, because those are the
+    # two moments an operator wants confirmation without reading twenty lines.
+    heartbeat_every = max(1, 300 // wait)
+    passes = 0
+    was_in_session = None
 
     while not _stopping:
 
-        if _in_session():
+        in_session = _in_session()
+
+        if in_session != was_in_session:
+            _log(
+                f"[POSITION MONITOR] session "
+                f"{'OPEN -- watching' if in_session else 'CLOSED -- idle'}"
+            )
+            was_in_session = in_session
+
+        if in_session:
+
+            passes += 1
+
+            if passes % heartbeat_every == 1 or heartbeat_every == 1:
+                held = [t.get("symbol") for t in _open_positions()]
+                _log(
+                    f"[POSITION MONITOR] alive; "
+                    f"{len(held)} open position(s)"
+                    + (f": {', '.join(str(h) for h in held)}" if held else "")
+                )
 
             try:
                 check_once()
@@ -306,14 +351,14 @@ def main():
                 # A monitor that dies takes protection with it. One bad pass is
                 # a provider hiccup; the scan cycle is still running the full
                 # engine underneath either way.
-                print(f"[POSITION MONITOR ERROR] pass failed: {exc}")
+                _log(f"[POSITION MONITOR ERROR] pass failed: {exc}")
 
         for _ in range(wait):
             if _stopping:
                 break
             time.sleep(1)
 
-    print("[POSITION MONITOR] stopped.")
+    _log("[POSITION MONITOR] stopped.")
 
 
 if __name__ == "__main__":
