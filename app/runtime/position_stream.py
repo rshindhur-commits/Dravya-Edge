@@ -42,6 +42,22 @@ import time
 DEFAULT_MAX_AGE_SECONDS = 15.0
 
 
+def _log(message):
+    """Print, always flushed.
+
+    Render pipes stdout, so Python block-buffers it at 8KB. The scan worker
+    prints enough per cycle to keep filling that buffer; this process prints one
+    line and then sleeps for twenty seconds, so an unflushed line sits there
+    indefinitely and the service reads as dead in the dashboard while running
+    perfectly. A monitor whose log is invisible is not a monitor.
+
+    Belt and braces with PYTHONUNBUFFERED rather than instead of it -- the env
+    var is a property of the service and the next one will not have it.
+    """
+
+    print(message, flush=True)
+
+
 def stream_enabled():
     """Read at call time so the switch moves without a redeploy."""
 
@@ -205,7 +221,7 @@ class PriceStream:
                     self._healthy = False
                     self._last_error = str(exc)
 
-                print(f"[PRICE STREAM] disconnected: {exc}")
+                _log(f"[PRICE STREAM] disconnected: {exc}")
 
             if self._stopping:
                 break
