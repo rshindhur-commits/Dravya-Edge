@@ -98,6 +98,19 @@ def interval_seconds():
         return DEFAULT_INTERVAL_SECONDS
 
 
+def candidate_logging_enabled():
+    """Observational sub-scan price capture. Off by default.
+
+    Separate from POSITION_MONITOR_ENABLED because it writes rows nothing reads,
+    and an operator should be able to run the monitor without also growing a
+    table.
+    """
+
+    return str(os.getenv("POSITION_MONITOR_LOG_CANDIDATES", "")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 def _in_session(now=None):
     now = now or datetime.now(ET)
 
@@ -232,7 +245,109 @@ def check_once():
 
         _act_on(trade, symbol, price, verdict)
 
+    if candidate_logging_enabled():
+        _log_candidate_prices({t.get("symbol") for t in positions})
+
     return decisions
+
+
+def _forming_candidates(held_symbols):
+    """Symbols showing a direction but holding no position, from the last scan.
+
+    Read from `candidate_snapshot` rather than re-derived, so this observes what
+    the scanner actually decided instead of inventing a second opinion about
+    what counts as a candidate.
+    """
+
+    from sqlalchemy import text
+
+    from app.db.connection import get_engine
+
+    try:
+        with get_engine().connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT DISTINCT ON (symbol)
+                           symbol, direction, setup, scanner_recommendation
+                    FROM candidate_snapshot
+                    WHERE trading_day = (now() AT TIME ZONE 'America/New_York')::date
+                      AND direction IS NOT NULL
+                      AND upper(direction) IN ('CALL', 'PUT')
+                    ORDER BY symbol, created_at DESC
+                    """
+                )
+            ).mappings().all()
+    except Exception as exc:
+        _log(f"[POSITION MONITOR WARNING] candidate read failed: {exc}")
+        return []
+
+    return [r for r in rows if r["symbol"] not in held_symbols]
+
+
+def _log_candidate_prices(held_symbols):
+    """Record sub-scan prices for candidates that have not entered.
+
+    Purely observational -- see `032_candidate_price_log.sql`. The archive is
+    5-minute snapshots, so the movement inside a gap has never been recorded, and
+    every question about entry timing has had to be answered with a proxy. This
+    is how that data starts existing.
+
+    Failures are swallowed on purpose. A logging table must never be able to stop
+    a monitor whose actual job is managing open positions.
+    """
+
+    from sqlalchemy import text
+
+    from app.db.connection import get_engine
+    from app.utils.polygon_client import get_last_price
+
+    candidates = _forming_candidates(held_symbols)
+
+    if not candidates:
+        return 0
+
+    written = 0
+
+    for row in candidates:
+
+        try:
+            price, source = _price_for(row["symbol"])
+        except Exception:
+            continue
+
+        if not price:
+            continue
+
+        try:
+            with get_engine().begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO candidate_price_log
+                            (trading_day, symbol, price, signal, setup,
+                             direction, source)
+                        VALUES (
+                            (now() AT TIME ZONE 'America/New_York')::date,
+                            :symbol, :price, :signal, :setup, :direction, :source
+                        )
+                        """
+                    ),
+                    {
+                        "symbol": row["symbol"],
+                        "price": price,
+                        "signal": row.get("scanner_recommendation"),
+                        "setup": row.get("setup"),
+                        "direction": row.get("direction"),
+                        "source": source,
+                    },
+                )
+            written += 1
+        except Exception as exc:
+            _log(f"[POSITION MONITOR WARNING] candidate log failed: {exc}")
+            return written
+
+    return written
 
 
 def _act_on(trade, symbol, price, verdict):
