@@ -449,6 +449,72 @@ def option_breakeven_arm_pct():
     return _env_float("EXIT_OPTION_BREAKEVEN_ARM_PCT", 10.0)
 
 
+def _stop_trigger_price(latest, trade_state, is_short):
+    """The price this bar may test the stop against.
+
+    A stop is only exposed to price action that happens **after** it is set. The
+    check was the bar extreme -- `latest["Low"] <= stop_loss` -- taken from the
+    *forming* bar, so a stop moved to breakeven mid-bar was immediately tested
+    against the bar's earlier low, price it had never been resting at.
+
+    PLTR #352 on 2026-08-19 is the case. The stop moved to breakeven 173.30 at
+    11:20; at 11:24 the engine closed it on the 11:15-11:30 bar's low of 172.92,
+    set at 11:15, five minutes before the stop existed at that level. Every low
+    after the move was 174.10 or higher -- the trade was +1.04R and still
+    climbing, and it booked 0.00R. It is not a rounding-scale error either: the
+    decision price sat $1.34 above the stop, against 6-39 cents for the ordinary
+    intrabar touches in the same archive.
+
+    The failure is one-directional. It can only ever *close* a trade that should
+    have stayed open, because a stop that just moved has by definition moved in
+    the profitable direction, so the pre-move extreme it fires on is always the
+    wrong side of it.
+
+    When the stop moved inside the current bar the extreme is unusable, so the
+    Close is used -- the one price in the bar known to be current. TSLA #340 the
+    same session is the case this must not break: its stop moved at 10:13 and the
+    lows that took it out, 338.02 at 10:14 and 338.01 at 10:15, both came after.
+    That bar's extreme stays valid and the stop still fires.
+
+    Falls back to the extreme whenever the comparison cannot be made -- no
+    recorded move, an unparseable timestamp, a frame with no usable index. A
+    diagnostic that cannot read its inputs must not silently stop enforcing
+    stops; the previous behaviour is the safe default here, not the permissive
+    one.
+    """
+
+    extreme = latest["High"] if is_short else latest["Low"]
+
+    moved_at = (trade_state or {}).get("stop_moved_at")
+
+    if not moved_at:
+        return extreme
+
+    bar_start = getattr(latest, "name", None)
+
+    if bar_start is None:
+        return extreme
+
+    try:
+        import pandas as pd
+
+        moved = pd.Timestamp(moved_at)
+        opened = pd.Timestamp(bar_start)
+
+        # Compare in one frame of reference. A naive bar index is read as UTC,
+        # which is how the replay fixtures and the live frames both arrive.
+        moved = moved.tz_localize("UTC") if moved.tzinfo is None else moved.tz_convert("UTC")
+        opened = opened.tz_localize("UTC") if opened.tzinfo is None else opened.tz_convert("UTC")
+
+    except Exception:
+        return extreme
+
+    if moved <= opened:
+        return extreme
+
+    return latest["Close"]
+
+
 def _giveback_floor(peak_gain):
     """The lowest gain this trade may fall to, or None while unprotected.
 
@@ -971,9 +1037,16 @@ def evaluate_exit(
     adjustment_reason = "Trend intact"
 
     # Hard stop and hard target are evaluated before softer invalidation rules.
+    #
+    # The stop is tested against `_stop_trigger_price`, not the bar extreme, so a
+    # stop moved inside the current bar cannot be triggered by price from earlier
+    # in that same bar. The target keeps the extreme: it never moves, so every
+    # tick of the bar was exposed to it.
+    stop_trigger = _stop_trigger_price(latest, trade_state, is_short)
+
     if is_short:
 
-        if latest["High"] >= stop_loss:
+        if stop_trigger >= stop_loss:
 
             exit_reasons.append(_exit_diagnostic("HARD_STOP", "Hard stop hit (short)"))
 
@@ -983,7 +1056,7 @@ def evaluate_exit(
 
     else:
 
-        if latest["Low"] <= stop_loss:
+        if stop_trigger <= stop_loss:
 
             exit_reasons.append(_exit_diagnostic("HARD_STOP", "Hard stop hit (long)"))
 

@@ -284,6 +284,12 @@ def update_paper_trade(
     trade["rr_progress"] = rr_progress
     # Capture the entry risk before the protective stop is allowed to move.
     _backfill_initial_stop(trade)
+    # When the stop last moved, so `_stop_trigger_price` can refuse to test a
+    # stop against price from before it existed at that level. PLTR #352 was
+    # closed on 2026-08-19 by a breakeven stop set at 11:20 firing on a 11:15
+    # low, while +1.04R and climbing.
+    if _safe_float(updated_stop) != _safe_float(trade.get("stop_loss")):
+        trade["stop_moved_at"] = _now_et().isoformat()
     trade["stop_loss"] = updated_stop
     if bars_in_trade is not None:
         trade["bars_in_trade"] = bars_in_trade

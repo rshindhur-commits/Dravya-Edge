@@ -269,6 +269,11 @@ def _trade_state(trade):
         "mfe_r": trade.get("mfe_r"),
         "option_peak_mid": trade.get("option_peak_mid"),
         "option_current_mid": trade.get("option_current_mid"),
+        # Carried so `_stop_trigger_price` behaves identically on both paths.
+        # This path cannot close on HARD_STOP -- MOMENTUM_EXIT_RULES bars it --
+        # but the two engines reading the same trade differently is how they
+        # drift apart.
+        "stop_moved_at": trade.get("stop_moved_at"),
     }
 
 
