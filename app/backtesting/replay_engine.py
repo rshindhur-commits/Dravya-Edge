@@ -468,6 +468,12 @@ def _manage_trade(trade, moment, df_5m, df_15m, analysis_15m, config):
     # risk does not, and excursions ratchet rather than overwrite.
     trade.state["highest_price"] = verdict["highest_price"]
     trade.state["lowest_price"] = verdict["lowest_price"]
+    # Stamped before the assignment, like update_paper_trade, so
+    # `_stop_trigger_price` can refuse to test a stop against price from before
+    # it moved. Without it the replay reproduces the *old* behaviour and any A/B
+    # of that fix measures nothing.
+    if verdict["updated_stop"] != trade.state.get("stop_loss"):
+        trade.state["stop_moved_at"] = moment
     trade.state["stop_loss"] = verdict["updated_stop"]
     trade.state["bars_in_trade"] = verdict["bars_in_trade"]
     trade.state["partial_profit_taken"] = verdict["partial_profit_taken"]

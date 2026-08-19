@@ -391,5 +391,64 @@ class RestartReportingTests(unittest.TestCase):
         notify.assert_not_called()
 
 
+class ScanStraddlingABoundaryTests(unittest.TestCase):
+    """A scan can outlive the session it began under.
+
+    On 2026-08-19 a premarket scan started at 09:29:54 and ran 116s. It finished
+    inside OPENING_RANGE still holding PREMARKET's 1800s, `_bounded_wait` clamped
+    to the next boundary it could see -- 09:45 -- and the whole 09:30-09:45
+    opening range went unscanned. `_bounded_wait` handles the boundary being
+    crossed while sleeping; this handles it being crossed while scanning.
+    """
+
+    def test_the_opening_bell_crossed_mid_scan_tightens_the_cadence(self):
+
+        self.assertEqual(
+            scan_loop.interval_after_scan("PREMARKET", "OPENING_RANGE"),
+            scan_loop.interval_for_session("OPENING_RANGE"),
+        )
+
+    def test_the_closing_bell_crossed_mid_scan_does_not_slow_the_cadence(self):
+        """The guard that keeps the closing archive alive.
+
+        `idle_reason` allows a 20-minute tail after the bell, wider than REGULAR's
+        300s, so the final pre-close scan schedules one at ~16:04 and that scan
+        writes the closing archive. Taking AFTERHOURS' 1800s here would schedule
+        it at ~16:30 -- past the tail -- and the archive would never be written.
+        """
+
+        self.assertEqual(
+            scan_loop.interval_after_scan("REGULAR", "AFTERHOURS"),
+            scan_loop.interval_for_session("REGULAR"),
+        )
+
+    def test_an_unchanged_session_is_left_exactly_alone(self):
+
+        for session in ("PREMARKET", "OPENING_RANGE", "REGULAR", "AFTERHOURS", "CLOSED"):
+            with self.subTest(session=session):
+                self.assertEqual(
+                    scan_loop.interval_after_scan(session, session),
+                    scan_loop.interval_for_session(session),
+                )
+
+    def test_it_only_ever_shortens(self):
+        """Every ordered pair of sessions, not just the two that prompted this."""
+
+        for start in scan_loop.SESSION_INTERVALS:
+            for end in scan_loop.SESSION_INTERVALS:
+                with self.subTest(start=start, end=end):
+                    self.assertLessEqual(
+                        scan_loop.interval_after_scan(start, end),
+                        scan_loop.interval_for_session(start),
+                    )
+
+    def test_a_fixed_interval_override_still_wins(self):
+        """`--interval` is an operator saying "this cadence, whatever you think"."""
+
+        self.assertEqual(
+            scan_loop.interval_after_scan("PREMARKET", "OPENING_RANGE", 90), 90
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

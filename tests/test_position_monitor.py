@@ -261,13 +261,13 @@ def test_a_stale_streamed_price_falls_back_to_rest(monkeypatch):
     monkeypatch.setenv("POSITION_MONITOR_STREAM_ENABLED", "true")
     monkeypatch.setattr(position_stream, "get_stream",
                         lambda: _FakeStream(141.10, age=999.0))
-    monkeypatch.setattr("app.utils.polygon_client.get_last_price",
+    monkeypatch.setattr("app.utils.polygon_client.get_live_price",
                         lambda symbol: 142.00)
 
     price, source = pm._price_for("SPCX")
 
     assert price == 142.00, "a stale stream must not decide a stop"
-    assert source == "rest"
+    assert source == "last_trade"
 
 
 def test_an_empty_stream_falls_back_to_rest(monkeypatch):
@@ -276,13 +276,13 @@ def test_an_empty_stream_falls_back_to_rest(monkeypatch):
     monkeypatch.setenv("POSITION_MONITOR_STREAM_ENABLED", "true")
     monkeypatch.setattr(position_stream, "get_stream",
                         lambda: _FakeStream(None, age=None))
-    monkeypatch.setattr("app.utils.polygon_client.get_last_price",
+    monkeypatch.setattr("app.utils.polygon_client.get_live_price",
                         lambda symbol: 142.00)
 
     price, source = pm._price_for("SPCX")
 
     assert price == 142.00
-    assert source == "rest"
+    assert source == "last_trade"
 
 
 def test_sync_subscribes_and_unsubscribes_to_match_the_book():
@@ -318,7 +318,14 @@ def test_a_handled_message_records_price_and_marks_healthy():
 # Momentum on 1-minute bars
 # --------------------------------------------------------------------------
 
-def test_momentum_is_off_unless_switched_on():
+def test_momentum_is_off_unless_switched_on(monkeypatch):
+
+    # Pinned rather than read from the ambient environment. `settings.py` calls
+    # load_dotenv() at import, so before `.env` was synced to Render on
+    # 2026-08-19 this passed only because the local file happened to omit the
+    # variable -- while production had it true. A test for a *code default* must
+    # not assert whatever the operator last deployed.
+    monkeypatch.delenv("POSITION_MONITOR_MOMENTUM_ENABLED", raising=False)
 
     assert pm.momentum_enabled() is False
 
@@ -477,7 +484,11 @@ def test_a_stale_bar_may_not_decide_a_stop(monkeypatch):
 # positions nothing closed.
 # --------------------------------------------------------------------------
 
-def test_the_eod_guard_is_off_unless_switched_on():
+def test_the_eod_guard_is_off_unless_switched_on(monkeypatch):
+
+    # Pinned for the same reason as the momentum switch above: production sets
+    # this true on the position worker.
+    monkeypatch.delenv("POSITION_MONITOR_EOD_CLOSE_ENABLED", raising=False)
 
     assert pm.eod_close_enabled() is False
 
@@ -597,3 +608,79 @@ class _FakeClient:
 class _FakeAgg:
     def __init__(self, symbol, close):
         self.symbol, self.close = symbol, close
+
+
+# --------------------------------------------------------------------------
+# The price the rules are judged against
+# --------------------------------------------------------------------------
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload, self.text = payload, str(payload)
+
+    def json(self):
+        return self._payload
+
+
+def test_the_rest_floor_asks_for_the_last_trade_not_the_previous_close():
+    """The defect of 2026-08-19.
+
+    `_price_for` fell back to `get_last_price`, which reads
+    `/v2/aggs/ticker/{symbol}/prev` and returns the previous session's close.
+    `POSITION_MONITOR_STREAM_ENABLED` is set on neither Render service, so that
+    fallback was the only path: the sub-scan log held SPCX at 143.34 for 89
+    consecutive polls while it traded down to 137.76.
+    """
+
+    from app.utils import polygon_client
+
+    seen = []
+
+    def _capture(url, params=None, timeout=10):
+        seen.append(url)
+        return _FakeResponse({"results": {"p": 137.76}})
+
+    with patch.object(polygon_client, "safe_request", _capture), \
+         patch.object(polygon_client, "get_polygon_api_key", lambda: "k"):
+
+        polygon_client.get_live_price._cache = {}
+        price = polygon_client.get_live_price("SPCX")
+
+    assert price == 137.76
+    assert "/v2/last/trade/SPCX" in seen[0]
+    assert "/prev" not in seen[0], "the previous close is not a live price"
+
+
+def test_an_unavailable_live_price_is_none_and_never_yesterdays_close():
+    """No fallback, on purpose.
+
+    A stale price that looks live is worse than no price: it disables every
+    protective rule while the market appears motionless, which is the same
+    reasoning that makes `_price_for` refuse an aged streamed price. The caller
+    skips a symbol it cannot price.
+    """
+
+    from app.utils import polygon_client
+
+    with patch.object(polygon_client, "safe_request",
+                      lambda *a, **k: _FakeResponse({"results": None})), \
+         patch.object(polygon_client, "get_polygon_api_key", lambda: "k"):
+
+        polygon_client.get_live_price._cache = {}
+
+        assert polygon_client.get_live_price("SPCX") is None
+
+
+def test_the_two_price_calls_do_not_share_a_cache():
+    """Different numbers with different shelf lives. A shared key would let
+    whichever ran first answer for the other."""
+
+    from app.utils import polygon_client
+
+    polygon_client.get_live_price._cache = {"SPCX": (__import__("time").monotonic(), 137.76)}
+    polygon_client.get_last_price._cache = {"SPCX": (__import__("time").monotonic(), 143.34)}
+
+    with patch.object(polygon_client, "get_polygon_api_key", lambda: "k"):
+
+        assert polygon_client.get_live_price("SPCX") == 137.76
+        assert polygon_client.get_last_price("SPCX") == 143.34

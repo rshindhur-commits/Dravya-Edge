@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -53,6 +54,18 @@ class LeveragePreferenceTests(unittest.TestCase):
     +26.4% of premium against a contract costing 2.6% of notional; SMCI booked
     +1.0R and +5.1% against one costing 9.5%.
     """
+
+    def setUp(self):
+        # Production sets RANK_LEVERAGE_WEIGHT=0, which switches this preference
+        # off entirely -- `trade_ranker.py:189` notes that zero reproduces the
+        # original 0.15:0.10 proportion. These cases are about what the weight
+        # *does*, so they pin it to the default instead of reading whatever is
+        # deployed. Before `.env` was synced to Render on 2026-08-19 they passed
+        # only because the local file omitted the variable.
+        patcher = patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("RANK_LEVERAGE_WEIGHT", None)
 
     def _pair(self):
         """The two trades of 2026-08-03, with everything but leverage equal."""

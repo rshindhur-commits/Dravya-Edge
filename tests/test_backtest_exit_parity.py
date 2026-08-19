@@ -29,13 +29,32 @@ import app.backtesting.historical_market_data as hmd
 def _momentum_exits_on(monkeypatch):
     """Every fixture trade was exited with the momentum class active.
 
-    Production has run EXIT_MOMENTUM_ENABLED=false since 2026-08-16, so a
-    local .env mirroring production silently replays these trades under a
-    different exit engine than the one that produced them, and parity fails
-    for a reason that has nothing to do with the code under test.
+    Pinned so that whatever `.env` carries, these trades replay under the exit
+    engine that produced them rather than the one currently deployed. (The
+    deployed value has moved twice: false on 2026-08-16, true again by
+    2026-08-19 -- which is exactly why this is pinned and not assumed.)
+
+    `EXIT_BREAKEVEN_TRIGGER_R` is deleted for the same reason. The fixture trades
+    were exited when the breakeven move was hard-wired to a full 1R; production
+    now runs 0.5, and once `.env` was synced to Render on 2026-08-19 that moved
+    stops on replayed trades live had left alone.
     """
 
     monkeypatch.setenv("EXIT_MOMENTUM_ENABLED", "true")
+    monkeypatch.delenv("EXIT_BREAKEVEN_TRIGGER_R", raising=False)
+
+    # The exit features are staged off in `.env` while they roll out one per
+    # session. This file measures what they *do*, so it pins the code defaults
+    # rather than reading whichever stage the rollout has reached.
+    for key in (
+        "EXIT_PROFIT_LADDER",
+        "EXIT_TRAIL_ARM_R",
+        "EXIT_TRAIL_ATR_MULT",
+        "EXIT_STRUCTURE_TRAIL_ENABLED",
+        "EXIT_TARGET_EXTEND_ENABLED",
+        "SOFT_EXIT_HOLD_ENABLED",
+    ):
+        monkeypatch.delenv(key, raising=False)
 from app.backtesting.replay_engine import (
     ReplayConfig,
     ReplayTrade,
@@ -216,10 +235,24 @@ def test_nvda_profit_giveback_pathology_still_reproduces(live_trades):
     ``resolve_profit_lock``'s docstring occurs earlier in the hold, not at the
     exit.
 
-    So the giveback this fix targets is still live on its own motivating case.
-    This test pins that, deliberately: if a threshold change or a later fix
-    makes profit lock engage here, this fails and the new behaviour gets
-    recorded rather than sliding in unobserved.
+    **The profit ladder closed it, and this guard now records that.** The tripwire
+    above fired on 2026-08-19 when `EXIT_PROFIT_LADDER` shipped, which is exactly
+    what it was written to do. Isolated on this fixture:
+
+        original (trail 2.0R, no ladder)   EMA9 invalidation   +0.596R
+        trail arming lowered to 1.0R       Hard stop           +0.596R
+        ladder only                        Hard stop           +1.384R
+        both                               Hard stop           +1.384R
+
+    Lowering the trail's arm changes only the *label* -- the ATR trail follows
+    price closely enough to land where the EMA9 touch would have. The ladder is
+    what holds the gain: against the same 2.03R peak this replay reaches, the
+    exit moves from +0.596R to +1.384R and the giveback falls from 1.43R to
+    0.65R. The live row's 1.66R is the peak *live* recorded before its own
+    earlier exit; the replay holds longer and sees more of the move.
+
+    The guard is kept, inverted: it now fails if the giveback grows back, which
+    would mean the ladder stopped engaging on the case it was built for.
     """
 
     trade = next(t for t in live_trades if t["scan_id"] == "2026-07-31_125759")
@@ -227,20 +260,19 @@ def test_nvda_profit_giveback_pathology_still_reproduces(live_trades):
     replay, track = _run_to_exit(trade, collect=True)
 
     assert not replay.is_open
-    assert replay.exit_reason == "EMA9 invalidation (long)"
 
     peak = max(point["mfe_r"] for point in track if point["mfe_r"] is not None)
 
     assert peak >= 1.6, f"peak MFE {peak:.2f}, expected ~1.66R"
-    assert abs(replay.r_multiple - 0.60) < 0.05, (
-        f"exited at {replay.r_multiple}R, expected ~0.60R"
+    assert abs(replay.r_multiple - 1.384) < 0.05, (
+        f"exited at {replay.r_multiple}R, expected ~1.38R with the ladder engaged"
     )
 
     giveback = peak - replay.r_multiple
 
-    assert giveback > 1.0, (
-        f"giveback fell to {giveback:.2f}R -- profit lock may now be engaging; "
-        f"confirm the change is intended and update this guard"
+    assert giveback < 0.8, (
+        f"giveback grew to {giveback:.2f}R -- the ladder has stopped engaging on "
+        f"the trade it was built for; it was 1.43R before the ladder and 0.65R after"
     )
 
 

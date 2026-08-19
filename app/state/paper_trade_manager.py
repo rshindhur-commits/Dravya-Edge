@@ -284,6 +284,12 @@ def update_paper_trade(
     trade["rr_progress"] = rr_progress
     # Capture the entry risk before the protective stop is allowed to move.
     _backfill_initial_stop(trade)
+    # When the stop last moved, so `_stop_trigger_price` can refuse to test a
+    # stop against price from before it existed at that level. PLTR #352 was
+    # closed on 2026-08-19 by a breakeven stop set at 11:20 firing on a 11:15
+    # low, while +1.04R and climbing.
+    if _safe_float(updated_stop) != _safe_float(trade.get("stop_loss")):
+        trade["stop_moved_at"] = _now_et().isoformat()
     trade["stop_loss"] = updated_stop
     if bars_in_trade is not None:
         trade["bars_in_trade"] = bars_in_trade
@@ -349,6 +355,12 @@ def update_paper_trade(
         for field in ("profit_protection_active", "profit_lock_stop", "profit_giveback_r"):
             if exit_state.get(field) is not None:
                 trade[field] = exit_state.get(field)
+        # First touch wins. This records what the target was worth when it was
+        # first reached, so `final r_multiple - target_touch_r` measures exactly
+        # what EXIT_TARGET_EXTEND_ENABLED won or lost -- without a replay, and
+        # whether the switch is on or off.
+        if exit_state.get("target_touch_r") is not None and trade.get("target_touch_r") is None:
+            trade["target_touch_r"] = exit_state.get("target_touch_r")
 
     state[trade_key] = trade
     save_paper_trades(state)
@@ -627,6 +639,21 @@ def _ratchet_excursions(trade, exit_state, execution_metrics):
 
     Falls back to `execution_metrics` for callers that pass no exit_state, so the
     shadow's number is still better than nothing where nothing else exists.
+
+    **`option_peak_mid` is ratcheted here for the same reason and was missed.**
+    It is a premium rather than an R excursion, but it is a peak with exactly
+    these semantics, and `evaluate_exit` emitted it into its verdict while
+    nothing wrote it back -- 0 of 54 recorded trades carried the field. So
+    `_option_giveback_exit` re-derived the peak from the current mid on every
+    scan (`exit_engine.py:522`), the give-back was structurally zero, and the
+    two-tier floor could never fire. That floor is the rule measured best of the
+    four candidates in `_giveback_floor`'s own table (+143.4% against +52.4% for
+    the book), and it had never once run.
+
+    Measured on TSLA #340, 2026-08-19: the option peaked at 9.95 against a 9.625
+    entry (+3.4%, clearing the 3% arm) and booked at 9.125 (-5.2%). With the peak
+    carried, the floor sits at the 0% gain and the trade exits at 9.625 -- the
+    whole $50 loss.
     """
 
     # Precedence is per field, not per source. Returning as soon as the live
@@ -642,7 +669,7 @@ def _ratchet_excursions(trade, exit_state, execution_metrics):
         if not source:
             continue
 
-        for field in ("mfe_r", "mae_r"):
+        for field in ("mfe_r", "mae_r", "option_peak_mid"):
 
             # The live engine is authoritative where it spoke at all; only
             # fields it left unset fall through to the shadow.
@@ -1049,6 +1076,90 @@ def _save_paper_trade_telemetry(trade):
         )
 
 
+def entry_fill_slip(symbol, direction, entry_price, stop_loss):
+    """What the tape says now, and how far the decision price has drifted.
+
+    `entry_price` is the scanner's decision candle. The scan that acts on it
+    finishes minutes later -- measured over 40 trades the gap averages 5.6 minutes
+    and reaches 13 -- so the price the trade actually opens at is not the price
+    the geometry was computed from.
+
+    Returns `(live_price, slip_r)` where **slip_r is signed against the trade**:
+    positive means the market has moved the wrong way since the decision, for
+    either direction. `(None, None)` when no quote is available, so every caller
+    falls back to the behaviour it had.
+
+    Measured on 2026-08-19's five entries: TSLA slipped +0.59R, AVGO +0.32R,
+    AMZN +0.09R, SMH +0.06R, PLTR -0.12R. Booking the decision price rather than
+    the fill flattered the day by 0.73R -- +1.66R booked against +0.93R real.
+    """
+
+    try:
+        from app.utils.polygon_client import get_live_price
+
+        live = _safe_float(get_live_price(symbol))
+
+    except Exception as exc:
+        print(f"[ENTRY FILL WARNING] {symbol}: {exc}")
+        return None, None
+
+    if live is None:
+        return None, None
+
+    entry = _safe_float(entry_price)
+    stop = _safe_float(stop_loss)
+
+    if entry is None or stop is None:
+        return round(live, 4), None
+
+    risk = abs(entry - stop)
+
+    if not risk:
+        return round(live, 4), None
+
+    # A quote that disagrees with the decision candle by more than a few percent
+    # is not slippage, it is a bad read -- the candle is at most ~13 minutes old
+    # and a move that size inside it is extraordinary. Recorded, but never used
+    # to refuse: a stale or wrong quote must not be able to block every entry,
+    # and an offline caller must not have its behaviour changed by a failed
+    # lookup returning something unrelated.
+    if entry and abs(live - entry) / abs(entry) > get_float_env("ENTRY_FILL_SANITY_PCT", 5.0) / 100.0:
+        print(
+            f"[ENTRY FILL WARNING] {symbol}: live {live} is far from the decision "
+            f"price {entry}; treating the quote as unusable"
+        )
+        return round(live, 4), None
+
+    is_short = str(direction or "").upper() in {"PUT", "SHORT"}
+    drift = (entry - live) if is_short else (live - entry)
+
+    return round(live, 4), round(drift / risk, 3)
+
+
+def max_entry_fill_slip_r():
+    """How far the price may drift against a candidate before it is refused.
+
+    Unmeasured. It exists because the drift is one-directional in cost -- an
+    entry taken 0.6R worse than the geometry it was approved on is a different
+    trade from the one the gate allowed, and its stop is that much closer.
+    0.35 refuses only clearly degraded fills; on 2026-08-19 it would have refused
+    TSLA (+0.59R) and allowed the other four.
+
+    Set to 0 to disable the refusal and keep recording only.
+    """
+
+    return get_float_env("ENTRY_MAX_FILL_SLIP_R", 0.35)
+
+
+def _entry_fill_observation(symbol, direction, entry_price, stop_loss, live=None, slip=None):
+    """The recorded pair, for callers that already resolved the fill."""
+
+    if live is None and slip is None:
+        live, slip = entry_fill_slip(symbol, direction, entry_price, stop_loss)
+
+    return {"entry_price_at_fill": live, "entry_fill_gap_r": slip}
+
+
 def open_paper_trade(
     symbol,
     direction,
@@ -1127,6 +1238,28 @@ def open_paper_trade(
         "forced_eod_exit": False,
         "entry_type": entry_type,
         "entry_price": entry_price,
+        # What the tape said at the moment this row was written, beside the
+        # candle price the decision was taken on.
+        #
+        # `entry_price` comes from the scanner's decision candle, and the scan
+        # that acts on it finishes minutes later: measured over 40 trades the
+        # gap between that candle and `opened_at` averages **5.6 minutes** and
+        # reaches 13. Over the 12 trades of 2026-08-17..19 the booked entry sat a
+        # mean of **0.25R** from where the tape actually was -- TSLA #340 was
+        # booked at 338.31 while the market was 339.31, so its "breakeven" stop
+        # was set a dollar below where it really opened.
+        #
+        # The option leg is already priced live at this instant
+        # (`option_bid`/`option_ask`, LIVE_QUOTE), so today the two legs of the
+        # same trade are priced from different moments.
+        #
+        # **Recorded only; nothing reads it to decide anything.** Re-anchoring
+        # `entry_price` would move every R in the book and change which
+        # candidates clear `min_rr`, so it needs measuring across the archive
+        # before it changes behaviour -- the same way spread widening and stop
+        # viability shipped observe-only. This is the column that makes that
+        # measurement possible.
+        **_entry_fill_observation(symbol, direction, entry_price, stop_loss),
         "stop_loss": stop_loss,
         # Frozen at entry. `stop_loss` moves (breakeven, trailing, profit lock);
         # this stays put because it is the denominator for every R measurement.

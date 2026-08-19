@@ -449,6 +449,327 @@ def option_breakeven_arm_pct():
     return _env_float("EXIT_OPTION_BREAKEVEN_ARM_PCT", 10.0)
 
 
+DEFAULT_PROFIT_LADDER = "1.0:0.25,1.5:0.75,2.0:1.25,2.5:1.75,3.0:2.25"
+
+
+def trail_arm_r():
+    """The R at which the ATR trail starts following price.
+
+    Was hard-coded to 2.0, which made it unreachable. Targets are set at 2R, the
+    target is checked before the trail, and the trail is guarded by
+    `not exit_signal` -- so on the scan where `rr_progress` first cleared 2.0 the
+    target had already fired and the trail was skipped. Across 52 closed trades a
+    stop had been trailed past breakeven **3 times**.
+
+    1.0 gives it a full R of room to work inside before the target can end the
+    trade.
+    """
+
+    return _env_float("EXIT_TRAIL_ARM_R", 1.0)
+
+
+def trail_atr_multiple():
+    """How far behind price the trail sits, in ATR."""
+
+    return _env_float("EXIT_TRAIL_ATR_MULT", 1.0)
+
+
+def profit_ladder():
+    """Rungs of (peak_r, locked_r), lowest first.
+
+    The book's problem is not that exits fire wrongly, it is that nothing holds a
+    gain between breakeven and the target. Measured over 2026-08-19's five trades:
+    6.51R of favourable movement, 1.66R booked -- a 25% capture. TSLA peaked at
+    1.18R and PLTR at 1.24R, and both booked 0.00R because the only thing beneath
+    them was a stop sitting at entry.
+
+    Each rung says: once the peak has reached `peak_r`, never give back below
+    `locked_r`. The gap between the two is deliberate slack -- a rung that locks
+    too close to the peak is the proportional give-back that `_giveback_floor`
+    already measured as destructive (arming at 15% with half kept booked -7.3%
+    against +52.4% for leaving it alone).
+
+    Configured as `EXIT_PROFIT_LADDER="peak:locked,peak:locked,..."`. An empty
+    value disables the ladder entirely.
+    """
+
+    raw = str(os.getenv("EXIT_PROFIT_LADDER", DEFAULT_PROFIT_LADDER) or "").strip()
+
+    if not raw:
+        return []
+
+    rungs = []
+
+    for part in raw.split(","):
+
+        piece = part.strip()
+
+        if not piece:
+            continue
+
+        try:
+            peak, locked = piece.split(":")
+            rungs.append((float(peak), float(locked)))
+        except (ValueError, TypeError):
+            continue
+
+    return sorted(rungs)
+
+
+def ladder_locked_r(mfe_r):
+    """The most R the ladder protects at this peak, or None below the first rung.
+
+    Reads the *peak*, not the current reading, so a retrace cannot unwind a rung
+    that was already earned.
+    """
+
+    peak = _float_or_none(mfe_r)
+
+    if peak is None:
+        return None
+
+    locked = None
+
+    for rung_peak, rung_locked in profit_ladder():
+
+        if peak >= rung_peak and rung_locked > 0:
+            locked = rung_locked if locked is None else max(locked, rung_locked)
+
+    return locked
+
+
+def structure_trail_stop(df, is_short, lookback=None):
+    """The last swing the trend has to hold, or None.
+
+    An ATR trail is a volatility distance, not a level. On a symbol whose ATR is
+    wide relative to its risk it sits nowhere in particular: AMZN #343 on
+    2026-08-19 had a 15-minute ATR of 1.32-1.44 against a 1R of 1.31, so
+    `price - 1x ATR` was a full R below the high and the ladder governed instead.
+    The trail contributed nothing to that trade.
+
+    A swing low is where the move would actually be invalidated, and it is the
+    level a trader would put a stop under. For a long it is the lowest Low of the
+    last `lookback` **completed** bars; mirrored for a short.
+
+    The forming bar is excluded deliberately. Its Low is still moving, and a stop
+    derived from a bar that has not finished is the same defect as
+    `_stop_trigger_price` -- a level that can be breached by price the stop was
+    never exposed to.
+
+    Returns the raw level. The caller ratchets and never widens, so a swing that
+    sits below the stop already in place is ignored.
+    """
+
+    if df is None or len(df) < 2:
+        return None
+
+    try:
+        window = int(lookback if lookback is not None else _env_float(
+            "EXIT_STRUCTURE_TRAIL_LOOKBACK", 5
+        ))
+    except (TypeError, ValueError):
+        window = 5
+
+    if window < 1:
+        return None
+
+    completed = df.iloc[:-1].tail(window)
+
+    if completed.empty:
+        return None
+
+    try:
+        level = float(completed["High"].max() if is_short else completed["Low"].min())
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if level != level:
+        return None
+
+    # A hair beyond the swing, so price touching the level exactly does not stop
+    # the trade out of a trend that is still holding it.
+    buffer_pct = _env_float("EXIT_STRUCTURE_TRAIL_BUFFER_PCT", 0.05) / 100.0
+
+    return level * (1 + buffer_pct) if is_short else level * (1 - buffer_pct)
+
+
+SOFT_EXIT_RULES = {"EMA", "VWAP", "MACD"}
+
+
+def resolve_soft_exit_hold(exit_code, exit_signal, rr_progress, trend_health_score):
+    """Is this soft exit a trend ending, or the trade wobbling inside one?
+
+    Returns `(hold, why)`. `hold` true means do not close: keep the position and
+    let the ladder and trail carry it, which they now can.
+
+    ## Why the soft exits cannot be trusted as they stand
+
+    EMA9, VWAP and MACD all fire on **first touch**, with no confirmation bar and
+    no reference to whether the trend actually broke. Every soft exit ever
+    booked: 14 of them, 5 positive, mean **-0.059R**, option premium -1.15% with
+    4 of 14 positive. They are a coin flip that loses slightly, and they are what
+    closes most trades.
+
+    ## The distinction being drawn
+
+    `trend_health_score` is computed on every scan for every open position and,
+    until now, decided nothing at all. It is the one reading available at the
+    moment of a soft exit that speaks to whether the move is over.
+
+    Two facts, together:
+
+        in profit AND trend still healthy  -> the trend is intact, this is a
+                                              wobble. Hold and let the ratchet
+                                              carry it.
+        losing OR trend broken             -> the trade is wrong. Honour the
+                                              exit immediately.
+
+    Requiring profit is what keeps this from becoming "hold losers longer". A
+    losing trade is never held by this rule no matter how healthy the trend
+    reads, so the worst case is exiting at a ratcheted stop instead of at the
+    soft signal -- never a wider loss than the trade already had.
+
+    ## The two cases it is measured against
+
+    **NVDA 2026-07-31** ran to +1.66R and closed at +0.60R on an EMA9 touch with
+    trend health reading **95**. In profit, trend intact -- held, and the ladder
+    carries it. This is the giveback the rule exists for.
+
+    **AVGO #351 on 2026-08-19** exited on a VWAP touch at **-0.17R** with trend
+    health **40**. Losing and broken on both counts -- honoured, and the early
+    exit that saved roughly 0.83R against its stop is preserved. A rule that held
+    this trade would have been strictly worse.
+
+    `resolve_profit_lock` attempts something similar and almost never fires: it
+    additionally requires the engine's own exit confidence below 25, which read
+    ~49 on NVDA at the exit bar, and subtracts a full 1R of giveback so it is
+    dead below a 1.2R peak. This is the same idea with the gates that were
+    stopping it removed.
+    """
+
+    if not exit_signal or exit_code not in SOFT_EXIT_RULES:
+        return False, None
+
+    if not _env_bool("SOFT_EXIT_HOLD_ENABLED", True):
+        return False, "hold disabled"
+
+    progress = _float_or_none(rr_progress)
+
+    if progress is None or progress <= 0:
+        return False, "trade is not in profit"
+
+    health = _float_or_none(trend_health_score)
+    floor = _env_float("SOFT_EXIT_HOLD_MIN_TREND_HEALTH", 70.0)
+
+    if health is None:
+        return False, "no trend health reading"
+
+    if health < floor:
+        return False, f"trend health {health:.0f} below {floor:.0f}"
+
+    return True, f"trend health {health:.0f} at {progress:.2f}R"
+
+
+def target_extend_enabled():
+    """Let a runner past its target instead of banking it there.
+
+    **Ships off.** The one case in the archive says it costs money. AMZN #343 on
+    2026-08-19 hit its target at +1.99R and ran to +3.08R, which looks like a
+    clear win for extending -- but the path there dips to +1.50R at 11:20. The
+    15-minute ATR on that symbol is 1.32-1.44 against a 1R of 1.31, so a 1x ATR
+    trail sits below the ladder, the ladder governs at +1.75R, and the dip takes
+    it out **below the target it declined**. +1.75R against +1.99R banked.
+
+    One trade decides nothing, which is the point of `target_touch_r`: it is
+    recorded on every trade whether this is on or off, so the comparison
+    accumulates from the archive instead of from an argument. See §Measuring.
+
+    ## Measuring
+
+    `target_touch_r` is the R the trade was worth when it first reached its
+    target, recorded even when the target is taken. So:
+
+        extension OFF -- final R is roughly target_touch_r on target exits, and
+                         the column simply confirms the target was reached.
+        extension ON  -- `final_r - target_touch_r` is exactly what extending
+                         won or lost on that trade.
+
+    Turn it on for a window, then group closed trades by whether they carry a
+    `target_touch_r` and compare that difference. It needs no replay and no
+    reconstruction -- both numbers are on the row.
+    """
+
+    return str(os.getenv("EXIT_TARGET_EXTEND_ENABLED", "")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def _stop_trigger_price(latest, trade_state, is_short):
+    """The price this bar may test the stop against.
+
+    A stop is only exposed to price action that happens **after** it is set. The
+    check was the bar extreme -- `latest["Low"] <= stop_loss` -- taken from the
+    *forming* bar, so a stop moved to breakeven mid-bar was immediately tested
+    against the bar's earlier low, price it had never been resting at.
+
+    PLTR #352 on 2026-08-19 is the case. The stop moved to breakeven 173.30 at
+    11:20; at 11:24 the engine closed it on the 11:15-11:30 bar's low of 172.92,
+    set at 11:15, five minutes before the stop existed at that level. Every low
+    after the move was 174.10 or higher -- the trade was +1.04R and still
+    climbing, and it booked 0.00R. It is not a rounding-scale error either: the
+    decision price sat $1.34 above the stop, against 6-39 cents for the ordinary
+    intrabar touches in the same archive.
+
+    The failure is one-directional. It can only ever *close* a trade that should
+    have stayed open, because a stop that just moved has by definition moved in
+    the profitable direction, so the pre-move extreme it fires on is always the
+    wrong side of it.
+
+    When the stop moved inside the current bar the extreme is unusable, so the
+    Close is used -- the one price in the bar known to be current. TSLA #340 the
+    same session is the case this must not break: its stop moved at 10:13 and the
+    lows that took it out, 338.02 at 10:14 and 338.01 at 10:15, both came after.
+    That bar's extreme stays valid and the stop still fires.
+
+    Falls back to the extreme whenever the comparison cannot be made -- no
+    recorded move, an unparseable timestamp, a frame with no usable index. A
+    diagnostic that cannot read its inputs must not silently stop enforcing
+    stops; the previous behaviour is the safe default here, not the permissive
+    one.
+    """
+
+    extreme = latest["High"] if is_short else latest["Low"]
+
+    moved_at = (trade_state or {}).get("stop_moved_at")
+
+    if not moved_at:
+        return extreme
+
+    bar_start = getattr(latest, "name", None)
+
+    if bar_start is None:
+        return extreme
+
+    try:
+        import pandas as pd
+
+        moved = pd.Timestamp(moved_at)
+        opened = pd.Timestamp(bar_start)
+
+        # Compare in one frame of reference. A naive bar index is read as UTC,
+        # which is how the replay fixtures and the live frames both arrive.
+        moved = moved.tz_localize("UTC") if moved.tzinfo is None else moved.tz_convert("UTC")
+        opened = opened.tz_localize("UTC") if opened.tzinfo is None else opened.tz_convert("UTC")
+
+    except Exception:
+        return extreme
+
+    if moved <= opened:
+        return extreme
+
+    return latest["Close"]
+
+
 def _giveback_floor(peak_gain):
     """The lowest gain this trade may fall to, or None while unprotected.
 
@@ -971,23 +1292,61 @@ def evaluate_exit(
     adjustment_reason = "Trend intact"
 
     # Hard stop and hard target are evaluated before softer invalidation rules.
+    #
+    # The stop is tested against `_stop_trigger_price`, not the bar extreme, so a
+    # stop moved inside the current bar cannot be triggered by price from earlier
+    # in that same bar. The target keeps the extreme: it never moves, so every
+    # tick of the bar was exposed to it.
+    stop_trigger = _stop_trigger_price(latest, trade_state, is_short)
+
+    target_hit = (
+        latest["Low"] <= take_profit if is_short else latest["High"] >= take_profit
+    )
+
+    # The R this trade was worth the first time it reached its target, recorded
+    # whether the target is taken or declined. This is the entire measurement for
+    # `target_extend_enabled` -- with it off the column just confirms the target
+    # was reached; with it on, `final_r - target_touch_r` is what extending won or
+    # lost. First touch wins, so a later retrace cannot rewrite it.
+    target_touch_r = _float_or_none((trade_state or {}).get("target_touch_r"))
+
+    if target_hit and target_touch_r is None and risk_per_share and entry_price is not None:
+
+        target_touch_r = round(
+            (entry_price - take_profit) / risk_per_share
+            if is_short
+            else (take_profit - entry_price) / risk_per_share,
+            3,
+        )
+
+    # Extending is only safe where a rung or the trail already sits in profit --
+    # declining the target with nothing above entry beneath you risks the whole
+    # gain to chase more of it.
+    protected_above_entry = (
+        updated_stop < entry_price if is_short else updated_stop > entry_price
+    ) if entry_price is not None else False
+
+    take_the_target = target_hit and not (
+        target_extend_enabled() and protected_above_entry
+    )
+
     if is_short:
 
-        if latest["High"] >= stop_loss:
+        if stop_trigger >= stop_loss:
 
             exit_reasons.append(_exit_diagnostic("HARD_STOP", "Hard stop hit (short)"))
 
-        if latest["Low"] <= take_profit:
+        if take_the_target:
 
             exit_reasons.append(_exit_diagnostic("HARD_TARGET", "Profit target reached (short)"))
 
     else:
 
-        if latest["Low"] <= stop_loss:
+        if stop_trigger <= stop_loss:
 
             exit_reasons.append(_exit_diagnostic("HARD_STOP", "Hard stop hit (long)"))
 
-        if latest["High"] >= take_profit:
+        if take_the_target:
 
             exit_reasons.append(_exit_diagnostic("HARD_TARGET", "Profit target reached (long)"))
 
@@ -997,6 +1356,7 @@ def evaluate_exit(
 
         exit_signal = True
         exit_reason = primary_exit["reason"]
+
 
     # The breakeven move has been gated on a full 1R since it was written, and
     # over the 21-day economics run that made it very nearly inert: it fired on
@@ -1042,19 +1402,65 @@ def evaluate_exit(
 
         adjustment_reason = "Moved stop to breakeven"
 
-    if not exit_signal and rr_progress >= 1.5:
+    # A partial exit needs something to sell half of.
+    #
+    # This set the flag and raised a "PARTIAL PROFIT / Position: Partial closed /
+    # Runner: Still Open" alert on every trade reaching 1.5R, while
+    # MAX_CONTRACTS_PER_TRADE is 1 and no code beneath it ever closed part of
+    # anything. AMZN #343 on 2026-08-19 was announced as partially closed at
+    # 1.91R holding a single contract, with close_price and r_multiple both null,
+    # and then closed in full at its target -- the "partial" and the "runner"
+    # were the same contract for the whole life of the trade.
+    #
+    # Gated on real position size rather than removed, because the state itself
+    # feeds `_trade_update_reason` and the trailing logic. What was false was the
+    # claim of an execution, not the threshold.
+    position_contracts = _float_or_none(
+        (trade_state or {}).get("option_contracts")
+    ) or 1
+
+    if not exit_signal and rr_progress >= 1.5 and position_contracts > 1:
 
         partial_profit_taken = True
         trade_action = "PARTIAL_PROFIT"
         adjustment_reason = "Partial profit threshold reached"
 
-    if not exit_signal and rr_progress >= 2 and atr > 0:
+    # The profit ladder. Reads the peak, so a retrace cannot unwind a rung that
+    # was already earned, and only ever ratchets. This is what holds a gain
+    # between breakeven and the target, where nothing did before.
+    if not exit_signal:
+
+        rung = ladder_locked_r(mfe_r)
+
+        if rung is not None and risk_per_share and entry_price is not None:
+
+            ladder_stop = (
+                entry_price - (rung * risk_per_share)
+                if is_short
+                else entry_price + (rung * risk_per_share)
+            )
+            ratcheted = (
+                min(updated_stop, ladder_stop)
+                if is_short
+                else max(updated_stop, ladder_stop)
+            )
+
+            if ratcheted != updated_stop:
+
+                updated_stop = ratcheted
+                trailing_stop = updated_stop
+                profit_protection_active = True
+                adjustment_reason = f"Profit ladder: {rung:.2f}R locked"
+
+    if not exit_signal and rr_progress >= trail_arm_r() and atr > 0:
+
+        distance = atr * trail_atr_multiple()
 
         if is_short:
 
             trailing_stop = min(
                 updated_stop,
-                current_price + atr
+                current_price + distance
             )
             updated_stop = trailing_stop
 
@@ -1062,11 +1468,34 @@ def evaluate_exit(
 
             trailing_stop = max(
                 updated_stop,
-                current_price - atr
+                current_price - distance
             )
             updated_stop = trailing_stop
 
         adjustment_reason = "ATR trailing stop active"
+
+        # The swing the trend has to hold, taken alongside the volatility
+        # distance rather than instead of it. Whichever is tighter wins, and the
+        # ratchet means neither can ever widen risk. On a wide-ATR symbol the ATR
+        # arm sits nowhere useful -- AMZN's was a full R below the high -- and the
+        # structure level is what a stop would actually be placed under.
+        if _env_bool("EXIT_STRUCTURE_TRAIL_ENABLED", True):
+
+            structure = structure_trail_stop(df, is_short)
+
+            if structure is not None:
+
+                tightened = (
+                    min(updated_stop, structure)
+                    if is_short
+                    else max(updated_stop, structure)
+                )
+
+                if tightened != updated_stop:
+
+                    updated_stop = tightened
+                    trailing_stop = updated_stop
+                    adjustment_reason = "Structure trailing stop active"
 
     if not exit_signal and holding_profile == "MULTIDAY" and mfe_r >= profit_lock_mfe_r:
 
@@ -1212,6 +1641,7 @@ def evaluate_exit(
             exit_signal = True
             exit_reason = primary_exit["reason"]
 
+
     if momentum_exits_allowed and latest.get("FAILED_BREAKOUT", False):
 
         exit_reasons.append(_exit_diagnostic("FAILED_BREAKOUT", "Failed breakout"))
@@ -1290,6 +1720,40 @@ def evaluate_exit(
         adjustment_reason = (
             f"{selected_exit['code']} grace zone active; awaiting one-bar confirmation"
         )
+
+    # After the grace zone, not instead of it. The grace zone defers the *first*
+    # soft break by one bar, once per trade. This covers what happens next: the
+    # confirmation bar arrives, the rule fires again, and nothing has asked
+    # whether the trend actually ended.
+    #
+    # A soft rule fires on first touch and says nothing about that. Where the
+    # trade is in profit and trend health still reads intact, hold it and let the
+    # ladder and trail carry it -- both have already ratcheted by this point,
+    # since they run under `not exit_signal` earlier in the pass. A losing trade
+    # is never held here, however healthy the trend looks.
+    soft_hold, soft_hold_why = resolve_soft_exit_hold(
+        (_select_primary_exit(exit_reasons) or {}).get("code") if exit_signal else None,
+        exit_signal,
+        rr_progress,
+        trend_health.get("score"),
+    )
+
+    if soft_hold:
+
+        exit_reasons = [
+            reason for reason in exit_reasons
+            if reason.get("code") not in SOFT_EXIT_RULES
+        ]
+        remaining = _select_primary_exit(exit_reasons)
+
+        if remaining:
+            exit_signal = True
+            exit_reason = remaining["reason"]
+        else:
+            exit_signal = False
+            exit_reason = "Hold"
+            trade_action = "HOLD"
+            adjustment_reason = f"Soft exit held: {soft_hold_why}"
 
     # Profit protection. A soft rule may say "momentum broke" while the trade is
     # sitting on real banked profit and the trend still reads strong. NVDA on
@@ -1424,6 +1888,11 @@ def evaluate_exit(
         "current_price": _round_float(current_price),
         "highest_price": _round_float(highest_price),
         "option_peak_mid": _round_float(option_peak_mid),
+        # The R this trade was worth when it first reached its target,
+        # recorded whether the target was taken or declined. Persisted
+        # first-touch-wins, and it is the whole measurement for
+        # EXIT_TARGET_EXTEND_ENABLED.
+        "target_touch_r": target_touch_r,
         "lowest_price": _round_float(lowest_price),
         "bars_in_trade": int(bars_in_trade),
         "partial_profit_taken": partial_profit_taken,
