@@ -93,3 +93,87 @@ class TestTrailArming:
     def test_it_is_configurable(self):
         with mock.patch.dict(os.environ, {"EXIT_TRAIL_ARM_R": "0.75"}, clear=False):
             assert trail_arm_r() == 0.75
+
+
+class TestTargetExtension:
+    """Letting a runner past its target, and the column that measures it."""
+
+    def test_it_ships_off(self):
+        """The only case in the archive says on is worse.
+
+        AMZN #343 hit its target at +1.99R and ran to +3.08R, which looks like a
+        clear win for extending. But the path dips to +1.50R at 11:20, the 15m
+        ATR (1.32-1.44) is wider than 1R (1.31) so the ladder governs at +1.75R,
+        and that dip takes it out below the target it declined.
+        """
+
+        from app.exit.exit_engine import target_extend_enabled
+
+        assert target_extend_enabled() is False
+
+    def test_the_switch_turns_it_on(self):
+        from app.exit.exit_engine import target_extend_enabled
+
+        with mock.patch.dict(
+            os.environ, {"EXIT_TARGET_EXTEND_ENABLED": "true"}, clear=False
+        ):
+            assert target_extend_enabled() is True
+
+
+class TestTargetTouchIsRecorded:
+    """`target_touch_r` is what makes the switch answerable from the archive.
+
+    Recorded whether the target is taken or declined, so with the switch off it
+    confirms the target was reached, and with it on `final_r - target_touch_r` is
+    exactly what extending won or lost -- no replay, both numbers on the row.
+    """
+
+    def test_the_verdict_exposes_it(self):
+        from app.exit.exit_engine import evaluate_exit
+
+        import pandas as pd
+
+        frame = pd.DataFrame([{
+            "Close": 130.0, "High": 131.0, "Low": 129.0, "Open": 129.0,
+            "Volume": 1_000_000, "EMA9": 129.0, "EMA20": 128.0, "VWAP": 129.0,
+            "RSI": 60.0, "MACD": 0.5, "MACD_SIGNAL": 0.4, "ATR": 1.0, "ATR_PCT": 0.8,
+        }])
+
+        result = evaluate_exit(
+            frame,
+            {"trend_regime": "TRENDING_BULL"},
+            {"entry_price": 100.0, "stop_loss": 90.0, "take_profit": 120.0,
+             "initial_stop_loss": 90.0},
+            entry_setup={"entry_type": "EMA_PULLBACK"},
+            trade_state={"entry_type": "EMA_PULLBACK", "holding_profile": "INTRADAY",
+                         "bars_in_trade": 5, "initial_stop_loss": 90.0},
+        )
+
+        # target 120 on a 10-point risk from 100 is exactly +2R
+        assert result["target_touch_r"] == pytest.approx(2.0, abs=0.01)
+
+    def test_first_touch_wins(self):
+        """A later retrace must not rewrite what the target was worth."""
+
+        from app.exit.exit_engine import evaluate_exit
+
+        import pandas as pd
+
+        frame = pd.DataFrame([{
+            "Close": 105.0, "High": 106.0, "Low": 104.0, "Open": 104.0,
+            "Volume": 1_000_000, "EMA9": 104.0, "EMA20": 103.0, "VWAP": 104.0,
+            "RSI": 55.0, "MACD": 0.5, "MACD_SIGNAL": 0.4, "ATR": 1.0, "ATR_PCT": 0.8,
+        }])
+
+        result = evaluate_exit(
+            frame,
+            {"trend_regime": "TRENDING_BULL"},
+            {"entry_price": 100.0, "stop_loss": 90.0, "take_profit": 120.0,
+             "initial_stop_loss": 90.0},
+            entry_setup={"entry_type": "EMA_PULLBACK"},
+            trade_state={"entry_type": "EMA_PULLBACK", "holding_profile": "INTRADAY",
+                         "bars_in_trade": 5, "initial_stop_loss": 90.0,
+                         "target_touch_r": 2.0},
+        )
+
+        assert result["target_touch_r"] == 2.0, "the recorded touch must survive"

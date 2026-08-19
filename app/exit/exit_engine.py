@@ -538,6 +538,40 @@ def ladder_locked_r(mfe_r):
     return locked
 
 
+def target_extend_enabled():
+    """Let a runner past its target instead of banking it there.
+
+    **Ships off.** The one case in the archive says it costs money. AMZN #343 on
+    2026-08-19 hit its target at +1.99R and ran to +3.08R, which looks like a
+    clear win for extending -- but the path there dips to +1.50R at 11:20. The
+    15-minute ATR on that symbol is 1.32-1.44 against a 1R of 1.31, so a 1x ATR
+    trail sits below the ladder, the ladder governs at +1.75R, and the dip takes
+    it out **below the target it declined**. +1.75R against +1.99R banked.
+
+    One trade decides nothing, which is the point of `target_touch_r`: it is
+    recorded on every trade whether this is on or off, so the comparison
+    accumulates from the archive instead of from an argument. See §Measuring.
+
+    ## Measuring
+
+    `target_touch_r` is the R the trade was worth when it first reached its
+    target, recorded even when the target is taken. So:
+
+        extension OFF -- final R is roughly target_touch_r on target exits, and
+                         the column simply confirms the target was reached.
+        extension ON  -- `final_r - target_touch_r` is exactly what extending
+                         won or lost on that trade.
+
+    Turn it on for a window, then group closed trades by whether they carry a
+    `target_touch_r` and compare that difference. It needs no replay and no
+    reconstruction -- both numbers are on the row.
+    """
+
+    return str(os.getenv("EXIT_TARGET_EXTEND_ENABLED", "")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 def _stop_trigger_price(latest, trade_state, is_short):
     """The price this bar may test the stop against.
 
@@ -1133,13 +1167,44 @@ def evaluate_exit(
     # tick of the bar was exposed to it.
     stop_trigger = _stop_trigger_price(latest, trade_state, is_short)
 
+    target_hit = (
+        latest["Low"] <= take_profit if is_short else latest["High"] >= take_profit
+    )
+
+    # The R this trade was worth the first time it reached its target, recorded
+    # whether the target is taken or declined. This is the entire measurement for
+    # `target_extend_enabled` -- with it off the column just confirms the target
+    # was reached; with it on, `final_r - target_touch_r` is what extending won or
+    # lost. First touch wins, so a later retrace cannot rewrite it.
+    target_touch_r = _float_or_none((trade_state or {}).get("target_touch_r"))
+
+    if target_hit and target_touch_r is None and risk_per_share and entry_price is not None:
+
+        target_touch_r = round(
+            (entry_price - take_profit) / risk_per_share
+            if is_short
+            else (take_profit - entry_price) / risk_per_share,
+            3,
+        )
+
+    # Extending is only safe where a rung or the trail already sits in profit --
+    # declining the target with nothing above entry beneath you risks the whole
+    # gain to chase more of it.
+    protected_above_entry = (
+        updated_stop < entry_price if is_short else updated_stop > entry_price
+    ) if entry_price is not None else False
+
+    take_the_target = target_hit and not (
+        target_extend_enabled() and protected_above_entry
+    )
+
     if is_short:
 
         if stop_trigger >= stop_loss:
 
             exit_reasons.append(_exit_diagnostic("HARD_STOP", "Hard stop hit (short)"))
 
-        if latest["Low"] <= take_profit:
+        if take_the_target:
 
             exit_reasons.append(_exit_diagnostic("HARD_TARGET", "Profit target reached (short)"))
 
@@ -1149,7 +1214,7 @@ def evaluate_exit(
 
             exit_reasons.append(_exit_diagnostic("HARD_STOP", "Hard stop hit (long)"))
 
-        if latest["High"] >= take_profit:
+        if take_the_target:
 
             exit_reasons.append(_exit_diagnostic("HARD_TARGET", "Profit target reached (long)"))
 
@@ -1615,6 +1680,11 @@ def evaluate_exit(
         "current_price": _round_float(current_price),
         "highest_price": _round_float(highest_price),
         "option_peak_mid": _round_float(option_peak_mid),
+        # The R this trade was worth when it first reached its target,
+        # recorded whether the target was taken or declined. Persisted
+        # first-touch-wins, and it is the whole measurement for
+        # EXIT_TARGET_EXTEND_ENABLED.
+        "target_touch_r": target_touch_r,
         "lowest_price": _round_float(lowest_price),
         "bars_in_trade": int(bars_in_trade),
         "partial_profit_taken": partial_profit_taken,

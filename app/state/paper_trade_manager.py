@@ -355,6 +355,12 @@ def update_paper_trade(
         for field in ("profit_protection_active", "profit_lock_stop", "profit_giveback_r"):
             if exit_state.get(field) is not None:
                 trade[field] = exit_state.get(field)
+        # First touch wins. This records what the target was worth when it was
+        # first reached, so `final r_multiple - target_touch_r` measures exactly
+        # what EXIT_TARGET_EXTEND_ENABLED won or lost -- without a replay, and
+        # whether the switch is on or off.
+        if exit_state.get("target_touch_r") is not None and trade.get("target_touch_r") is None:
+            trade["target_touch_r"] = exit_state.get("target_touch_r")
 
     state[trade_key] = trade
     save_paper_trades(state)
