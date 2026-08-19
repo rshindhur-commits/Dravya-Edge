@@ -834,3 +834,71 @@ def get_last_price(symbol: str) -> Optional[float]:
     except (KeyError, IndexError, TypeError, ValueError) as e:
         logger.exception("Unexpected results format for %s: %s", symbol, e)
         return None
+
+
+def get_live_price(symbol: str) -> Optional[float]:
+    """The last traded price, or None. Never yesterday's close.
+
+    `get_last_price` reads `/v2/aggs/ticker/{symbol}/prev` and returns the
+    **previous session's close**, exactly as its name and docstring say. Both of
+    the position monitor's price paths called it anyway, so on 2026-08-19 the
+    monitor spent the session comparing live stops against 2026-08-18 closes: the
+    sub-scan price log recorded 143.34 for SPCX 89 times while it traded down to
+    137.76, and every symbol in the log was likewise frozen at a single value.
+
+    **There is deliberately no fallback to the previous close.** The whole
+    argument in `position_monitor._price_for` is that a frozen price silently
+    disables every protective rule while looking like a motionless market, which
+    is why a stale streamed price is refused there. Falling back to `/prev` here
+    would reintroduce that by another route, and a stale price that looks live is
+    worse than no price -- the caller skips a symbol it cannot price, and says so.
+    """
+
+    polygon_api_key = get_polygon_api_key()
+
+    if not polygon_api_key:
+        logger.error("POLYGON_API_KEY not set in environment")
+        return None
+
+    # Separate from the /prev cache: these are different numbers with different
+    # shelf lives, and sharing a cache key would let whichever call ran first
+    # answer for the other.
+    ttl = float(os.getenv("POLYGON_LIVE_PRICE_TTL", "5"))
+
+    if not hasattr(get_live_price, "_cache"):
+        get_live_price._cache = {}
+
+    entry = get_live_price._cache.get(symbol)
+
+    if entry:
+        ts, val = entry
+        if time.monotonic() - ts <= ttl:
+            return val
+
+    url = f"{get_polygon_base_url()}/v2/last/trade/{symbol}"
+
+    try:
+        resp = safe_request(url, params={"apiKey": polygon_api_key})
+    except Exception as e:
+        logger.error("Failed to fetch live price for %s: %s", symbol, e)
+        return None
+
+    try:
+        results = resp.json().get("results")
+    except ValueError:
+        logger.error("Non-JSON live-price response for %s: %s", symbol, resp.text[:500])
+        return None
+
+    if not results:
+        logger.debug("No results in live-price response for %s", symbol)
+        return None
+
+    try:
+        val = float(results["p"])
+    except (KeyError, TypeError, ValueError) as e:
+        logger.exception("Unexpected live-price format for %s: %s", symbol, e)
+        return None
+
+    get_live_price._cache[symbol] = (time.monotonic(), val)
+
+    return val

@@ -411,10 +411,18 @@ def _price_for(symbol):
     appearing healthy. So a streamed price is used only while its age is inside
     `POSITION_MONITOR_STREAM_MAX_AGE`, and REST is the floor beneath it.
 
+    That floor was `get_last_price`, which returns the **previous session's
+    close** -- the precise failure this function was written to refuse, arriving
+    through the fallback rather than the stream. `POSITION_MONITOR_STREAM_ENABLED`
+    is set on neither Render service, so the fallback was the only path: on
+    2026-08-19 the log held SPCX at 143.34 for 89 consecutive polls while it
+    traded down to 137.76, and every other symbol sat on a single value too.
+    Nothing was open that session, so no stop was judged against it.
+
     Returns (price, source) so the log says which one decided.
     """
 
-    from app.utils.polygon_client import get_last_price
+    from app.utils.polygon_client import get_live_price
 
     if position_stream.stream_enabled():
 
@@ -425,7 +433,7 @@ def _price_for(symbol):
             return price, f"stream/{age:.1f}s"
 
     try:
-        return get_last_price(symbol), "rest"
+        return get_live_price(symbol), "last_trade"
     except Exception as exc:
         _log(f"[POSITION MONITOR WARNING] {symbol}: price unavailable: {exc}")
         return None, None
@@ -559,7 +567,6 @@ def _log_candidate_prices(held_symbols):
     from sqlalchemy import text
 
     from app.db.connection import get_engine
-    from app.utils.polygon_client import get_last_price
 
     candidates = _forming_candidates(held_symbols)
 
