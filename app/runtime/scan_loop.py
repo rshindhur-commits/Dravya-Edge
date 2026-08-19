@@ -141,6 +141,37 @@ def seconds_to_next_session_change(now=None, horizon=None):
     return horizon, None
 
 
+def interval_after_scan(session_at_start, session_at_end, interval_override=None):
+    """The cadence to sleep on, for a scan that may have outlived its session.
+
+    The session is read before a scan starts, and a scan can outlive the boundary
+    it began under. On 2026-08-19 a premarket scan started at 09:29:54 and ran
+    116s, finishing inside OPENING_RANGE while still holding PREMARKET's 1800s.
+    `_bounded_wait` then clamped to the next boundary it could see -- 09:45 -- so
+    the 09:30-09:45 opening range, which is meant to be sampled every 120s, went
+    unscanned entirely. No entry was lost, because the auto-entry window opens at
+    09:45 regardless, but that session has no opening-range data.
+
+    This is the same failure as the one `_bounded_wait` fixes, arriving by the
+    other door: there the boundary was crossed while *sleeping*, here it is
+    crossed while *scanning*, and only the first was handled.
+
+    **Only ever shortens, never lengthens**, for the reason `_bounded_wait` only
+    shortens. The post-close archive scan is scheduled by the final pre-close
+    iteration while the session is still REGULAR, and the tail `idle_reason`
+    allows is wider than REGULAR's 300s on purpose. A scan crossing 16:00 that
+    recomputed itself to AFTERHOURS' 1800s would put its successor at ~16:30 --
+    past the tail -- and the closing archive would never be written.
+    """
+
+    interval = interval_for_session(session_at_start, interval_override)
+
+    if session_at_end == session_at_start:
+        return interval
+
+    return min(interval, interval_for_session(session_at_end, interval_override))
+
+
 def _bounded_wait(wait, interval_override=None):
     """Do not sleep through a session change that wants a finer cadence.
 
@@ -610,13 +641,19 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
 
             consecutive_failures = 0
 
-        interval = interval_for_session(session, interval_override)
+        session_at_end = current_session()
+        interval = interval_after_scan(session, session_at_end, interval_override)
         elapsed = result["seconds"]
         wait = _bounded_wait(max(5, interval - elapsed))
 
         _publish_heartbeat(
             "IDLE" if result["ok"] else "FAILED",
-            session=session,
+            # The session in force at publish time, not the one the scan opened
+            # under. Reporting the stale value made the worker read "IDLE in
+            # PREMARKET" at 09:31 on 2026-08-19 -- ten minutes into a session it
+            # had already correctly scanned as OPENING_RANGE -- which is
+            # indistinguishable from a worker that slept through the open.
+            session=session_at_end,
             scans=scans,
             failures=failures,
             last_scan_at=started_at.isoformat(),
@@ -627,7 +664,8 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
         )
 
         print(
-            f"[SCAN LOOP] scan {scans} ({session}) "
+            f"[SCAN LOOP] scan {scans} "
+            f"({session}{f' -> {session_at_end}' if session_at_end != session else ''}) "
             f"finished in {elapsed:.1f}s at {started_at.strftime('%H:%M:%S')} ET; "
             f"{failures} failure(s) so far; next in {wait:.0f}s"
         )
