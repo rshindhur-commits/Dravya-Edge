@@ -852,6 +852,27 @@ def _record_auto_paper_decision(symbol, decision, reason, row=None, trade=None, 
         "iv_richness_would_block": row.get("IV_RICHNESS_WOULD_BLOCK") if row is not None else None,
         "event_blocked": row.get("Event Blocked") if row is not None else None,
         "event_label": row.get("Event Label") if row is not None else None,
+        # The regime inputs that raise the entry bar, recorded beside the outcome
+        # they are supposed to improve.
+        #
+        # `apply_regime_entry_thresholds` reads all four of these and escalates
+        # min_setup, min_rr and max_spread on them -- a RANGE_BOUND reading or
+        # weak breadth pushes min_rr to 2.0, a VIX spike to 2.2. None of them was
+        # written here, and `paper_trades.payload` carries no regime at all, so
+        # asking "do trades taken under this regime do better" returned UNKNOWN
+        # for every row in the archive. The thresholds have been costing entries
+        # since they were written and there has never been a way to price them.
+        #
+        # Recording only. Nothing reads these to make a decision, and the gate is
+        # unchanged -- this makes the existing behaviour measurable, which is the
+        # precondition for ever tuning it.
+        "market_regime": row.get("Market Regime") if row is not None else None,
+        "reference_regime": row.get("Reference Regime") if row is not None else None,
+        "watchlist_breadth_score": (
+            row.get("Watchlist Breadth Score") if row is not None else None
+        ),
+        "above_ema20_pct": row.get("Above EMA20 %") if row is not None else None,
+        "vix_move_pct": row.get("VIX Move %") if row is not None else None,
         # Higher-timeframe context: was this taken with or against the daily trend.
         "daily_trend": row.get("Daily Trend") if row is not None else None,
         "daily_realised_vol": row.get("Daily Realised Vol %") if row is not None else None,

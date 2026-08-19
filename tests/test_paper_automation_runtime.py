@@ -743,6 +743,39 @@ class DecisionLedgerContentTests(unittest.TestCase):
         self.assertEqual(entry["candidate_entry_price"], 28.62)
         self.assertEqual(entry["candidate_stop_price"], 28.40)
 
+    def test_the_regime_inputs_that_raise_the_bar_are_recorded(self):
+        """apply_regime_entry_thresholds escalates min_rr to 2.0 on RANGE_BOUND or
+        weak breadth, and to 2.2 on a VIX spike. None of those four inputs was
+        written to the decision ledger and paper_trades carries no regime at all,
+        so every attempt to ask whether the escalation earns its keep came back
+        UNKNOWN. Recording only -- the gate is untouched."""
+
+        row = pd.Series({
+            "Symbol": "NFLX",
+            "Action Status": "ENTER_PAPER",
+            "Market Regime": "RANGE_BOUND",
+            "Reference Regime": "TRENDING_BEAR",
+            "Watchlist Breadth Score": -31.5,
+            "Above EMA20 %": 22.0,
+            "VIX Move %": 6.4,
+            "Daily Trend": "BEAR",
+        })
+
+        with patch(
+            "app.runtime.paper_automation_support.write_auto_paper_decision"
+        ) as write:
+            _record_auto_paper_decision(
+                "NFLX", "BLOCKED", "RR_BELOW_THRESHOLD", row, controls={},
+            )
+
+        entry = write.call_args.args[0]
+
+        self.assertEqual(entry["market_regime"], "RANGE_BOUND")
+        self.assertEqual(entry["reference_regime"], "TRENDING_BEAR")
+        self.assertEqual(entry["watchlist_breadth_score"], -31.5)
+        self.assertEqual(entry["above_ema20_pct"], 22.0)
+        self.assertEqual(entry["vix_move_pct"], 6.4)
+
     def test_absent_option_fields_are_omitted_not_blanked(self):
         """A candidate that died before contract selection has no option data.
 
