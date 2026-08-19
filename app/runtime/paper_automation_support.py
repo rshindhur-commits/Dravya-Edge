@@ -360,18 +360,30 @@ def _affordability_mask(df, ignore_affordability):
     return df["Affordable"].astype(str).str.lower().isin(["true", "1", "yes"]) | (df["Affordable"] == True)
 
 
+# The scanner stamps one of these instead of running detect_entry when the
+# symbol already has an OPEN paper trade (app/main.py, the `active_trade` branch).
+# They are not malformed setups -- they are the absence of a setup search.
+HELD_POSITION_ENTRY_TYPES = {
+    "ACTIVE_TRADE",
+    "PAPER_TRADE",
+    "OPEN_TRADE",
+}
+
+NO_SETUP_ENTRY_TYPES = {
+    "",
+    "NAN",
+    "NONE",
+    "NO_ENTRY",
+    "NO_SETUP",
+}
+
+
 def _is_valid_new_entry_type(entry_type):
 
-    return str(entry_type or "").upper() not in {
-        "",
-        "NAN",
-        "NONE",
-        "NO_ENTRY",
-        "NO_SETUP",
-        "ACTIVE_TRADE",
-        "PAPER_TRADE",
-        "OPEN_TRADE",
-    }
+    return (
+        str(entry_type or "").upper()
+        not in NO_SETUP_ENTRY_TYPES | HELD_POSITION_ENTRY_TYPES
+    )
 
 
 def _compute_setup_percent(row):
@@ -467,8 +479,20 @@ def _paper_candidate_filter_reason(row):
         return "SETUP_INVALID"
     if row.get("Candidate Direction") not in {"CALL", "PUT"}:
         return "INVALID_CANDIDATE_DIRECTION"
-    if not _is_valid_new_entry_type(row.get("Entry")):
-        return "INVALID_ENTRY_TYPE"
+    entry_type = str(row.get("Entry") or "").upper()
+
+    # Reported as INVALID_ENTRY_TYPE until 2026-08-18, which is the same string
+    # a malformed row gets. 55 of the 128 actionable decisions in the ledger --
+    # 43%, the largest single category -- were this, and every one of them was a
+    # re-scan of a symbol the book already held. Reading the funnel with that
+    # label in it produced a whole session's worth of wrong conclusions about
+    # entries being silently dropped. The decision is unchanged; only the reason
+    # is, because the reason is the entire point of the ledger.
+    if entry_type in HELD_POSITION_ENTRY_TYPES:
+        return "ALREADY_HOLDING_NO_ADDITIONAL_ENTRY"
+
+    if not _is_valid_new_entry_type(entry_type):
+        return "NO_ENTRY_SETUP_DETECTED"
     if not _ignore_affordability_for_paper_validation() and not _boolish(row.get("Affordable")):
         return "PAPER_AFFORDABILITY_REJECTED"
     review_ready = status == "REVIEW_TV_CHART" and _allow_review_tv_chart_auto_paper()
