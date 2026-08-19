@@ -1064,6 +1064,42 @@ def _save_paper_trade_telemetry(trade):
         )
 
 
+def _entry_fill_observation(symbol, entry_price, stop_loss):
+    """The live price beside the decision-candle price, and the gap in R.
+
+    Never allowed to interfere with opening a trade. A quote that is slow or
+    missing records None and the position opens exactly as it would have; a
+    diagnostic column must not be able to cost an entry.
+    """
+
+    blank = {"entry_price_at_fill": None, "entry_fill_gap_r": None}
+
+    try:
+        from app.utils.polygon_client import get_live_price
+
+        live = _safe_float(get_live_price(symbol))
+
+    except Exception as exc:
+        print(f"[ENTRY FILL OBSERVATION WARNING] {symbol}: {exc}")
+        return blank
+
+    if live is None:
+        return blank
+
+    entry = _safe_float(entry_price)
+    stop = _safe_float(stop_loss)
+    risk = abs(entry - stop) if entry is not None and stop is not None else None
+
+    return {
+        "entry_price_at_fill": round(live, 4),
+        "entry_fill_gap_r": (
+            round((live - entry) / risk, 3)
+            if risk and entry is not None
+            else None
+        ),
+    }
+
+
 def open_paper_trade(
     symbol,
     direction,
@@ -1142,6 +1178,28 @@ def open_paper_trade(
         "forced_eod_exit": False,
         "entry_type": entry_type,
         "entry_price": entry_price,
+        # What the tape said at the moment this row was written, beside the
+        # candle price the decision was taken on.
+        #
+        # `entry_price` comes from the scanner's decision candle, and the scan
+        # that acts on it finishes minutes later: measured over 40 trades the
+        # gap between that candle and `opened_at` averages **5.6 minutes** and
+        # reaches 13. Over the 12 trades of 2026-08-17..19 the booked entry sat a
+        # mean of **0.25R** from where the tape actually was -- TSLA #340 was
+        # booked at 338.31 while the market was 339.31, so its "breakeven" stop
+        # was set a dollar below where it really opened.
+        #
+        # The option leg is already priced live at this instant
+        # (`option_bid`/`option_ask`, LIVE_QUOTE), so today the two legs of the
+        # same trade are priced from different moments.
+        #
+        # **Recorded only; nothing reads it to decide anything.** Re-anchoring
+        # `entry_price` would move every R in the book and change which
+        # candidates clear `min_rr`, so it needs measuring across the archive
+        # before it changes behaviour -- the same way spread widening and stop
+        # viability shipped observe-only. This is the column that makes that
+        # measurement possible.
+        **_entry_fill_observation(symbol, entry_price, stop_loss),
         "stop_loss": stop_loss,
         # Frozen at entry. `stop_loss` moves (breakeven, trailing, profit lock);
         # this stays put because it is the denominator for every R measurement.

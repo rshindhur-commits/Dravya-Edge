@@ -20,6 +20,8 @@ import os
 from unittest import mock
 from unittest.mock import patch
 
+import pytest
+
 from app.exit.exit_engine import resolve_profit_lock
 from app.state import paper_trade_manager
 
@@ -340,3 +342,44 @@ def test_the_carried_peak_arms_the_breakeven_floor():
 
     assert carried is True, "a +3.4% peak fallen to -5.2% must breach the floor"
     assert rederived is False, "without the peak the give-back is structurally zero"
+
+
+# --------------------------------------------------------------------------
+# The entry price the book is measured against
+# --------------------------------------------------------------------------
+
+def test_the_live_fill_is_recorded_beside_the_candle_price():
+    """`entry_price` is the decision candle; the scan acting on it lands minutes
+    later. Over 40 trades that gap averaged 5.6 minutes and reached 13, and the
+    booked entry sat a mean 0.25R from the tape."""
+
+    with patch("app.utils.polygon_client.get_live_price", lambda s: 339.31):
+
+        obs = paper_trade_manager._entry_fill_observation("TSLA", 338.31, 336.62)
+
+    assert obs["entry_price_at_fill"] == 339.31
+    # 1.00 away on a 1.69 risk -- TSLA #340, 2026-08-19.
+    assert obs["entry_fill_gap_r"] == pytest.approx(0.592, abs=0.001)
+
+
+def test_a_missing_quote_never_costs_the_entry():
+    """A diagnostic column must not be able to block a trade from opening."""
+
+    def _boom(symbol):
+        raise RuntimeError("polygon down")
+
+    with patch("app.utils.polygon_client.get_live_price", _boom):
+
+        obs = paper_trade_manager._entry_fill_observation("TSLA", 338.31, 336.62)
+
+    assert obs == {"entry_price_at_fill": None, "entry_fill_gap_r": None}
+
+
+def test_a_zero_risk_setup_does_not_divide_by_it():
+
+    with patch("app.utils.polygon_client.get_live_price", lambda s: 100.0):
+
+        obs = paper_trade_manager._entry_fill_observation("X", 100.0, 100.0)
+
+    assert obs["entry_price_at_fill"] == 100.0
+    assert obs["entry_fill_gap_r"] is None
