@@ -538,6 +538,83 @@ def ladder_locked_r(mfe_r):
     return locked
 
 
+SOFT_EXIT_RULES = {"EMA", "VWAP", "MACD"}
+
+
+def resolve_soft_exit_hold(exit_code, exit_signal, rr_progress, trend_health_score):
+    """Is this soft exit a trend ending, or the trade wobbling inside one?
+
+    Returns `(hold, why)`. `hold` true means do not close: keep the position and
+    let the ladder and trail carry it, which they now can.
+
+    ## Why the soft exits cannot be trusted as they stand
+
+    EMA9, VWAP and MACD all fire on **first touch**, with no confirmation bar and
+    no reference to whether the trend actually broke. Every soft exit ever
+    booked: 14 of them, 5 positive, mean **-0.059R**, option premium -1.15% with
+    4 of 14 positive. They are a coin flip that loses slightly, and they are what
+    closes most trades.
+
+    ## The distinction being drawn
+
+    `trend_health_score` is computed on every scan for every open position and,
+    until now, decided nothing at all. It is the one reading available at the
+    moment of a soft exit that speaks to whether the move is over.
+
+    Two facts, together:
+
+        in profit AND trend still healthy  -> the trend is intact, this is a
+                                              wobble. Hold and let the ratchet
+                                              carry it.
+        losing OR trend broken             -> the trade is wrong. Honour the
+                                              exit immediately.
+
+    Requiring profit is what keeps this from becoming "hold losers longer". A
+    losing trade is never held by this rule no matter how healthy the trend
+    reads, so the worst case is exiting at a ratcheted stop instead of at the
+    soft signal -- never a wider loss than the trade already had.
+
+    ## The two cases it is measured against
+
+    **NVDA 2026-07-31** ran to +1.66R and closed at +0.60R on an EMA9 touch with
+    trend health reading **95**. In profit, trend intact -- held, and the ladder
+    carries it. This is the giveback the rule exists for.
+
+    **AVGO #351 on 2026-08-19** exited on a VWAP touch at **-0.17R** with trend
+    health **40**. Losing and broken on both counts -- honoured, and the early
+    exit that saved roughly 0.83R against its stop is preserved. A rule that held
+    this trade would have been strictly worse.
+
+    `resolve_profit_lock` attempts something similar and almost never fires: it
+    additionally requires the engine's own exit confidence below 25, which read
+    ~49 on NVDA at the exit bar, and subtracts a full 1R of giveback so it is
+    dead below a 1.2R peak. This is the same idea with the gates that were
+    stopping it removed.
+    """
+
+    if not exit_signal or exit_code not in SOFT_EXIT_RULES:
+        return False, None
+
+    if not _env_bool("SOFT_EXIT_HOLD_ENABLED", True):
+        return False, "hold disabled"
+
+    progress = _float_or_none(rr_progress)
+
+    if progress is None or progress <= 0:
+        return False, "trade is not in profit"
+
+    health = _float_or_none(trend_health_score)
+    floor = _env_float("SOFT_EXIT_HOLD_MIN_TREND_HEALTH", 70.0)
+
+    if health is None:
+        return False, "no trend health reading"
+
+    if health < floor:
+        return False, f"trend health {health:.0f} below {floor:.0f}"
+
+    return True, f"trend health {health:.0f} at {progress:.2f}R"
+
+
 def target_extend_enabled():
     """Let a runner past its target instead of banking it there.
 
@@ -1225,6 +1302,7 @@ def evaluate_exit(
         exit_signal = True
         exit_reason = primary_exit["reason"]
 
+
     # The breakeven move has been gated on a full 1R since it was written, and
     # over the 21-day economics run that made it very nearly inert: it fired on
     # 38 of 291 trades and saved 0.2R. The trades that need it never get near
@@ -1468,6 +1546,7 @@ def evaluate_exit(
             exit_signal = True
             exit_reason = primary_exit["reason"]
 
+
     if momentum_exits_allowed and latest.get("FAILED_BREAKOUT", False):
 
         exit_reasons.append(_exit_diagnostic("FAILED_BREAKOUT", "Failed breakout"))
@@ -1546,6 +1625,40 @@ def evaluate_exit(
         adjustment_reason = (
             f"{selected_exit['code']} grace zone active; awaiting one-bar confirmation"
         )
+
+    # After the grace zone, not instead of it. The grace zone defers the *first*
+    # soft break by one bar, once per trade. This covers what happens next: the
+    # confirmation bar arrives, the rule fires again, and nothing has asked
+    # whether the trend actually ended.
+    #
+    # A soft rule fires on first touch and says nothing about that. Where the
+    # trade is in profit and trend health still reads intact, hold it and let the
+    # ladder and trail carry it -- both have already ratcheted by this point,
+    # since they run under `not exit_signal` earlier in the pass. A losing trade
+    # is never held here, however healthy the trend looks.
+    soft_hold, soft_hold_why = resolve_soft_exit_hold(
+        (_select_primary_exit(exit_reasons) or {}).get("code") if exit_signal else None,
+        exit_signal,
+        rr_progress,
+        trend_health.get("score"),
+    )
+
+    if soft_hold:
+
+        exit_reasons = [
+            reason for reason in exit_reasons
+            if reason.get("code") not in SOFT_EXIT_RULES
+        ]
+        remaining = _select_primary_exit(exit_reasons)
+
+        if remaining:
+            exit_signal = True
+            exit_reason = remaining["reason"]
+        else:
+            exit_signal = False
+            exit_reason = "Hold"
+            trade_action = "HOLD"
+            adjustment_reason = f"Soft exit held: {soft_hold_why}"
 
     # Profit protection. A soft rule may say "momentum broke" while the trade is
     # sitting on real banked profit and the trend still reads strong. NVDA on
