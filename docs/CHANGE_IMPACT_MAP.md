@@ -513,6 +513,23 @@ which is why `maybe_freeze_regression_baselines` runs nightly.
 | `MAX_TRADES_PER_SYMBOL_PER_DAY` | stage 6 only; rule 11 still blocks while holding | per-symbol frequency stats | earns its keep at 2 |
 | `AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES` | stage 6, **and the duplicate in `dashboard.py`** | re-entry timing | 60 default, unmeasured |
 | `SESSION_INTERVALS` | scan cadence **and the Neon bill** | scan-count comparisons across days | idle windows halved 2026-08-13; REGULAR left alone deliberately |
+| `POSITION_MONITOR_MOMENTUM_ENABLED` | **when** EMA/VWAP/MACD/failed-breakout/time are asked, never what they may answer; adds a Polygon 1m call per held symbol per minute | exit-mix and time-to-exit comparisons across the switch | committed off, unmeasured |
+
+`POSITION_MONITOR_MOMENTUM_ENABLED` deserves the same warning as any exit lever.
+The scan's 15-minute frame is resampled from its own **5-minute** pull, so its
+forming bar changes once every five minutes and running the rules more often
+against it cannot make anything arrive sooner. Resampling from 1-minute bars
+does: verified on ORCL over 3 sessions, all 80 completed 15m buckets are
+identical to the last decimal from either source, so every measured result about
+these rules still applies — the same signal, up to four minutes earlier.
+
+What it buys those minutes from is a bar that has not finished, and the engine's
+own note is that VWAP and MACD are bare state comparisons evaluated against
+exactly that. The grace zone, profit lock and trend-health guard are left in
+place unchanged for this reason. `MOMENTUM_EXIT_RULES` also bars this path from
+closing on HARD_STOP, HARD_TARGET or NEAR_CLOSE: those are price levels, and the
+20-second loop judges them against a live quote instead of a bar up to a minute
+old.
 | retention `keep_days` | what any archive tool can still see | every measurement older than the new window | raised 21→90 on 2026-08-13 |
 
 ---

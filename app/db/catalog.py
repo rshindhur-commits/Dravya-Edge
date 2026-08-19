@@ -47,6 +47,14 @@ TABLES = (
      "did afterwards. Exists so questions about the book are a GROUP BY rather "
      "than another throwaway script; the two derivations it replaced were both "
      "wrong the first time."),
+    ("candidate_price_log", "Scanning", "one per candidate per 20s poll",
+     "Sub-scan prices for symbols forming a setup that have not entered. The "
+     "rest of the archive is 5-minute snapshots, so the movement *inside* a "
+     "scan gap has never been recorded -- and that gap is where the entry-timing "
+     "questions live. Written by the position monitor, read by nothing: no "
+     "trading path depends on it, and an A/B over 5-minute data could only ever "
+     "answer it by proxy. Deliberately narrow, because a 20s poll outgrows every "
+     "other table here within a quarter if it carries a payload."),
     ("activity_trace_event", "Scanning", "one per observed event",
      "The full narrative of a trading day, symbol by symbol, behind the Activity "
      "Feed."),

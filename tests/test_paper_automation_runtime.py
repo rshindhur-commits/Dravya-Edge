@@ -144,6 +144,84 @@ class PaperAutomationRuntimeTests(unittest.TestCase):
         self.assertEqual(terminal[0].args[1], "SKIPPED")
         self.assertEqual(terminal[0].args[2], "SETUP_INVALID")
 
+    def test_a_held_symbol_is_reported_as_held_not_as_a_malformed_entry(self):
+        """The scanner stamps ACTIVE_TRADE instead of running detect_entry once a
+        symbol is open, so a re-scan is not a broken row -- it is a position we
+        already have. Both used to log INVALID_ENTRY_TYPE, and that single string
+        was 43% of every actionable decision in the ledger. A funnel read through
+        it says entries are being silently dropped when nothing is."""
+
+        row = {
+            "Symbol": "PLTR",
+            "Action Status": "ENTER_PAPER",
+            "Setup Valid": True,
+            "Candidate Direction": "CALL",
+            "Candidate Entry Price": 173,
+            "Candidate Stop Price": 171,
+            "Candidate Target Price": 177,
+            "Candidate RR": 2.0,
+            "Entry": "ACTIVE_TRADE",
+            "Next Condition": "-",
+            "Live Chart Checklist": "-",
+            "Realtime Ready": True,
+        }
+        controls = {"auto_paper_enabled": True, "max_daily": 3}
+
+        with patch(
+            "app.runtime.paper_automation_support.auto_paper_session_block_reason",
+            return_value=None,
+        ), patch(
+            "app.runtime.paper_automation_support._record_auto_paper_decision",
+        ), patch(
+            "app.state.paper_trade_manager.load_paper_trades",
+            return_value={},
+        ):
+            frame = pd.DataFrame([row])
+            result = run_auto_paper_entries(frame, controls)
+
+        self.assertEqual(result, [])
+        self.assertEqual(
+            frame.loc[0, "Execution Reason"],
+            "ALREADY_HOLDING_NO_ADDITIONAL_ENTRY",
+        )
+
+    def test_a_symbol_with_no_setup_is_still_reported_separately(self):
+        """The other half of the split. NO_SETUP means the scanner looked and
+        found nothing, which is a different fact from holding the name."""
+
+        row = {
+            "Symbol": "PLTR",
+            "Action Status": "ENTER_PAPER",
+            "Setup Valid": True,
+            "Candidate Direction": "CALL",
+            "Candidate Entry Price": 173,
+            "Candidate Stop Price": 171,
+            "Candidate Target Price": 177,
+            "Candidate RR": 2.0,
+            "Entry": "NO_SETUP",
+            "Next Condition": "-",
+            "Live Chart Checklist": "-",
+            "Realtime Ready": True,
+        }
+        controls = {"auto_paper_enabled": True, "max_daily": 3}
+
+        with patch(
+            "app.runtime.paper_automation_support.auto_paper_session_block_reason",
+            return_value=None,
+        ), patch(
+            "app.runtime.paper_automation_support._record_auto_paper_decision",
+        ), patch(
+            "app.state.paper_trade_manager.load_paper_trades",
+            return_value={},
+        ):
+            frame = pd.DataFrame([row])
+            result = run_auto_paper_entries(frame, controls)
+
+        self.assertEqual(result, [])
+        self.assertEqual(
+            frame.loc[0, "Execution Reason"], "NO_ENTRY_SETUP_DETECTED"
+        )
+
     def test_opened_candidate_is_audited_when_telegram_fails(self):
 
         row = {

@@ -314,6 +314,177 @@ def test_a_handled_message_records_price_and_marks_healthy():
     assert stream.healthy() is True
 
 
+# --------------------------------------------------------------------------
+# Momentum on 1-minute bars
+# --------------------------------------------------------------------------
+
+def test_momentum_is_off_unless_switched_on():
+
+    assert pm.momentum_enabled() is False
+
+
+def test_the_rebuild_interval_never_goes_below_the_bar_that_feeds_it(monkeypatch):
+    """A 1-minute bar cannot change faster than a minute. A shorter interval
+    spends quota re-reading identical numbers."""
+
+    assert pm.momentum_interval_seconds() == 60
+
+    monkeypatch.setenv("POSITION_MONITOR_MOMENTUM_SECONDS", "5")
+    assert pm.momentum_interval_seconds() == 20
+
+
+def test_a_put_whose_setup_name_reads_long_is_refused_not_guessed():
+    """`_is_short_entry` reads the setup NAME; `direction` holds PUT/CALL. When
+    they disagree the engine evaluates a short as a long -- R inverts and every
+    momentum rule fires on the wrong side. The price path resolves `direction`
+    first, but `evaluate_exit` has no such parameter, so the only safe answer is
+    to not run."""
+
+    assert pm._direction_agrees(
+        {"direction": "PUT", "entry_type": "VWAP_REJECTION"}
+    ) is True
+    assert pm._direction_agrees(
+        {"direction": "CALL", "entry_type": "EMA_PULLBACK"}
+    ) is True
+    assert pm._direction_agrees(
+        {"direction": "PUT", "entry_type": "EMA_PULLBACK"}
+    ) is False
+
+
+def test_a_disagreeing_trade_is_skipped_and_never_priced(monkeypatch):
+    """The refusal must happen before the fetch, or a broken row still costs a
+    Polygon call every minute it stays open."""
+
+    called = []
+    monkeypatch.setattr(pm, "_momentum_frame",
+                        lambda symbol, now=None: called.append(symbol))
+
+    assert pm._check_momentum(
+        {"direction": "PUT", "entry_type": "EMA_PULLBACK"}, "SPCX"
+    ) is None
+    assert called == []
+
+
+def test_the_frame_is_cached_so_a_20s_loop_does_not_fetch_three_times(monkeypatch):
+
+    fetches = []
+
+    def _fake_get(symbol, multiplier, timespan, days):
+        fetches.append((symbol, multiplier, timespan))
+        return _bars()
+
+    monkeypatch.setattr(
+        "app.indicators.technical_indicators.get_polygon_data", _fake_get
+    )
+    monkeypatch.setattr(
+        "app.indicators.technical_indicators.compute_indicators",
+        lambda frame, interval=None, symbol=None: frame,
+    )
+    pm._momentum_frames.clear()
+
+    pm._momentum_frame("SPCX", now=1000.0)
+    pm._momentum_frame("SPCX", now=1020.0)
+    pm._momentum_frame("SPCX", now=1040.0)
+
+    assert len(fetches) == 1, "three 20s passes inside one minute is one fetch"
+    assert fetches[0][1:] == (1, "minute"), "the point is 1-minute bars"
+
+    pm._momentum_frame("SPCX", now=1100.0)
+    assert len(fetches) == 2, "past the interval it must refresh"
+
+
+def test_a_dead_feed_is_cached_so_it_is_not_retried_every_pass(monkeypatch):
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("polygon down")
+
+    monkeypatch.setattr(
+        "app.indicators.technical_indicators.get_polygon_data", _boom
+    )
+    pm._momentum_frames.clear()
+
+    assert pm._momentum_frame("SPCX", now=2000.0) is None
+    assert pm._momentum_frames["SPCX"][1] is None
+
+
+def test_the_engine_verdict_is_translated_into_the_close_path():
+    """Two engines, two dialects. `_act_on` speaks one of them."""
+
+    translated = pm._as_price_verdict({
+        "exit_signal": True,
+        "exit_rule": "MACD",
+        "exit_reason": "MACD bearish crossover (long)",
+        "exit_fill_price": 143.45,
+        "updated_stop": 143.90,
+        "rr_progress": -0.75,
+    })
+
+    assert translated["exit"] is True
+    assert translated["exit_code"] == "MACD"
+    assert translated["fill_price"] == 143.45
+
+
+def test_a_momentum_verdict_never_moves_the_stop():
+    """The engine proposes a trail from an unfinished bar while the 20s price
+    loop moves the stop from a source that cannot be revised. Letting both write
+    means a stop that walks backwards when the forming bar changes its mind."""
+
+    translated = pm._as_price_verdict({
+        "exit_signal": True, "exit_rule": "VWAP", "exit_reason": "x",
+        "exit_fill_price": 141.0, "updated_stop": 999.0, "rr_progress": 0.1,
+    })
+
+    assert translated["updated_stop"] is None
+
+
+def test_a_stale_bar_may_not_decide_a_stop(monkeypatch):
+    """`evaluate_exit` reads the last COMPLETED 1-minute bar, so its view of
+    price is up to a minute old. The 20s loop judges the same stop against a live
+    quote. If the staler one could close, a stop that was touched and recovered
+    would still take the trade out a minute later."""
+
+    import pandas as pd
+
+    monkeypatch.setattr(pm, "_momentum_frame",
+                        lambda symbol, now=None: pd.DataFrame({"Close": [1.0]}))
+    monkeypatch.setattr("app.strategies.momentum_strategy.analyze_setup",
+                        lambda frame: {})
+
+    trade = {"direction": "CALL", "entry_type": "EMA_PULLBACK"}
+
+    for rule, expected in (
+        ("HARD_STOP", None),
+        ("HARD_TARGET", None),
+        ("NEAR_CLOSE", None),
+        ("MACD", "kept"),
+        ("VWAP", "kept"),
+        ("EMA", "kept"),
+    ):
+        monkeypatch.setattr(
+            "app.exit.exit_engine.evaluate_exit",
+            lambda *a, _rule=rule, **k: {"exit_signal": True, "exit_rule": _rule},
+        )
+        verdict = pm._check_momentum(trade, "SPCX")
+
+        if expected is None:
+            assert verdict is None, f"{rule} must be left to the price loop"
+        else:
+            assert verdict is not None, f"{rule} is what this path exists for"
+
+
+def _bars():
+    import pandas as pd
+
+    index = pd.date_range("2026-08-18 09:30", periods=60, freq="1min", tz=ET)
+    return pd.DataFrame(
+        {
+            "Open": 100.0, "High": 100.5, "Low": 99.5,
+            "Close": 100.0, "Volume": 1000.0,
+        },
+        index=index,
+    )
+
+
 class _FakeStream:
     def __init__(self, price, age):
         self._price, self._age = price, age
