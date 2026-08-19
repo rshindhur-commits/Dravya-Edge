@@ -538,6 +538,61 @@ def ladder_locked_r(mfe_r):
     return locked
 
 
+def structure_trail_stop(df, is_short, lookback=None):
+    """The last swing the trend has to hold, or None.
+
+    An ATR trail is a volatility distance, not a level. On a symbol whose ATR is
+    wide relative to its risk it sits nowhere in particular: AMZN #343 on
+    2026-08-19 had a 15-minute ATR of 1.32-1.44 against a 1R of 1.31, so
+    `price - 1x ATR` was a full R below the high and the ladder governed instead.
+    The trail contributed nothing to that trade.
+
+    A swing low is where the move would actually be invalidated, and it is the
+    level a trader would put a stop under. For a long it is the lowest Low of the
+    last `lookback` **completed** bars; mirrored for a short.
+
+    The forming bar is excluded deliberately. Its Low is still moving, and a stop
+    derived from a bar that has not finished is the same defect as
+    `_stop_trigger_price` -- a level that can be breached by price the stop was
+    never exposed to.
+
+    Returns the raw level. The caller ratchets and never widens, so a swing that
+    sits below the stop already in place is ignored.
+    """
+
+    if df is None or len(df) < 2:
+        return None
+
+    try:
+        window = int(lookback if lookback is not None else _env_float(
+            "EXIT_STRUCTURE_TRAIL_LOOKBACK", 5
+        ))
+    except (TypeError, ValueError):
+        window = 5
+
+    if window < 1:
+        return None
+
+    completed = df.iloc[:-1].tail(window)
+
+    if completed.empty:
+        return None
+
+    try:
+        level = float(completed["High"].max() if is_short else completed["Low"].min())
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if level != level:
+        return None
+
+    # A hair beyond the swing, so price touching the level exactly does not stop
+    # the trade out of a trend that is still holding it.
+    buffer_pct = _env_float("EXIT_STRUCTURE_TRAIL_BUFFER_PCT", 0.05) / 100.0
+
+    return level * (1 + buffer_pct) if is_short else level * (1 - buffer_pct)
+
+
 SOFT_EXIT_RULES = {"EMA", "VWAP", "MACD"}
 
 
@@ -1347,7 +1402,24 @@ def evaluate_exit(
 
         adjustment_reason = "Moved stop to breakeven"
 
-    if not exit_signal and rr_progress >= 1.5:
+    # A partial exit needs something to sell half of.
+    #
+    # This set the flag and raised a "PARTIAL PROFIT / Position: Partial closed /
+    # Runner: Still Open" alert on every trade reaching 1.5R, while
+    # MAX_CONTRACTS_PER_TRADE is 1 and no code beneath it ever closed part of
+    # anything. AMZN #343 on 2026-08-19 was announced as partially closed at
+    # 1.91R holding a single contract, with close_price and r_multiple both null,
+    # and then closed in full at its target -- the "partial" and the "runner"
+    # were the same contract for the whole life of the trade.
+    #
+    # Gated on real position size rather than removed, because the state itself
+    # feeds `_trade_update_reason` and the trailing logic. What was false was the
+    # claim of an execution, not the threshold.
+    position_contracts = _float_or_none(
+        (trade_state or {}).get("option_contracts")
+    ) or 1
+
+    if not exit_signal and rr_progress >= 1.5 and position_contracts > 1:
 
         partial_profit_taken = True
         trade_action = "PARTIAL_PROFIT"
@@ -1401,6 +1473,29 @@ def evaluate_exit(
             updated_stop = trailing_stop
 
         adjustment_reason = "ATR trailing stop active"
+
+        # The swing the trend has to hold, taken alongside the volatility
+        # distance rather than instead of it. Whichever is tighter wins, and the
+        # ratchet means neither can ever widen risk. On a wide-ATR symbol the ATR
+        # arm sits nowhere useful -- AMZN's was a full R below the high -- and the
+        # structure level is what a stop would actually be placed under.
+        if _env_bool("EXIT_STRUCTURE_TRAIL_ENABLED", True):
+
+            structure = structure_trail_stop(df, is_short)
+
+            if structure is not None:
+
+                tightened = (
+                    min(updated_stop, structure)
+                    if is_short
+                    else max(updated_stop, structure)
+                )
+
+                if tightened != updated_stop:
+
+                    updated_stop = tightened
+                    trailing_stop = updated_stop
+                    adjustment_reason = "Structure trailing stop active"
 
     if not exit_signal and holding_profile == "MULTIDAY" and mfe_r >= profit_lock_mfe_r:
 
