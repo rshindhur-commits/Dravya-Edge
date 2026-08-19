@@ -111,6 +111,65 @@ def candidate_logging_enabled():
     }
 
 
+def momentum_enabled():
+    """Run the momentum exit rules here too, on 1-minute data. Off by default.
+
+    ## Why this is not simply "the scan, but faster"
+
+    The scan builds its 15-minute frame by resampling its own 5-minute pull, and
+    `resample_timeframe` emits the final bucket while it is still forming. So the
+    forming 15m bar's Close is the last completed **5-minute** bar, and it
+    changes once every five minutes -- the same cadence as the scan. Evaluating
+    MACD, VWAP or EMA more often than that against the scan's own frame reads
+    identical numbers repeatedly and cannot make any signal arrive sooner.
+
+    Feeding the same resample from 1-minute bars changes that, and changes only
+    that. Verified against ORCL over 3 sessions, 80 completed 15-minute buckets:
+    Open, High, Low, Close and Volume are **identical to the last decimal** in
+    every bucket, from either source. A completed bar is the same bar. What moves
+    is the forming bar, which now refreshes every minute instead of every five.
+
+    That distinction is the whole safety argument. Because completed bars do not
+    change, every measured result about these rules still describes them -- the
+    momentum-exit study that found holding costs -18.6R and -23.8R is about this
+    same signal. A rule fires up to four minutes earlier inside a bucket; it is
+    not a different rule.
+
+    ## What is knowingly made worse
+
+    Those four minutes are bought from a bar that has not finished. The engine's
+    own note is that VWAP and MACD are bare state comparisons with no buffer and
+    no confirmation, evaluated against a still-forming bar, and that on
+    2026-07-29 nine of thirteen exits were soft invalidations. Refreshing that
+    bar five times as often gives that failure five times as many chances.
+
+    The existing defences are deliberately left in place rather than special
+    cased: the grace zone still defers a lone momentum exit for one bar, the
+    profit lock still converts a low-confidence exit into a stop ratchet, and
+    trend health still guards early weak exits. This changes when the engine is
+    asked, never what it is allowed to answer.
+    """
+
+    return str(os.getenv("POSITION_MONITOR_MOMENTUM_ENABLED", "")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def momentum_interval_seconds():
+    """How often to rebuild the frame.
+
+    Defaults to 60 because a 1-minute bar is the input: below that the resampled
+    bucket cannot have changed, so a shorter interval spends quota to re-read
+    numbers that are identical, and the price-level rules on the 20s loop are
+    already covering everything that moves faster.
+    """
+
+    try:
+        return max(20, int(os.getenv("POSITION_MONITOR_MOMENTUM_SECONDS", "")))
+    except (TypeError, ValueError):
+        return 60
+
+
 def _in_session(now=None):
     now = now or datetime.now(ET)
 
@@ -165,6 +224,136 @@ def _trade_state(trade):
         "option_peak_mid": trade.get("option_peak_mid"),
         "option_current_mid": trade.get("option_current_mid"),
     }
+
+
+# What this path is allowed to close on. Everything `evaluate_exit` can return
+# that is NOT here -- HARD_STOP, HARD_TARGET, NEAR_CLOSE -- is a price level, and
+# price levels belong to the 20-second loop, which reads a live quote rather than
+# a bar that finished up to a minute ago.
+MOMENTUM_EXIT_RULES = {"EMA", "VWAP", "MACD", "FAILED_BREAKOUT", "TIME_EXIT"}
+
+_momentum_frames = {}
+
+
+def _momentum_frame(symbol, now=None):
+    """A 15-minute frame resampled from 1-minute bars, with indicators.
+
+    Cached per symbol for `momentum_interval_seconds()`. The 20-second price loop
+    calls this on every pass and the underlying bar cannot change faster than a
+    minute, so without the cache this would spend three Polygon calls per symbol
+    per minute to compute the same answer three times.
+    """
+
+    from app.indicators.technical_indicators import compute_indicators, get_polygon_data
+    from app.utils.timeframe_resampler import resample_timeframe
+
+    now = now if now is not None else time.monotonic()
+    cached = _momentum_frames.get(symbol)
+
+    if cached and now - cached[0] < momentum_interval_seconds():
+        return cached[1]
+
+    try:
+        bars = get_polygon_data(symbol, 1, "minute", 2)
+        frame = compute_indicators(
+            resample_timeframe(bars, "15m"), interval="15m", symbol=symbol
+        )
+    except Exception as exc:
+        _log(f"[POSITION MONITOR WARNING] {symbol}: 1m frame unavailable: {exc}")
+        # Cached as None so a symbol whose data is down does not get retried on
+        # every 20s pass for the rest of the session.
+        _momentum_frames[symbol] = (now, None)
+        return None
+
+    if frame is None or frame.empty:
+        _momentum_frames[symbol] = (now, None)
+        return None
+
+    _momentum_frames[symbol] = (now, frame)
+    return frame
+
+
+def _direction_agrees(trade):
+    """Does the recorded direction match what the exit engine will infer?
+
+    `_is_short_entry` reads the setup NAME -- SHORT, BEARISH, BREAKDOWN,
+    REJECTION -- while `paper_trades.direction` holds PUT or CALL. When the two
+    disagree the engine evaluates a short as a long: R inverts, and every
+    momentum rule fires on the wrong side of the trade.
+
+    The price-level path solves this by resolving `direction` first, but
+    `evaluate_exit` has no such parameter and its setup name feeds other logic,
+    so overriding it would be worse than not running. A trade whose two records
+    disagree is therefore skipped and logged, not guessed at.
+    """
+
+    from app.exit.exit_engine import _is_short_entry
+
+    direction = str(trade.get("direction") or "").upper()
+
+    if direction not in {"PUT", "CALL"}:
+        return True
+
+    inferred_short = _is_short_entry(
+        trade.get("entry_type") or trade.get("setup")
+    )
+
+    return inferred_short == (direction == "PUT")
+
+
+def _check_momentum(trade, symbol):
+    """Run the full exit engine on fresh 1-minute-sourced bars.
+
+    Returns the verdict when it says EXIT, else None. Only an exit is acted on:
+    the stop the engine proposes here is derived from an unfinished bar, and the
+    20-second price loop already owns stop movement from a source that cannot be
+    revised.
+    """
+
+    from app.exit.exit_engine import evaluate_exit
+    from app.strategies.momentum_strategy import analyze_setup
+
+    if not _direction_agrees(trade):
+        _log(
+            f"[POSITION MONITOR WARNING] {symbol}: direction "
+            f"{trade.get('direction')} disagrees with setup "
+            f"{trade.get('entry_type') or trade.get('setup')}; momentum skipped"
+        )
+        return None
+
+    frame = _momentum_frame(symbol)
+
+    if frame is None:
+        return None
+
+    try:
+        verdict = evaluate_exit(
+            frame,
+            analyze_setup(frame),
+            _risk_setup(trade),
+            trade_state={
+                **_trade_state(trade),
+                "highest_price": trade.get("highest_price"),
+                "lowest_price": trade.get("lowest_price"),
+            },
+        )
+    except Exception as exc:
+        _log(f"[POSITION MONITOR WARNING] {symbol}: momentum evaluation failed: {exc}")
+        return None
+
+    if not verdict or not verdict.get("exit_signal"):
+        return None
+
+    # Only the rules this path was added for. `evaluate_exit` also decides stops
+    # and targets, and it decides them from `frame.iloc[-1]["Close"]` -- the last
+    # completed 1-minute bar, up to a minute behind the tape. The 20-second loop
+    # judges those same levels against a live quote. Letting the staler of the
+    # two close a position means a stop that was touched and recovered can still
+    # take the trade out a minute later.
+    if verdict.get("exit_rule") not in MOMENTUM_EXIT_RULES:
+        return None
+
+    return verdict
 
 
 def _price_for(symbol):
@@ -232,18 +421,42 @@ def check_once():
             option_mid=trade.get("option_current_mid"),
         )
 
-        if verdict is None:
+        if verdict is not None:
+
+            decisions.append((trade, price, verdict))
+
+            _log(
+                f"[POSITION MONITOR] {symbol} @ {price} ({source}) "
+                f"R={verdict.get('rr_progress')} "
+                f"{verdict.get('exit_code') or verdict.get('reason')}"
+            )
+
+            _act_on(trade, symbol, price, verdict)
+
+            if verdict.get("exit"):
+                continue
+
+        # After the price rules, never instead of them. A stop is a fact about a
+        # level and needs no confirmation; a momentum reading is an opinion about
+        # an unfinished bar. If both fire on the same pass the stop has already
+        # closed the position and this is skipped.
+        if not momentum_enabled():
             continue
 
-        decisions.append((trade, price, verdict))
+        momentum = _check_momentum(trade, symbol)
+
+        if momentum is None:
+            continue
+
+        decisions.append((trade, price, momentum))
 
         _log(
-            f"[POSITION MONITOR] {symbol} @ {price} ({source}) "
-            f"R={verdict.get('rr_progress')} "
-            f"{verdict.get('exit_code') or verdict.get('reason')}"
+            f"[POSITION MONITOR] {symbol} momentum exit "
+            f"R={momentum.get('rr_progress')} "
+            f"{momentum.get('exit_rule')}: {momentum.get('exit_reason')}"
         )
 
-        _act_on(trade, symbol, price, verdict)
+        _act_on(trade, symbol, price, _as_price_verdict(momentum))
 
     if candidate_logging_enabled():
         _log_candidate_prices({t.get("symbol") for t in positions})
@@ -348,6 +561,30 @@ def _log_candidate_prices(held_symbols):
             return written
 
     return written
+
+
+def _as_price_verdict(verdict):
+    """`evaluate_exit`'s shape, in `evaluate_price_exits`' vocabulary.
+
+    Two engines, two dialects: `exit_signal`/`exit_reason`/`exit_fill_price`
+    against `exit`/`exit_code`/`fill_price`. `_act_on` speaks the second, and
+    translating here keeps the single close path rather than growing a second
+    one that writes trade rows on its own terms.
+
+    `updated_stop` is deliberately dropped. The engine proposes a trail from an
+    unfinished bar, and the 20-second price loop already moves the stop from a
+    source that cannot be revised; letting both write would mean a stop that
+    walks backwards when the forming bar changes its mind.
+    """
+
+    return {
+        "exit": True,
+        "exit_code": verdict.get("exit_rule") or "MOMENTUM",
+        "reason": verdict.get("exit_reason"),
+        "fill_price": verdict.get("exit_fill_price"),
+        "updated_stop": None,
+        "rr_progress": verdict.get("rr_progress"),
+    }
 
 
 def _act_on(trade, symbol, price, verdict):
