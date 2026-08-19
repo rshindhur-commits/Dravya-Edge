@@ -1070,15 +1070,23 @@ def _save_paper_trade_telemetry(trade):
         )
 
 
-def _entry_fill_observation(symbol, entry_price, stop_loss):
-    """The live price beside the decision-candle price, and the gap in R.
+def entry_fill_slip(symbol, direction, entry_price, stop_loss):
+    """What the tape says now, and how far the decision price has drifted.
 
-    Never allowed to interfere with opening a trade. A quote that is slow or
-    missing records None and the position opens exactly as it would have; a
-    diagnostic column must not be able to cost an entry.
+    `entry_price` is the scanner's decision candle. The scan that acts on it
+    finishes minutes later -- measured over 40 trades the gap averages 5.6 minutes
+    and reaches 13 -- so the price the trade actually opens at is not the price
+    the geometry was computed from.
+
+    Returns `(live_price, slip_r)` where **slip_r is signed against the trade**:
+    positive means the market has moved the wrong way since the decision, for
+    either direction. `(None, None)` when no quote is available, so every caller
+    falls back to the behaviour it had.
+
+    Measured on 2026-08-19's five entries: TSLA slipped +0.59R, AVGO +0.32R,
+    AMZN +0.09R, SMH +0.06R, PLTR -0.12R. Booking the decision price rather than
+    the fill flattered the day by 0.73R -- +1.66R booked against +0.93R real.
     """
-
-    blank = {"entry_price_at_fill": None, "entry_fill_gap_r": None}
 
     try:
         from app.utils.polygon_client import get_live_price
@@ -1086,24 +1094,64 @@ def _entry_fill_observation(symbol, entry_price, stop_loss):
         live = _safe_float(get_live_price(symbol))
 
     except Exception as exc:
-        print(f"[ENTRY FILL OBSERVATION WARNING] {symbol}: {exc}")
-        return blank
+        print(f"[ENTRY FILL WARNING] {symbol}: {exc}")
+        return None, None
 
     if live is None:
-        return blank
+        return None, None
 
     entry = _safe_float(entry_price)
     stop = _safe_float(stop_loss)
-    risk = abs(entry - stop) if entry is not None and stop is not None else None
 
-    return {
-        "entry_price_at_fill": round(live, 4),
-        "entry_fill_gap_r": (
-            round((live - entry) / risk, 3)
-            if risk and entry is not None
-            else None
-        ),
-    }
+    if entry is None or stop is None:
+        return round(live, 4), None
+
+    risk = abs(entry - stop)
+
+    if not risk:
+        return round(live, 4), None
+
+    # A quote that disagrees with the decision candle by more than a few percent
+    # is not slippage, it is a bad read -- the candle is at most ~13 minutes old
+    # and a move that size inside it is extraordinary. Recorded, but never used
+    # to refuse: a stale or wrong quote must not be able to block every entry,
+    # and an offline caller must not have its behaviour changed by a failed
+    # lookup returning something unrelated.
+    if entry and abs(live - entry) / abs(entry) > get_float_env("ENTRY_FILL_SANITY_PCT", 5.0) / 100.0:
+        print(
+            f"[ENTRY FILL WARNING] {symbol}: live {live} is far from the decision "
+            f"price {entry}; treating the quote as unusable"
+        )
+        return round(live, 4), None
+
+    is_short = str(direction or "").upper() in {"PUT", "SHORT"}
+    drift = (entry - live) if is_short else (live - entry)
+
+    return round(live, 4), round(drift / risk, 3)
+
+
+def max_entry_fill_slip_r():
+    """How far the price may drift against a candidate before it is refused.
+
+    Unmeasured. It exists because the drift is one-directional in cost -- an
+    entry taken 0.6R worse than the geometry it was approved on is a different
+    trade from the one the gate allowed, and its stop is that much closer.
+    0.35 refuses only clearly degraded fills; on 2026-08-19 it would have refused
+    TSLA (+0.59R) and allowed the other four.
+
+    Set to 0 to disable the refusal and keep recording only.
+    """
+
+    return get_float_env("ENTRY_MAX_FILL_SLIP_R", 0.35)
+
+
+def _entry_fill_observation(symbol, direction, entry_price, stop_loss, live=None, slip=None):
+    """The recorded pair, for callers that already resolved the fill."""
+
+    if live is None and slip is None:
+        live, slip = entry_fill_slip(symbol, direction, entry_price, stop_loss)
+
+    return {"entry_price_at_fill": live, "entry_fill_gap_r": slip}
 
 
 def open_paper_trade(
@@ -1205,7 +1253,7 @@ def open_paper_trade(
         # before it changes behaviour -- the same way spread widening and stop
         # viability shipped observe-only. This is the column that makes that
         # measurement possible.
-        **_entry_fill_observation(symbol, entry_price, stop_loss),
+        **_entry_fill_observation(symbol, direction, entry_price, stop_loss),
         "stop_loss": stop_loss,
         # Frozen at entry. `stop_loss` moves (breakeven, trailing, profit lock);
         # this stays put because it is the denominator for every R measurement.

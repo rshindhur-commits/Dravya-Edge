@@ -107,7 +107,12 @@ def run_auto_paper_entries(df, controls):
         _scanner_block_reason,
         _scanner_context_from_row,
     )
-    from app.state.paper_trade_manager import load_paper_trades, open_paper_trade
+    from app.state.paper_trade_manager import (
+        entry_fill_slip,
+        load_paper_trades,
+        max_entry_fill_slip_r,
+        open_paper_trade,
+    )
 
     try:
 
@@ -329,6 +334,28 @@ def run_auto_paper_entries(df, controls):
         entry_source = "AUTO_PAPER_REVIEW_VALIDATION" if is_review_validation else "AUTO_PAPER"
         notes_prefix = "Auto paper review validation entry" if is_review_validation else "Auto paper entry"
         spread_note = "; missing spread allowed for paper" if _safe_float(row.get("Option Spread %"), None) is None else ""
+        # Refuse a fill that has drifted away from the geometry it was approved
+        # on. The gate judged this candidate against the decision candle, and the
+        # scan acting on it lands minutes later -- 5.6 on average over 40 trades,
+        # up to 13. A candidate approved at exactly 2.00 RR whose price has since
+        # moved 0.6R against it is a different trade, with its stop that much
+        # closer, and nothing re-checked it.
+        _fill_price, _fill_slip = entry_fill_slip(
+            row_for_trade.get("Symbol"),
+            row_for_trade.get("Candidate Direction"),
+            row_for_trade.get("Candidate Entry Price"),
+            row_for_trade.get("Candidate Stop Price"),
+        )
+        _slip_cap = max_entry_fill_slip_r()
+
+        if _slip_cap and _fill_slip is not None and _fill_slip > _slip_cap:
+            record_terminal(
+                row,
+                "BLOCKED",
+                f"ENTRY_FILL_SLIPPED:{_fill_slip:+.2f}R>{_slip_cap:.2f}R",
+            )
+            continue
+
         try:
             opened_trade = open_paper_trade(
                 symbol=row_for_trade.get("Symbol"),
