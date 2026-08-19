@@ -16,6 +16,8 @@ soft exit.
 """
 
 import inspect
+import os
+from unittest import mock
 from unittest.mock import patch
 
 from app.exit.exit_engine import resolve_profit_lock
@@ -282,3 +284,59 @@ def test_an_unknown_r_leaves_mfe_alone():
 
     assert closed["r_multiple"] is None
     assert closed["mfe_r"] == 1.43
+
+
+# --------------------------------------------------------------------------
+# The option peak, which the give-back floor is measured against
+# --------------------------------------------------------------------------
+
+def test_the_option_peak_is_carried_between_scans():
+    """Without this the two-tier give-back floor cannot fire at all.
+
+    `evaluate_exit` emits `option_peak_mid` into its verdict and nothing wrote
+    it back: 0 of 54 recorded trades carried the field. So
+    `_option_giveback_exit` fell to `peak = current_mid` on every scan
+    (`exit_engine.py:522`), the give-back was structurally zero, and the floor
+    that `_giveback_floor` measured best of four candidates (+143.4% against
+    +52.4% for the book) had never once run.
+
+    Same defect the stop already has a test for -- a peak the engine re-derives
+    every pass is a peak that never existed.
+    """
+
+    trade = {}
+
+    paper_trade_manager._ratchet_excursions(trade, {"option_peak_mid": 9.95}, None)
+
+    assert trade["option_peak_mid"] == 9.95
+
+
+def test_the_option_peak_survives_a_retrace():
+    """TSLA #340 on 2026-08-19: peaked at 9.95 against a 9.625 entry and closed
+    at 9.125. Re-deriving the peak from the current mid on the closing scan is
+    what let a +3.4% winner book -5.2%."""
+
+    trade = {}
+
+    paper_trade_manager._ratchet_excursions(trade, {"option_peak_mid": 9.95}, None)
+    paper_trade_manager._ratchet_excursions(trade, {"option_peak_mid": 9.125}, None)
+
+    assert trade["option_peak_mid"] == 9.95, "a retrace must not erase the peak"
+
+
+def test_the_carried_peak_arms_the_breakeven_floor():
+    """The point of carrying it: with the peak the floor fires, without it the
+    give-back is zero and nothing fires. Uses the deployed 3% arm."""
+
+    from app.exit.exit_engine import _option_giveback_exit
+
+    state = {"option_entry_mid": 9.625, "option_current_mid": 9.125}
+
+    with mock.patch.dict(os.environ, {"EXIT_OPTION_BREAKEVEN_ARM_PCT": "3"},
+                         clear=False):
+
+        carried, _peak, _floor = _option_giveback_exit(state, 9.95)
+        rederived, _p2, _f2 = _option_giveback_exit(state, None)
+
+    assert carried is True, "a +3.4% peak fallen to -5.2% must breach the floor"
+    assert rederived is False, "without the peak the give-back is structurally zero"

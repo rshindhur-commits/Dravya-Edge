@@ -627,6 +627,21 @@ def _ratchet_excursions(trade, exit_state, execution_metrics):
 
     Falls back to `execution_metrics` for callers that pass no exit_state, so the
     shadow's number is still better than nothing where nothing else exists.
+
+    **`option_peak_mid` is ratcheted here for the same reason and was missed.**
+    It is a premium rather than an R excursion, but it is a peak with exactly
+    these semantics, and `evaluate_exit` emitted it into its verdict while
+    nothing wrote it back -- 0 of 54 recorded trades carried the field. So
+    `_option_giveback_exit` re-derived the peak from the current mid on every
+    scan (`exit_engine.py:522`), the give-back was structurally zero, and the
+    two-tier floor could never fire. That floor is the rule measured best of the
+    four candidates in `_giveback_floor`'s own table (+143.4% against +52.4% for
+    the book), and it had never once run.
+
+    Measured on TSLA #340, 2026-08-19: the option peaked at 9.95 against a 9.625
+    entry (+3.4%, clearing the 3% arm) and booked at 9.125 (-5.2%). With the peak
+    carried, the floor sits at the 0% gain and the trade exits at 9.625 -- the
+    whole $50 loss.
     """
 
     # Precedence is per field, not per source. Returning as soon as the live
@@ -642,7 +657,7 @@ def _ratchet_excursions(trade, exit_state, execution_metrics):
         if not source:
             continue
 
-        for field in ("mfe_r", "mae_r"):
+        for field in ("mfe_r", "mae_r", "option_peak_mid"):
 
             # The live engine is authoritative where it spoke at all; only
             # fields it left unset fall through to the shadow.
