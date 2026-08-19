@@ -449,6 +449,95 @@ def option_breakeven_arm_pct():
     return _env_float("EXIT_OPTION_BREAKEVEN_ARM_PCT", 10.0)
 
 
+DEFAULT_PROFIT_LADDER = "1.0:0.25,1.5:0.75,2.0:1.25,2.5:1.75,3.0:2.25"
+
+
+def trail_arm_r():
+    """The R at which the ATR trail starts following price.
+
+    Was hard-coded to 2.0, which made it unreachable. Targets are set at 2R, the
+    target is checked before the trail, and the trail is guarded by
+    `not exit_signal` -- so on the scan where `rr_progress` first cleared 2.0 the
+    target had already fired and the trail was skipped. Across 52 closed trades a
+    stop had been trailed past breakeven **3 times**.
+
+    1.0 gives it a full R of room to work inside before the target can end the
+    trade.
+    """
+
+    return _env_float("EXIT_TRAIL_ARM_R", 1.0)
+
+
+def trail_atr_multiple():
+    """How far behind price the trail sits, in ATR."""
+
+    return _env_float("EXIT_TRAIL_ATR_MULT", 1.0)
+
+
+def profit_ladder():
+    """Rungs of (peak_r, locked_r), lowest first.
+
+    The book's problem is not that exits fire wrongly, it is that nothing holds a
+    gain between breakeven and the target. Measured over 2026-08-19's five trades:
+    6.51R of favourable movement, 1.66R booked -- a 25% capture. TSLA peaked at
+    1.18R and PLTR at 1.24R, and both booked 0.00R because the only thing beneath
+    them was a stop sitting at entry.
+
+    Each rung says: once the peak has reached `peak_r`, never give back below
+    `locked_r`. The gap between the two is deliberate slack -- a rung that locks
+    too close to the peak is the proportional give-back that `_giveback_floor`
+    already measured as destructive (arming at 15% with half kept booked -7.3%
+    against +52.4% for leaving it alone).
+
+    Configured as `EXIT_PROFIT_LADDER="peak:locked,peak:locked,..."`. An empty
+    value disables the ladder entirely.
+    """
+
+    raw = str(os.getenv("EXIT_PROFIT_LADDER", DEFAULT_PROFIT_LADDER) or "").strip()
+
+    if not raw:
+        return []
+
+    rungs = []
+
+    for part in raw.split(","):
+
+        piece = part.strip()
+
+        if not piece:
+            continue
+
+        try:
+            peak, locked = piece.split(":")
+            rungs.append((float(peak), float(locked)))
+        except (ValueError, TypeError):
+            continue
+
+    return sorted(rungs)
+
+
+def ladder_locked_r(mfe_r):
+    """The most R the ladder protects at this peak, or None below the first rung.
+
+    Reads the *peak*, not the current reading, so a retrace cannot unwind a rung
+    that was already earned.
+    """
+
+    peak = _float_or_none(mfe_r)
+
+    if peak is None:
+        return None
+
+    locked = None
+
+    for rung_peak, rung_locked in profit_ladder():
+
+        if peak >= rung_peak and rung_locked > 0:
+            locked = rung_locked if locked is None else max(locked, rung_locked)
+
+    return locked
+
+
 def _stop_trigger_price(latest, trade_state, is_short):
     """The price this bar may test the stop against.
 
@@ -1121,13 +1210,42 @@ def evaluate_exit(
         trade_action = "PARTIAL_PROFIT"
         adjustment_reason = "Partial profit threshold reached"
 
-    if not exit_signal and rr_progress >= 2 and atr > 0:
+    # The profit ladder. Reads the peak, so a retrace cannot unwind a rung that
+    # was already earned, and only ever ratchets. This is what holds a gain
+    # between breakeven and the target, where nothing did before.
+    if not exit_signal:
+
+        rung = ladder_locked_r(mfe_r)
+
+        if rung is not None and risk_per_share and entry_price is not None:
+
+            ladder_stop = (
+                entry_price - (rung * risk_per_share)
+                if is_short
+                else entry_price + (rung * risk_per_share)
+            )
+            ratcheted = (
+                min(updated_stop, ladder_stop)
+                if is_short
+                else max(updated_stop, ladder_stop)
+            )
+
+            if ratcheted != updated_stop:
+
+                updated_stop = ratcheted
+                trailing_stop = updated_stop
+                profit_protection_active = True
+                adjustment_reason = f"Profit ladder: {rung:.2f}R locked"
+
+    if not exit_signal and rr_progress >= trail_arm_r() and atr > 0:
+
+        distance = atr * trail_atr_multiple()
 
         if is_short:
 
             trailing_stop = min(
                 updated_stop,
-                current_price + atr
+                current_price + distance
             )
             updated_stop = trailing_stop
 
@@ -1135,7 +1253,7 @@ def evaluate_exit(
 
             trailing_stop = max(
                 updated_stop,
-                current_price - atr
+                current_price - distance
             )
             updated_stop = trailing_stop
 

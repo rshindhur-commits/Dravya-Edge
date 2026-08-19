@@ -222,10 +222,24 @@ def test_nvda_profit_giveback_pathology_still_reproduces(live_trades):
     ``resolve_profit_lock``'s docstring occurs earlier in the hold, not at the
     exit.
 
-    So the giveback this fix targets is still live on its own motivating case.
-    This test pins that, deliberately: if a threshold change or a later fix
-    makes profit lock engage here, this fails and the new behaviour gets
-    recorded rather than sliding in unobserved.
+    **The profit ladder closed it, and this guard now records that.** The tripwire
+    above fired on 2026-08-19 when `EXIT_PROFIT_LADDER` shipped, which is exactly
+    what it was written to do. Isolated on this fixture:
+
+        original (trail 2.0R, no ladder)   EMA9 invalidation   +0.596R
+        trail arming lowered to 1.0R       Hard stop           +0.596R
+        ladder only                        Hard stop           +1.384R
+        both                               Hard stop           +1.384R
+
+    Lowering the trail's arm changes only the *label* -- the ATR trail follows
+    price closely enough to land where the EMA9 touch would have. The ladder is
+    what holds the gain: against the same 2.03R peak this replay reaches, the
+    exit moves from +0.596R to +1.384R and the giveback falls from 1.43R to
+    0.65R. The live row's 1.66R is the peak *live* recorded before its own
+    earlier exit; the replay holds longer and sees more of the move.
+
+    The guard is kept, inverted: it now fails if the giveback grows back, which
+    would mean the ladder stopped engaging on the case it was built for.
     """
 
     trade = next(t for t in live_trades if t["scan_id"] == "2026-07-31_125759")
@@ -233,20 +247,19 @@ def test_nvda_profit_giveback_pathology_still_reproduces(live_trades):
     replay, track = _run_to_exit(trade, collect=True)
 
     assert not replay.is_open
-    assert replay.exit_reason == "EMA9 invalidation (long)"
 
     peak = max(point["mfe_r"] for point in track if point["mfe_r"] is not None)
 
     assert peak >= 1.6, f"peak MFE {peak:.2f}, expected ~1.66R"
-    assert abs(replay.r_multiple - 0.60) < 0.05, (
-        f"exited at {replay.r_multiple}R, expected ~0.60R"
+    assert abs(replay.r_multiple - 1.384) < 0.05, (
+        f"exited at {replay.r_multiple}R, expected ~1.38R with the ladder engaged"
     )
 
     giveback = peak - replay.r_multiple
 
-    assert giveback > 1.0, (
-        f"giveback fell to {giveback:.2f}R -- profit lock may now be engaging; "
-        f"confirm the change is intended and update this guard"
+    assert giveback < 0.8, (
+        f"giveback grew to {giveback:.2f}R -- the ladder has stopped engaging on "
+        f"the trade it was built for; it was 1.43R before the ladder and 0.65R after"
     )
 
 
