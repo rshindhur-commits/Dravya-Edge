@@ -43,7 +43,7 @@ from __future__ import annotations
 import os
 import signal
 import time
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from zoneinfo import ZoneInfo
 
 from app.runtime import position_stream
@@ -56,6 +56,11 @@ DEFAULT_INTERVAL_SECONDS = 20
 # the scan cycle's own end-of-day force close owns everything after the bell.
 FIRST_MINUTE = 9 * 60 + 30
 LAST_MINUTE = 16 * 60
+
+# Matches AUTO_PAPER_EOD_CLOSE. Imported rather than restated would be better,
+# but that module pulls the whole scanner support surface into a process whose
+# point is to stay small; the test below asserts the two agree.
+EOD_CLOSE_TIME = dt_time(15, 55)
 
 _stopping = False
 
@@ -168,6 +173,47 @@ def momentum_interval_seconds():
         return max(20, int(os.getenv("POSITION_MONITOR_MOMENTUM_SECONDS", "")))
     except (TypeError, ValueError):
         return 60
+
+
+def eod_close_enabled():
+    """Independently enforce the end-of-day close on intraday positions. Off by
+    default.
+
+    ## Why a second enforcement of a rule that already exists
+
+    `eod_force_close_reason` already closes any position whose holding profile
+    forces an end-of-day exit, at any scan from 15:55 onward, and
+    `eod_close_enabled` already defaults on. When the scan runs, this does
+    nothing at all.
+
+    The value is entirely in the case where the scan does not run. Two positions
+    in the archive survived their own session close:
+
+        #149 SMCI PUT  INTRADAY  08-05 -> 08-13   8 nights   -23.67R
+        #29  NVDA PUT  MULTIDAY  07-30 -> 07-31   1 night     -4.12R
+
+    Between them they account for **27.79R of the 29.04R** ever lost beyond the
+    -1.00R the stop was supposed to cap -- 96%. Every other overshoot in fifty
+    trades adds up to 2.37R. SMCI was INTRADAY: policy said close it that
+    afternoon, and nothing did, for eight days.
+
+    Two independent processes are now watching, on separate machines with
+    separate failure modes. Neither can close a position twice --
+    `close_paper_trade` returns early once the row is no longer OPEN, which is
+    the same guard the price rules already rely on.
+
+    ## Why it is a guard and not a rule
+
+    It closes only what the holding policy already says must be closed, only
+    after `AUTO_PAPER_EOD_CLOSE`, and it invents no exit of its own. A MULTIDAY
+    position is left exactly where it is -- #29 is in the list above as evidence
+    that overnight carry has its own unwatched hours, not as something this
+    should close.
+    """
+
+    return str(os.getenv("POSITION_MONITOR_EOD_CLOSE_ENABLED", "")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
 
 
 def _in_session(now=None):
@@ -563,6 +609,70 @@ def _log_candidate_prices(held_symbols):
     return written
 
 
+def force_close_intraday(now=None):
+    """Close intraday positions the session close should already have taken.
+
+    Returns the symbols closed, and separately anything still open that this is
+    not allowed to close -- a MULTIDAY carry -- so the log distinguishes "the
+    guard fired" from "something is still out there".
+    """
+
+    from app.state.holding_policy import holding_policy
+    from app.state.paper_trade_manager import close_paper_trade
+
+    now = now or datetime.now(ET)
+
+    if now.time() < EOD_CLOSE_TIME:
+        return [], []
+
+    closed, carried = [], []
+
+    for trade in _open_positions():
+
+        symbol = trade.get("symbol")
+
+        if not symbol:
+            continue
+
+        if not holding_policy(trade.get("holding_profile")).force_eod_exit:
+            carried.append(symbol)
+            continue
+
+        price, source = _price_for(symbol)
+
+        if not price:
+            _log(
+                f"[POSITION MONITOR ERROR] {symbol} is intraday and still open "
+                f"at the close, and no price is available to close it"
+            )
+            continue
+
+        try:
+            close_paper_trade(
+                symbol,
+                close_price=price,
+                exit_reason=(
+                    "Auto paper exit: end-of-day close (position monitor guard)"
+                ),
+                notify_exit=True,
+            )
+            closed.append(symbol)
+            _log(
+                f"[POSITION MONITOR] EOD GUARD closed {symbol} at {price} "
+                f"({source}) -- the scan cycle had not closed it"
+            )
+        except Exception as exc:
+            _log(f"[POSITION MONITOR ERROR] EOD close failed for {symbol}: {exc}")
+
+    if carried:
+        _log(
+            "[POSITION MONITOR] held overnight by holding policy: "
+            + ", ".join(str(s) for s in carried)
+        )
+
+    return closed, carried
+
+
 def _as_price_verdict(verdict):
     """`evaluate_exit`'s shape, in `evaluate_price_exits`' vocabulary.
 
@@ -683,6 +793,16 @@ def main():
                 f"[POSITION MONITOR] session "
                 f"{'OPEN -- watching' if in_session else 'CLOSED -- idle'}"
             )
+
+            # On the way out, not on the way in. Anything intraday still open
+            # here is about to spend the night unwatched by either process,
+            # which is how SMCI booked -23.67R over eight days.
+            if was_in_session and not in_session and eod_close_enabled():
+                try:
+                    force_close_intraday()
+                except Exception as exc:
+                    _log(f"[POSITION MONITOR ERROR] EOD guard failed: {exc}")
+
             was_in_session = in_session
 
         if in_session:
