@@ -24,6 +24,16 @@ def _live(price):
     return patch("app.utils.polygon_client.get_live_price", lambda symbol: price)
 
 
+@pytest.fixture(autouse=True)
+def _pin_to_code_defaults(monkeypatch):
+    """`ENTRY_MAX_FILL_SLIP_R` is staged to 0 in `.env` so the first session
+    records the drift without refusing on it. These cases assert the documented
+    0.35 default, so they pin it rather than reading the rollout stage."""
+
+    monkeypatch.delenv("ENTRY_MAX_FILL_SLIP_R", raising=False)
+    monkeypatch.delenv("ENTRY_FILL_SANITY_PCT", raising=False)
+
+
 class TestSlipSign:
     """Positive always means "the market moved against this trade"."""
 

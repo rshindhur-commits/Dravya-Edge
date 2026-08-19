@@ -42,6 +42,19 @@ def _momentum_exits_on(monkeypatch):
 
     monkeypatch.setenv("EXIT_MOMENTUM_ENABLED", "true")
     monkeypatch.delenv("EXIT_BREAKEVEN_TRIGGER_R", raising=False)
+
+    # The exit features are staged off in `.env` while they roll out one per
+    # session. This file measures what they *do*, so it pins the code defaults
+    # rather than reading whichever stage the rollout has reached.
+    for key in (
+        "EXIT_PROFIT_LADDER",
+        "EXIT_TRAIL_ARM_R",
+        "EXIT_TRAIL_ATR_MULT",
+        "EXIT_STRUCTURE_TRAIL_ENABLED",
+        "EXIT_TARGET_EXTEND_ENABLED",
+        "SOFT_EXIT_HOLD_ENABLED",
+    ):
+        monkeypatch.delenv(key, raising=False)
 from app.backtesting.replay_engine import (
     ReplayConfig,
     ReplayTrade,

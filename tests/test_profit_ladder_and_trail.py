@@ -25,6 +25,31 @@ from app.exit.exit_engine import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _pin_to_code_defaults(monkeypatch):
+    """These cases assert the *documented defaults*, not the deployed values.
+
+    The staged rollout of 2026-08-19 sets these off in `.env` so the bug fixes
+    could ship without four behaviour changes going live at once. Without this
+    pin those cases would assert whatever the rollout happens to have reached --
+    the same defect that turned eight tests red when `.env` was first synced to
+    Render.
+    """
+
+    for key in (
+        "EXIT_PROFIT_LADDER",
+        "EXIT_TRAIL_ARM_R",
+        "EXIT_TRAIL_ATR_MULT",
+        "EXIT_STRUCTURE_TRAIL_ENABLED",
+        "EXIT_STRUCTURE_TRAIL_LOOKBACK",
+        "EXIT_STRUCTURE_TRAIL_BUFFER_PCT",
+        "EXIT_TARGET_EXTEND_ENABLED",
+        "SOFT_EXIT_HOLD_ENABLED",
+        "SOFT_EXIT_HOLD_MIN_TREND_HEALTH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
 def _ladder(value):
     return mock.patch.dict(os.environ, {"EXIT_PROFIT_LADDER": value}, clear=False)
 
