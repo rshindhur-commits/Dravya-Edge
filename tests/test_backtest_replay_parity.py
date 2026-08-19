@@ -50,6 +50,23 @@ def _use_fixture_cache(monkeypatch):
     monkeypatch.setattr(hmd.requests, "get", _no_network)
 
 
+@pytest.fixture(autouse=True)
+def _entry_thresholds_as_the_fixture_recorded_them(monkeypatch):
+    """Hermetic means the environment too, not just the frames.
+
+    The fixture trades were taken on 2026-07-30/31. `TARGET_MIN_RR` was added
+    afterwards as a switch defaulting to 0, and production has since been set to
+    2 -- so once `.env` was synced to Render on 2026-08-19 this file replayed the
+    fixture through a target rule live never applied to it, and parity failed for
+    a reason that has nothing to do with the code under test.
+
+    Deleted rather than pinned to a number: the fixture predates the variable, so
+    the value it was recorded under is "absent".
+    """
+
+    monkeypatch.delenv("TARGET_MIN_RR", raising=False)
+
+
 @pytest.fixture(scope="module")
 def live_trades():
 

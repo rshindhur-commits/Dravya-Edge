@@ -142,7 +142,12 @@ class TestTwoTierFloor:
             assert option_breakeven_arm_pct() == 10.0
 
     def test_unprotected_below_ten(self):
-        assert _giveback_floor(9.9) is None
+        # Pops the variable exactly as `test_default_breakeven_arm` above does.
+        # Production runs this at 3, so reading the ambient value tests the
+        # deployed arm rather than the 10.0 default this case is named for.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EXIT_OPTION_BREAKEVEN_ARM_PCT", None)
+            assert _giveback_floor(9.9) is None
 
     def test_breakeven_floor_between_ten_and_twentyfive(self):
         assert _giveback_floor(10.0) == 0.0

@@ -75,6 +75,12 @@ class BreakevenTriggerTests(unittest.TestCase):
     def test_the_default_still_waits_for_a_full_1r(self):
         """Unset, the knob must reproduce the behaviour that has always run."""
 
+        # "Unset" has to be enforced, not assumed. Production runs this at 0.5,
+        # so before `.env` was synced to Render on 2026-08-19 the case passed
+        # only because the local file happened to omit the variable.
+        self.enterContext(patch.dict(os.environ, {}, clear=False))
+        os.environ.pop("EXIT_BREAKEVEN_TRIGGER_R", None)
+
         for price, expected in ((103.0, False), (105.0, False), (110.0, True)):
 
             result = _evaluate(price)

@@ -29,13 +29,19 @@ import app.backtesting.historical_market_data as hmd
 def _momentum_exits_on(monkeypatch):
     """Every fixture trade was exited with the momentum class active.
 
-    Production has run EXIT_MOMENTUM_ENABLED=false since 2026-08-16, so a
-    local .env mirroring production silently replays these trades under a
-    different exit engine than the one that produced them, and parity fails
-    for a reason that has nothing to do with the code under test.
+    Pinned so that whatever `.env` carries, these trades replay under the exit
+    engine that produced them rather than the one currently deployed. (The
+    deployed value has moved twice: false on 2026-08-16, true again by
+    2026-08-19 -- which is exactly why this is pinned and not assumed.)
+
+    `EXIT_BREAKEVEN_TRIGGER_R` is deleted for the same reason. The fixture trades
+    were exited when the breakeven move was hard-wired to a full 1R; production
+    now runs 0.5, and once `.env` was synced to Render on 2026-08-19 that moved
+    stops on replayed trades live had left alone.
     """
 
     monkeypatch.setenv("EXIT_MOMENTUM_ENABLED", "true")
+    monkeypatch.delenv("EXIT_BREAKEVEN_TRIGGER_R", raising=False)
 from app.backtesting.replay_engine import (
     ReplayConfig,
     ReplayTrade,

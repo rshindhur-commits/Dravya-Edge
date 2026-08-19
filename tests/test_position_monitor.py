@@ -318,7 +318,14 @@ def test_a_handled_message_records_price_and_marks_healthy():
 # Momentum on 1-minute bars
 # --------------------------------------------------------------------------
 
-def test_momentum_is_off_unless_switched_on():
+def test_momentum_is_off_unless_switched_on(monkeypatch):
+
+    # Pinned rather than read from the ambient environment. `settings.py` calls
+    # load_dotenv() at import, so before `.env` was synced to Render on
+    # 2026-08-19 this passed only because the local file happened to omit the
+    # variable -- while production had it true. A test for a *code default* must
+    # not assert whatever the operator last deployed.
+    monkeypatch.delenv("POSITION_MONITOR_MOMENTUM_ENABLED", raising=False)
 
     assert pm.momentum_enabled() is False
 
@@ -477,7 +484,11 @@ def test_a_stale_bar_may_not_decide_a_stop(monkeypatch):
 # positions nothing closed.
 # --------------------------------------------------------------------------
 
-def test_the_eod_guard_is_off_unless_switched_on():
+def test_the_eod_guard_is_off_unless_switched_on(monkeypatch):
+
+    # Pinned for the same reason as the momentum switch above: production sets
+    # this true on the position worker.
+    monkeypatch.delenv("POSITION_MONITOR_EOD_CLOSE_ENABLED", raising=False)
 
     assert pm.eod_close_enabled() is False
 
