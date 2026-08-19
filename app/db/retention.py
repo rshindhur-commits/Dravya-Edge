@@ -125,6 +125,17 @@ RETENTION_RULES: tuple[RetentionRule, ...] = (
         "Candidate outcome scoring; the resolution half of candidate_evidence "
         "and useless kept for a shorter window than the evidence it scores.",
     ),
+    RetentionRule(
+        "candidate_price_log", "trading_day", "date", 21,
+        "One row per forming candidate per 20-second poll -- by construction the "
+        "highest-volume writer in the database, ahead of activity_trace_event. "
+        "Its own migration says retention has to reach it or it outgrows every "
+        "other table within a quarter, and it was created without a rule here. "
+        "21 days matches candidate_snapshot, which is the table it is read "
+        "beside, and is about 15 trading days: enough to answer what price does "
+        "inside a scan gap, which is a question that gets answered once rather "
+        "than re-asked forever.",
+    ),
     RetentionRule("auto_paper_decision", "trading_day", "date", 21, "Auto-paper decision log."),
     RetentionRule("scanner_runs", "started_at", "timestamp", 21, "Scan run index."),
 )
