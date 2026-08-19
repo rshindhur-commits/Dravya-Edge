@@ -1,0 +1,71 @@
+{
+  "day": "2026-08-18",
+  "generated_at": "2026-08-18T19:35:07",
+  "filter": {
+    "min_move_pct": 4.0,
+    "price": [
+      15.0,
+      600.0
+    ],
+    "min_dollar_volume_m": 200.0
+  },
+  "movers": [
+    {
+      "symbol": "PFSA",
+      "change_pct": 294.03973509933775,
+      "price": 27.48,
+      "dollar_volume_m": 1471.330038
+    },
+    {
+      "symbol": "IPST",
+      "change_pct": 89.44519621109607,
+      "price": 15.76,
+      "dollar_volume_m": 509.33686504
+    },
+    {
+      "symbol": "AMLX",
+      "change_pct": 63.41577228184789,
+      "price": 35.11,
+      "dollar_volume_m": 841.95784781
+    },
+    {
+      "symbol": "WETO",
+      "change_pct": 35.420902806018695,
+      "price": 33.0,
+      "dollar_volume_m": 307.579602
+    },
+    {
+      "symbol": "KORU",
+      "change_pct": -24.214103653355988,
+      "price": 17.84,
+      "dollar_volume_m": 864.4266744
+    }
+  ],
+  "results": {
+    "PFSA": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "IPST": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "AMLX": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "WETO": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "KORU": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    }
+  }
+}
