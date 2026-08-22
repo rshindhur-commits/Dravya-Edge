@@ -105,13 +105,63 @@ class SpreadToleratedVerdictTests(unittest.TestCase):
 
     def test_ignore_spread_does_not_skip_the_quality_floor(self):
 
+        # Short DTE (-25, below the configured minimum) and high theta (-15)
+        # put it at 60 with no help from the spread charge. Open interest and
+        # volume stay healthy, because both are checked *before* quality and
+        # would otherwise decide this test.
         verdict = _verdict(
-            _contract(bid=1.00, ask=1.40, option_quality_score=1),
+            _contract(bid=1.00, ask=1.40, dte=3,
+                      expiration_bucket="SHORT_DTE_2_6", theta=0.35),
             ignore_spread=True
         )
 
         self.assertEqual(verdict["code"], "LOW_OPTION_QUALITY")
         self.assertNotIn("spread_tolerated", verdict)
+
+    def test_the_spread_is_not_charged_twice(self):
+        """The gate that would have made this feature do nothing.
+
+        `score_option_quality` docks 35 points for a spread over the same ceiling
+        `ignore_spread` just decided to tolerate, and the floor is 65 -- so a
+        wide contract lands exactly on the floor and any second deduction puts it
+        under. Measured over the 21 days to 2026-08-22: a wide spread and a failed
+        quality score co-occurred 1,939 times; a wide spread with quality passing,
+        3 times. Without this the fallback rescues almost nothing and blames
+        quality for it.
+        """
+
+        wide = _contract(
+            bid=1.00,
+            ask=1.40,
+            spread_pct=33.3,
+            dte=21,
+            theta=0.05,
+            # What the enricher stored, computed with the spread charge included.
+            option_quality_score=55,
+            option_quality_reasons="wide spread; low volume",
+        )
+
+        # Strict, the spread short-circuits before quality is ever consulted --
+        # which is why the double charge stayed invisible.
+        self.assertEqual(_verdict(dict(wide))["code"], "WIDE_SPREAD")
+
+        # Tolerated, the stored 55 must not be what decides it.
+        tolerated = _verdict(dict(wide), ignore_spread=True)
+
+        self.assertTrue(tolerated["spread_tolerated"])
+        self.assertGreaterEqual(tolerated["quality_score"], 65)
+
+    def test_a_contract_that_fails_quality_for_other_reasons_is_still_refused(self):
+        """Only the spread charge is credited back, not the whole gate."""
+
+        tolerated = _verdict(
+            _contract(bid=1.00, ask=1.40, dte=3,
+                      expiration_bucket="SHORT_DTE_2_6", theta=0.35),
+            ignore_spread=True
+        )
+
+        self.assertEqual(tolerated["code"], "LOW_OPTION_QUALITY")
+        self.assertNotIn("spread_tolerated", tolerated)
 
     def test_a_liquid_contract_is_untouched_by_the_flag(self):
 

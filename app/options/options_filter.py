@@ -1,6 +1,6 @@
 import re
 
-from app.options.option_metrics import calculate_spread_pct
+from app.options.option_metrics import calculate_spread_pct, score_option_quality
 from app.config.settings import settings
 from app.options.affordability_config import get_affordability_config
 from app.options.option_affordability import add_affordability_metrics
@@ -445,6 +445,35 @@ def _evaluate_option_liquidity(option_data, ignore_spread=False):
 
                 "quality_score": option_quality_score
             }
+
+        if spread_exceeded:
+
+            # The spread is charged twice, and the second charge is the one that
+            # actually refuses.
+            #
+            # `score_option_quality` docks 35 points for a spread over the same
+            # ceiling this function just decided to tolerate. The floor is 65, so
+            # a perfect contract lands exactly on it and any second deduction --
+            # unknown quote time is 10, short-DTE theta is 15 -- puts it under.
+            # Over the 21 days to 2026-08-22 a wide spread and a failed quality
+            # score co-occurred 1,939 times; a wide spread with quality passing
+            # happened 3 times. Tolerating the ceiling without this rescues
+            # almost nothing, and the reason recorded would name quality.
+            #
+            # Re-scored rather than credited back a fixed 35, so the borderline
+            # band (-15) and any later change to the penalty stay correct.
+            option_quality_score = score_option_quality(
+                option_data,
+                min_volume=settings.option_min_volume,
+                min_open_interest=settings.option_min_open_interest,
+                max_spread_pct=float("inf"),
+                allow_0dte=settings.option_allow_0dte,
+                allow_1dte=settings.option_allow_1dte,
+                min_dte=settings.option_min_dte,
+                preferred_min_dte=settings.option_preferred_min_dte,
+                preferred_max_dte=settings.option_preferred_max_dte,
+                max_dte=settings.option_max_dte,
+            )["option_quality_score"]
 
         if option_quality_score < settings.option_min_quality_score:
 
