@@ -164,6 +164,29 @@ def _traded_candidates(evidence):
     return evidence.iloc[0:0]
 
 
+def _counts(frame, column):
+    """Value counts for `column`, honouring a `row_count` weight column.
+
+    `_waterfalls_for` now asks Postgres to group the day's waterfall, so each
+    row it returns stands for a whole (stage, rule_name, blocking) group with
+    the group size in `row_count`. A plain `value_counts()` would count the 42
+    groups instead of the 24,000 rows behind them. The CSV fallback carries no
+    `row_count` and is still counted row by row.
+    """
+
+    if frame is None or frame.empty or column not in frame.columns:
+        return pd.Series(dtype="int64")
+
+    if "row_count" not in frame.columns:
+        return frame[column].value_counts()
+
+    weights = pd.to_numeric(frame["row_count"], errors="coerce").fillna(0)
+
+    return (
+        weights.groupby(frame[column]).sum().astype(int).sort_values(ascending=False)
+    )
+
+
 def _blocking_rule_counts(waterfalls):
     """rule_name -> how many candidates that rule stopped.
 
@@ -189,7 +212,7 @@ def _blocking_rule_counts(waterfalls):
     if blocking.empty:
         return {}
 
-    counts = blocking["rule_name"].astype(str).value_counts()
+    counts = _counts(blocking, "rule_name")
 
     return {str(rule): int(count) for rule, count in counts.items()}
 
@@ -207,7 +230,7 @@ def build_daily_learning_summary(trading_day, v2_learning, comparisons, exits, w
     comparisons = comparisons if comparisons is not None else pd.DataFrame()
     exits = exits if exits is not None else pd.DataFrame()
     waterfalls = waterfalls if waterfalls is not None else pd.DataFrame()
-    stages = waterfalls.get("stage", pd.Series(dtype=object)).value_counts()
+    stages = _counts(waterfalls, "stage")
     confidence = _number_mean(waterfalls, "v2_exit_confidence_score")
     # `Trend Health Score` is the 0-12 analytics scorer, not the 0-100 live one.
     # This compared it against 80, so `premature` has reported zero since the
@@ -258,6 +281,15 @@ def _waterfalls_for(trading_day, fallback=None):
     rule that actually stopped it, which is the signal `rule_performance` exists
     to record.
 
+    Postgres does the counting. Only two numbers are read off this frame -- rows
+    per stage, and blocking rows per rule -- but it used to fetch every column of
+    every row to derive them, and it runs once per scan against a day that keeps
+    growing. That made it the largest read the app issues: 24,775 rows and 650 KB
+    on the last scan of a normal day, ~95 times over. Grouping in the query
+    returns 42 rows and leaves the plan untouched -- the index range scan on
+    `scan_id` is doing the same work either way, the rows just stop crossing the
+    wire. `symbol` and `passed` are no longer selected because nothing read them.
+
     Returns an empty frame rather than raising: a missing waterfall must not
     take the rest of the daily summary down with it.
     """
@@ -270,8 +302,9 @@ def _waterfalls_for(trading_day, fallback=None):
         with get_engine().connect() as connection:
             rows = connection.execute(
                 text(
-                    "select symbol, stage, rule_name, passed, blocking "
-                    "from decision_waterfall where scan_id like :prefix"
+                    "select stage, rule_name, blocking, count(*) as row_count "
+                    "from decision_waterfall where scan_id like :prefix "
+                    "group by stage, rule_name, blocking"
                 ),
                 {"prefix": f"{trading_day}%"},
             ).mappings().all()
