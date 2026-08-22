@@ -13,6 +13,7 @@ from app.gates import (
     evaluate_entry_gate,
     has_active_symbol_trade,
     is_symbol_in_cooldown,
+    symbol_daily_cap_is_directional,
     symbol_trade_count_today,
 )
 from app.gates.setup_quality import MIN_SETUP_BASE
@@ -302,6 +303,35 @@ def _allow_review_tv_chart_auto_paper():
     return _env_bool("ALLOW_REVIEW_TV_CHART_AUTO_PAPER", False)
 
 
+def _is_spread_tolerated_review(row):
+    """Whether a REVIEW_TV_CHART row is the kind that may be booked.
+
+    Three different things produce REVIEW_TV_CHART and only one of them is a
+    tradeable signal:
+
+      1. `realtime_confirmation_needed` -- Polygon data is delayed. There is no
+         confirmed live price behind it.
+      2. `_align_action_status_with_entry_gate` -- the scanner gate refused the
+         row (RR, setup, quality) and downgraded it. `Realtime Ready` is set
+         False here, and the review path is exactly the branch that stops
+         checking `Realtime Ready`.
+      3. A tolerated spread -- a fully qualified signal whose only failing was
+         that no contract quoted tightly enough. This one carries a real
+         contract with a live bid and ask.
+
+    `ALLOW_REVIEW_TV_CHART_AUTO_PAPER` was a single switch over all three. Turning
+    it on to book spread-tolerated signals would also have booked candidates on
+    delayed data and candidates the scanner gate had just refused -- including the
+    1.8-2.0 RR band, which the paper gate's own floor still admits and which
+    measures badly. That is not the experiment being run.
+
+    Keys on the column rather than on the reason text: `Option Spread Tolerated`
+    is set at exactly one place in app/main.py, beside the contract it describes.
+    """
+
+    return _boolish(row.get("Option Spread Tolerated"))
+
+
 def _ignore_affordability_for_paper_validation():
 
     return _env_bool("PAPER_IGNORE_AFFORDABILITY", True)
@@ -473,8 +503,13 @@ def _paper_candidate_filter_reason(row):
     status = str(row.get("Action Status") or "").upper()
     if status not in {"ENTER", "ENTER_PAPER", "REVIEW_TV_CHART"}:
         return "NOT_ACTIONABLE_STATUS"
-    if status == "REVIEW_TV_CHART" and not _allow_review_tv_chart_auto_paper():
-        return "REVIEW_VALIDATION_DISABLED"
+    if status == "REVIEW_TV_CHART":
+        if not _allow_review_tv_chart_auto_paper():
+            return "REVIEW_VALIDATION_DISABLED"
+        # Delayed data and gate-downgraded rows also arrive as REVIEW_TV_CHART.
+        # See _is_spread_tolerated_review.
+        if not _is_spread_tolerated_review(row):
+            return "REVIEW_NOT_SPREAD_TOLERATED"
     if not _boolish(row.get("Setup Valid")):
         return "SETUP_INVALID"
     if row.get("Candidate Direction") not in {"CALL", "PUT"}:
@@ -495,7 +530,11 @@ def _paper_candidate_filter_reason(row):
         return "NO_ENTRY_SETUP_DETECTED"
     if not _ignore_affordability_for_paper_validation() and not _boolish(row.get("Affordable")):
         return "PAPER_AFFORDABILITY_REJECTED"
-    review_ready = status == "REVIEW_TV_CHART" and _allow_review_tv_chart_auto_paper()
+    review_ready = (
+        status == "REVIEW_TV_CHART"
+        and _allow_review_tv_chart_auto_paper()
+        and _is_spread_tolerated_review(row)
+    )
     if not review_ready and not _boolish(row.get("Realtime Ready")):
         return row.get("Realtime Block Reason") or "REALTIME_NOT_READY"
     return None
@@ -605,7 +644,7 @@ def _gate_counterfactuals(row, controls):
                     min_rr=min_rr,
                     min_setup_percent=min_setup,
                     min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY,
-                    max_spread_pct=DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT,
+                    max_spread_pct=auto_paper_max_spread_pct(),
                 ),
                 mode="paper",
             )
@@ -888,11 +927,19 @@ def _closed_paper_trades(paper_trades):
     return [trade for trade in (paper_trades or {}).values() if trade.get("status") == "CLOSED"]
 
 
-def _auto_paper_trade_count_today(paper_trades, profile=None):
+def _auto_paper_trade_count_today(paper_trades, profile=None, review_validation=None):
     """Auto-paper entries opened today, optionally within one holding profile.
 
-    `profile=None` keeps the original whole-book count, which is what the shared
-    MAX_DAILY_ENTRIES cap still uses.
+    `profile=None` keeps the original whole-book count.
+
+    `review_validation` splits the count by entry source. Both kinds of entry
+    write notes beginning "Auto paper", so before this they shared one budget --
+    which would have let spread-tolerated validation entries consume
+    MAX_DAILY_ENTRIES and displace the very trades they are supposed to be
+    measured against. The comparison this exists to make -- 3% ceiling against no
+    ceiling, over 30 days -- needs the baseline book to be the same size it has
+    always been. See `include_in_strategy_stats`, which keeps them out of the
+    statistics for the same reason.
     """
 
     today = _current_et().date()
@@ -910,8 +957,51 @@ def _auto_paper_trade_count_today(paper_trades, profile=None):
             continue
         if profile and str(trade.get("holding_profile") or "INTRADAY").upper() != profile:
             continue
+        if review_validation is not None:
+            is_review = str(
+                trade.get("entry_source") or ""
+            ).upper() == "AUTO_PAPER_REVIEW_VALIDATION"
+            if is_review != bool(review_validation):
+                continue
         count += 1
     return count
+
+
+def auto_paper_max_spread_pct():
+    """The paper gate's own spread ceiling, which is not the scanner's.
+
+    Hardcoded at 6.0 and unreachable from configuration, which makes it the
+    silent second half of the spread question. `OPTION_MAX_SPREAD_PCT` decides
+    what the scanner will buy; this decides what the paper book will record, and
+    a contract between the two is alerted and never booked -- so no exit is ever
+    sent for it.
+
+    That gap is the whole feature when validation entries are on. Over 21 days
+    1,942 spread rejections were recorded and 1,752 of them quoted above 6%, so
+    at this value nine in ten spread-tolerated alerts would go out with nothing
+    watching them. Raise it with MAX_DAILY_REVIEW_VALIDATION_ENTRIES, not before:
+    an entry price taken off a very wide quote is close to meaningless, and the
+    number it books is what the 30-day comparison will read.
+
+    Default unchanged, so nothing moves until it is set.
+    """
+
+    from app.config.settings import get_float_env
+
+    return get_float_env(
+        "AUTO_PAPER_MAX_SPREAD_PCT",
+        DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT,
+    )
+
+
+def max_daily_review_validation_entries():
+    """Spread-tolerated validation entries allowed per day.
+
+    Its own budget rather than a share of MAX_DAILY_ENTRIES, so turning the
+    experiment on cannot shrink the book it is being compared against.
+    """
+
+    return env_int("MAX_DAILY_REVIEW_VALIDATION_ENTRIES", 5)
 
 
 def _legacy_spread_to_risk_multiple():
@@ -1007,7 +1097,11 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         return False, session_block
     action_status = str(row.get("Action Status")).strip().upper()
     realtime_ready = str(row.get("Realtime Ready")).strip().lower() in ["true", "1", "yes"]
-    review_validation_candidate = action_status == "REVIEW_TV_CHART" and _allow_review_tv_chart_auto_paper()
+    review_validation_candidate = (
+        action_status == "REVIEW_TV_CHART"
+        and _allow_review_tv_chart_auto_paper()
+        and _is_spread_tolerated_review(row)
+    )
     top_candidate = row.get("Top Candidate")
     candidate_rank = _safe_float(row.get("Candidate Rank"), None)
     rank_eligible = (
@@ -1026,7 +1120,7 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     if _safe_float(row.get("Setup %"), None) is None:
         row = row.copy()
         row["Setup %"] = _compute_setup_percent(row)
-    gate_allowed, gate_reason = evaluate_entry_gate(_paper_gate_row(row), EntryGateConfig(min_rr=controls["min_rr"], min_setup_percent=controls["min_setup"], min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY, max_spread_pct=DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT), mode="paper")
+    gate_allowed, gate_reason = evaluate_entry_gate(_paper_gate_row(row), EntryGateConfig(min_rr=controls["min_rr"], min_setup_percent=controls["min_setup"], min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY, max_spread_pct=auto_paper_max_spread_pct()), mode="paper")
     if not gate_allowed:
         return False, gate_reason
     if not realtime_ready and not review_validation_candidate:
@@ -1049,9 +1143,23 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     if has_active_symbol_trade(paper_trades, symbol):
         return False, "ALREADY_HOLDING_NO_ADDITIONAL_ENTRY"
     cooldown_minutes = env_int("AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES", 60)
-    if is_symbol_in_cooldown(symbol, _closed_paper_trades(paper_trades), now_et, cooldown_minutes):
+    # `direction` so a reversal is not blocked by the trade its own reversal
+    # invalidated. See cooldown_is_directional().
+    if is_symbol_in_cooldown(
+        symbol, _closed_paper_trades(paper_trades), now_et, cooldown_minutes,
+        direction=direction,
+    ):
         return False, "SYMBOL_COOLDOWN_ACTIVE"
-    if symbol_trade_count_today(paper_trades, symbol, now_et) >= env_int("MAX_TRADES_PER_SYMBOL_PER_DAY", 1):
+    # Directional for the same reason the cooldown above is. Without it the
+    # cooldown fix is inert: it lets the reversal past, and this line -- one
+    # default of 1 later -- refuses it anyway because the symbol already traded.
+    symbol_daily_count = symbol_trade_count_today(
+        paper_trades,
+        symbol,
+        now_et,
+        direction=direction if symbol_daily_cap_is_directional() else None,
+    )
+    if symbol_daily_count >= env_int("MAX_TRADES_PER_SYMBOL_PER_DAY", 1):
         return False, "MAX_TRADES_PER_SYMBOL_PER_DAY_REACHED"
     open_trades = [trade for trade in paper_trades.values() if trade.get("status") == "OPEN"]
 
@@ -1080,7 +1188,22 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     if _active_profile_count(open_trades, profile) >= max_active_for_profile(profile):
         return False, f"MAX_ACTIVE_{profile}_TRADES_REACHED"
 
-    if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
+    # Two budgets, not one. A validation entry is a spread-tolerated contract
+    # opened only so an exit can be sent and the 30-day comparison has something
+    # to measure; it is excluded from the strategy statistics, and it must be
+    # excluded from the cap for the same reason -- otherwise switching the
+    # experiment on silently halves the book it is the control for.
+    if review_validation_candidate:
+        if (
+            _auto_paper_trade_count_today(paper_trades, review_validation=True)
+            >= max_daily_review_validation_entries()
+        ):
+            return False, "DAILY_REVIEW_VALIDATION_LIMIT_REACHED"
+
+    elif (
+        _auto_paper_trade_count_today(paper_trades, review_validation=False)
+        >= controls["max_daily"]
+    ):
         return False, "DAILY_AUTO_PAPER_LIMIT_REACHED"
 
     if (

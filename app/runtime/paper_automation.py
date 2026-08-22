@@ -93,7 +93,6 @@ def run_auto_paper_entries(df, controls):
         _allow_review_tv_chart_auto_paper,
         _annotate_paper_affordability_override,
         _auto_paper_entry_reason,
-        _auto_paper_trade_count_today,
         auto_paper_session_block_reason,
         should_record_auto_paper_session_skip,
         _decision_log_rows,
@@ -308,6 +307,18 @@ def run_auto_paper_entries(df, controls):
 
     opened = []
 
+    # Every candidate gets its own verdict, including after the daily cap fills.
+    #
+    # This loop used to stamp DAILY_AUTO_PAPER_LIMIT_REACHED on every remaining
+    # row and break the moment the count was reached. Those rows were never
+    # evaluated, so the label was a guess -- and the ledger then reported 133
+    # daily-cap blocks over 13 sessions that looked like fully qualified trades
+    # refused on count alone. They were not; most would also have failed rank,
+    # RR or the cooldown, and there was no way to tell which from the record.
+    # Reading that number is what a decision to raise the cap would rest on.
+    #
+    # It is also now wrong rather than merely imprecise: validation entries hold
+    # a separate budget, so a filled book no longer means nothing else can open.
     for _, row in candidates.iterrows():
 
         allowed, reason = _auto_paper_entry_reason(row, controls, paper_trades)
@@ -418,13 +429,6 @@ def run_auto_paper_entries(df, controls):
             opened_log_row,
             controls=controls
         )
-
-        if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
-
-            remaining = candidates.loc[~candidates.index.isin(accounted)]
-            for _, remaining_row in remaining.iterrows():
-                record_terminal(remaining_row, "BLOCKED", "DAILY_AUTO_PAPER_LIMIT_REACHED")
-            break
 
     report_accounting()
     return opened

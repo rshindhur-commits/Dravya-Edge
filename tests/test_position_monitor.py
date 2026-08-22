@@ -866,3 +866,28 @@ def test_check_once_reads_the_book_before_evaluating(monkeypatch, book):
     assert "sync_open_positions()" in source
     assert source.index("sync_open_positions()") < source.index("_open_positions()")
 
+
+def test_the_idle_branch_still_reports_alive():
+    """Outside the session the row must not go stale for the whole weekend.
+
+    The heartbeat only published inside `if in_session:`, so a monitor that
+    started on a Saturday wrote one row and nothing for 45 hours. "Alive and
+    idle" and "died overnight" then look identical, which is the ambiguity the
+    heartbeat exists to remove.
+    """
+
+    import inspect
+
+    source = inspect.getsource(pm.main)
+
+    assert "idle_heartbeat_every" in source
+    # Hourly, not per pass: each row wakes Neon for its full 300s suspend timer.
+    assert "3600 // wait" in source
+    assert "SLEEPING_CLOSED" in source
+
+
+def test_the_idle_heartbeat_is_hourly_at_the_default_interval():
+    """180 passes at 20s is one row an hour, not 180."""
+
+    assert max(1, 3600 // pm.DEFAULT_INTERVAL_SECONDS) == 180
+

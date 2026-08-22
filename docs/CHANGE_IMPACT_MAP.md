@@ -40,19 +40,29 @@ To ask what a rule really costs, re-test the recorded contracts jointly. Never
 read `CHAIN_BINDING_CODE` counts as cause.
 
 **0.3 — The auto-paper path does not use the scanner's gate config.**
-`app/runtime/paper_automation_support.py:984` builds its own `EntryGateConfig`
-with two **hardcoded module constants**:
+`app/runtime/paper_automation_support.py` builds its own `EntryGateConfig` from
+its own bars, which are **not** the scanner's:
 
 ```
-DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0   # line 65
-DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT     = 6.0    # line 66
+DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0   # hardcoded, no env
+DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT     = 6.0    # default for AUTO_PAPER_MAX_SPREAD_PCT
 ```
 
-Neither reads an environment variable. `OPTION_MAX_SPREAD_PCT` and
-`OPTION_MIN_QUALITY_SCORE` reach live trades **only through contract selection**
-(`options_filter`, which uses `settings.*`), not through this gate. Tightening
-them below 6.0/65 works — but via a different code path than the one the failure
-code names.
+`OPTION_MAX_SPREAD_PCT` and `OPTION_MIN_QUALITY_SCORE` reach live trades **only
+through contract selection** (`options_filter`, which uses `settings.*`), not
+through this gate. Tightening them below 6.0/65 works — but via a different code
+path than the one the failure code names.
+
+Since 2026-08-22 the spread half is reachable, under a **different variable**:
+`AUTO_PAPER_MAX_SPREAD_PCT` (`auto_paper_max_spread_pct()`), defaulting to the
+same 6.0 so nothing moved. It exists because it is the silent second half of the
+spread question — the scanner ceiling decides what may be *bought*, this decides
+what the paper book will *record*, and a contract between the two is alerted and
+never booked, so no exit is ever sent for it. Over the 21 days to 2026-08-22,
+1,942 spread rejections were logged and **1,752 of them quoted above 6%**. Set it
+alongside `ALLOW_REVIEW_TV_CHART_AUTO_PAPER`, never on its own.
+
+The quality bar is still hardcoded.
 
 **0.4 — Two RR bars exist and only the higher one binds.**
 `SCANNER_GATE_MIN_RR` defaults to **2.0** (`entry_gate.py:56`); `AUTO_PAPER_MIN_RR`
@@ -506,7 +516,8 @@ which is why `maybe_freeze_regression_baselines` runs nightly.
 | `AUTO_PAPER_MIN_RR` | nothing, while below the scanner floor (trap 0.4) | — | — |
 | `ATR_DISTANCE_SCALE` | stop **and** target together; needs `MAX_STOP_DISTANCE_SCALE` too | all stop-distance and RR statistics | 4x buys 1.53x; the strong version lost to theta 7:1 |
 | `MIN_STOP_DISTANCE_PCT` | the price floor, and RR through it | trades whose stop was invented | floor binds on 178/310; per trade indistinguishable |
-| `TARGET_MIN_RR` | targets only, capped by `TARGET_MAX_REWARD_ATR` | RR distributions; risks making the RR gate a tautology | committed off, unmeasured |
+| `MIN_STOP_DISTANCE_ATR_CAP` | bounds the price floor above in ATR, nothing else | every RR on a low-ATR%% underlying — SPY/QQQ go from unreachable to reachable | 2.0 from 2026-08-22. The 0.50%% floor is 4.08 ATR on SPY and 2.31 on QQQ against 1.43 on NFLX, the widest the app trades; SPY and QQQ passed the Risk stage **0 of 817 times** in ten days. Verified to leave every currently-traded symbol's stop unchanged to the decimal |
+| `TARGET_MIN_RR` | targets only, capped by `TARGET_MAX_REWARD_ATR` | RR distributions; **makes the RR gate a tautology** | **ON at 2 in production, not off** — the A/B it was committed to await has never run. 7 of 33 trades 08-10..08-21 carry a target set to exactly 2x risk. PLTR 08-21 is one: reward 1.74 = 2 x 0.87 exactly, putting the target 0.68 **below a session low set 13 minutes earlier**. RR read 2.00 because the target had just been moved to make it. Setting it to 0 refuses that trade with no code change, because the extension only fires when structural reward is already under the floor |
 | `SETUP_GATE_ENABLED` | stage 5 refusal; ranking is unaffected | — | score is inverted; leave off |
 | `ENTRY_TIMING_GATE_ENABLED` | stage 5 refusal | — | score is inverted and survives controls, but 2-right-2-wrong on the one live day checked |
 | `EXIT_MOMENTUM_ENABLED` | all four momentum rules at once | every exit-mix comparison | removing them costs 18.6R/23.8R |
@@ -516,7 +527,7 @@ which is why `maybe_freeze_regression_baselines` runs nightly.
 | `SCAN_PREMARKET_FROM` | **whether 04:00-09:00 is scanned at all**, so premarket rows stop existing | premarket funnel counts and any per-day scan-count comparison across the switch | 09:00 from 2026-08-22. 155 premarket scans over 08-10..21 passed 0 of 3,859 Decision rows; costs 1.20 CU-h/day, 97% autosuspend timer. Cannot touch entries — they open at 09:45 |
 | `SCAN_IDLE_DB_INTERVAL_SECONDS` | how often an **idle** pass talks to Postgres; **not** scan cadence | nothing measured — idle passes scan nothing | 3600 from 2026-08-21; batch jobs keep their own once-per-date gates |
 | `POSITION_MONITOR_ENABLED` / `POSITION_MONITOR_DB_SYNC_SECONDS` | **whether the monitor sees anything at all.** It read the book from a local state file it does not have; fixed 2026-08-22 to read Postgres | every claim that the monitor was or was not helping before 08-22 — it had closed 0 of 65 trades | the EOD guard is the value (SMCI: INTRADAY held 9 days), not faster exits, which remain unmeasured |
-| `POSITION_MONITOR_MOMENTUM_ENABLED` | **when** EMA/VWAP/MACD/failed-breakout/time are asked, never what they may answer; adds a Polygon 1m call per held symbol per minute | exit-mix and time-to-exit comparisons across the switch | committed off, unmeasured |
+| `POSITION_MONITOR_MOMENTUM_ENABLED` | **when** EMA/VWAP/MACD/failed-breakout/time are asked, never what they may answer; adds a Polygon 1m call per held symbol per minute | exit-mix and time-to-exit comparisons across the switch | **ON in Render on both services, but inert until 2026-08-22**. It is read inside the per-position loop, and the monitor was watching an empty book, so it has never fired. Setting it on the scan worker does nothing — only `position_monitor.py` reads it |
 
 `POSITION_MONITOR_MOMENTUM_ENABLED` deserves the same warning as any exit lever.
 The scan's 15-minute frame is resampled from its own **5-minute** pull, so its

@@ -370,14 +370,46 @@ def active_symbol_trade(state: dict, symbol: str):
     return None, None
 
 
-def symbol_trade_count_today(state: dict, symbol: str, now=None) -> int:
+def symbol_daily_cap_is_directional():
+    """Whether MAX_TRADES_PER_SYMBOL_PER_DAY counts each direction separately.
+
+    The pair to `cooldown_is_directional()`, and shipped without it, which made
+    that fix inert. The cooldown was taught to let a reversal through on
+    2026-08-22; six lines later `symbol_trade_count_today` counted every trade on
+    the symbol regardless of direction, and with MAX_TRADES_PER_SYMBOL_PER_DAY at
+    its default of 1 the reversal was refused anyway. The PLTR put at 10:01 on
+    2026-08-21 still blocks the call that ran +$8.83 -- one gate now says yes and
+    the next says no, for the same reason the first one was changed.
+
+    Same default, and the same argument: a put and a call on one symbol are two
+    trades, not one taken twice. What the cap is for -- not churning the same
+    setup all day -- is untouched, because a second entry in the *same* direction
+    is still refused.
+    """
+
+    from app.config.settings import get_bool_env
+
+    return get_bool_env("AUTO_PAPER_SYMBOL_DAILY_CAP_DIRECTIONAL", True)
+
+
+def symbol_trade_count_today(state: dict, symbol: str, now=None, direction=None) -> int:
+    """Trades opened on `symbol` today, optionally only in one direction.
+
+    `direction=None` keeps the whole-symbol count. Callers pass a direction only
+    when `symbol_daily_cap_is_directional()` is on.
+    """
 
     now = now or datetime.now()
+    direction = str(direction).upper() if direction else None
     count = 0
 
     for trade in (state or {}).values():
 
         if trade.get("symbol") != symbol:
+
+            continue
+
+        if direction and str(trade.get("direction") or "").upper() != direction:
 
             continue
 
@@ -390,18 +422,56 @@ def symbol_trade_count_today(state: dict, symbol: str, now=None) -> int:
     return count
 
 
+def cooldown_is_directional():
+    """Whether the cooldown only blocks the direction that just lost.
+
+    PLTR, 2026-08-21. A put opened at 10:01 at 173.61 -- twelve minutes after the
+    session low of 172.55 -- and closed at 10:05 for -0.55R. The cooldown then
+    locked the symbol until 10:50, and PLTR ran to 182.44 by 11:58: +$8.83, the
+    largest move on the board that day, with the app watching.
+
+    The put was wrong because the stock reversed. A cooldown that also blocks the
+    reversal makes the app punish itself for being wrong by refusing to be right,
+    and it does so for exactly the window in which the opposite trade is best.
+
+    Same direction still cools off, which is what the rule is for -- re-entering
+    the idea that just failed, at a worse price, is the behaviour worth stopping.
+
+    Set AUTO_PAPER_COOLDOWN_DIRECTIONAL=false to restore the blanket block.
+    """
+
+    from app.config.settings import get_bool_env
+
+    return get_bool_env("AUTO_PAPER_COOLDOWN_DIRECTIONAL", True)
+
+
 def is_symbol_in_cooldown(
     symbol,
     closed_trades,
     now,
-    cooldown_minutes
+    cooldown_minutes,
+    direction=None,
 ):
+    """Whether `symbol` closed a trade too recently to re-enter.
+
+    `direction` is the direction being considered now. Passing it lets a reversal
+    through while still cooling the losing idea; omitting it keeps the old
+    symbol-wide behaviour, so callers that do not care are unaffected.
+    """
 
     last_close_dt = None
+
+    directional = direction is not None and cooldown_is_directional()
 
     for trade in (closed_trades or []):
 
         if trade.get("symbol") != symbol:
+
+            continue
+
+        # Only the direction that just lost cools off. A put closing does not
+        # bar the call that its own reversal just created.
+        if directional and str(trade.get("direction") or "").upper() != str(direction).upper():
 
             continue
 

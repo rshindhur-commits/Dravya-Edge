@@ -51,6 +51,8 @@ def config_snapshot():
         FROM scanner_runs WHERE started_at >= now() - interval '30 days';
     """
 
+    import os
+
     from app.config.settings import get_bool_env, get_float_env, settings
     from app.gates.entry_gate import scanner_entry_gate_config
     from app.risk.option_leverage import enforce_option_leverage, min_option_leverage
@@ -96,6 +98,78 @@ def config_snapshot():
         "auto_paper_min_rr": _safe(lambda: get_float_env("AUTO_PAPER_MIN_RR", 1.8)),
         "auto_paper_min_setup": _safe(lambda: get_float_env("AUTO_PAPER_MIN_SETUP", 62.0)),
         "max_daily_entries": _safe(lambda: get_float_env("MAX_DAILY_ENTRIES", 5.0)),
+        # The three levers that decide whether a second signal on a symbol, or a
+        # signal on a contract nobody quoted tightly, ever reaches the book. All
+        # added 2026-08-22; without them an archived day cannot say whether a
+        # reversal was refused by policy or never detected.
+        "max_trades_per_symbol_per_day": _safe(
+            lambda: get_float_env("MAX_TRADES_PER_SYMBOL_PER_DAY", 1.0)
+        ),
+        "symbol_daily_cap_directional": _safe(
+            lambda: get_bool_env("AUTO_PAPER_SYMBOL_DAILY_CAP_DIRECTIONAL", True)
+        ),
+        "cooldown_directional": _safe(
+            lambda: get_bool_env("AUTO_PAPER_COOLDOWN_DIRECTIONAL", True)
+        ),
+        "alert_spread_blocked_signals": _safe(
+            lambda: get_bool_env("ALERT_SPREAD_BLOCKED_SIGNALS", True)
+        ),
+        "allow_review_tv_chart_auto_paper": _safe(
+            lambda: get_bool_env("ALLOW_REVIEW_TV_CHART_AUTO_PAPER", False)
+        ),
+        "max_daily_review_validation_entries": _safe(
+            lambda: get_float_env("MAX_DAILY_REVIEW_VALIDATION_ENTRIES", 5.0)
+        ),
+
+        # The exit levers. Every key above decides what may be *bought*; before
+        # this, nothing recorded what governed the sell, so no archived day could
+        # answer "which exit rules were live?".
+        #
+        # It cost an hour on 2026-08-22. NVDA on 08-21 peaked at 1.87R and booked
+        # 0.20R, and settling whether the profit ladder had been on at the time
+        # meant reading a comment in an untracked .env rather than the run's own
+        # record. The ladder was in fact switched on later that same day, using
+        # that trade as part of its evidence.
+        #
+        # Four of these default ON in code and were deliberately shipped off by
+        # env on 2026-08-19, which is exactly the state a snapshot must capture:
+        # reading the code tells you the default, not what ran.
+        "exit_profit_ladder": _safe(lambda: os.getenv("EXIT_PROFIT_LADDER", "")),
+        "exit_trail_arm_r": _safe(lambda: get_float_env("EXIT_TRAIL_ARM_R", 2.0)),
+        "exit_breakeven_trigger_r": _safe(
+            lambda: get_float_env("EXIT_BREAKEVEN_TRIGGER_R", 1.0)
+        ),
+        "exit_breakeven_on_peak": _safe(
+            lambda: get_bool_env("EXIT_BREAKEVEN_ON_PEAK", False)
+        ),
+        "exit_option_giveback_arm_pct": _safe(
+            lambda: get_float_env("EXIT_OPTION_GIVEBACK_ARM_PCT", 0.0)
+        ),
+        "soft_exit_hold_enabled": _safe(
+            lambda: get_bool_env("SOFT_EXIT_HOLD_ENABLED", False)
+        ),
+        "exit_structure_trail_enabled": _safe(
+            lambda: get_bool_env("EXIT_STRUCTURE_TRAIL_ENABLED", False)
+        ),
+        "exit_target_extend_enabled": _safe(
+            lambda: get_bool_env("EXIT_TARGET_EXTEND_ENABLED", False)
+        ),
+        "exit_momentum_enabled": _safe(
+            lambda: get_bool_env("EXIT_MOMENTUM_ENABLED", True)
+        ),
+        # Which process owns the 20-second exit pass, and what it may fire on.
+        "position_monitor_enabled": _safe(
+            lambda: get_bool_env("POSITION_MONITOR_ENABLED", False)
+        ),
+        "position_monitor_momentum_enabled": _safe(
+            lambda: get_bool_env("POSITION_MONITOR_MOMENTUM_ENABLED", False)
+        ),
+        # Target geometry, which decides the reward half of every RR the gates
+        # above judge. On at 2 in production while the impact map said otherwise.
+        "target_min_rr": _safe(lambda: get_float_env("TARGET_MIN_RR", 0.0)),
+        "target_max_reward_atr": _safe(
+            lambda: get_float_env("TARGET_MAX_REWARD_ATR", 2.5)
+        ),
     }
 
     return {"config": snapshot}

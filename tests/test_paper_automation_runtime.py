@@ -798,3 +798,101 @@ class DecisionLedgerContentTests(unittest.TestCase):
 if __name__ == "__main__":
 
     unittest.main()
+
+
+class SymbolCooldownDirectionTests(unittest.TestCase):
+    """PLTR, 2026-08-21 -- the losing trade blocked the trade that would have won.
+
+    A put opened at 10:01 at 173.61, twelve minutes after the session low of
+    172.55, and closed at 10:05 for -0.55R. The 45-minute cooldown then locked
+    the symbol until 10:50 while PLTR ran to 182.44 by 11:58 -- +$8.83, the
+    biggest move on the board that day.
+
+    The put was wrong precisely because the stock reversed. Blocking the reversal
+    too makes the app punish itself for being wrong by refusing to be right, in
+    exactly the window where the opposite trade is best.
+    """
+
+    CLOSED_PUT = [{
+        "symbol": "PLTR",
+        "direction": "PUT",
+        "closed_at": "2026-08-21T10:05:53",
+    }]
+
+    NOW = pd.Timestamp("2026-08-21 10:20:00").to_pydatetime()
+
+    def _cooling(self, direction=None):
+        from app.gates.entry_gate import is_symbol_in_cooldown
+
+        return is_symbol_in_cooldown(
+            "PLTR", self.CLOSED_PUT, self.NOW, 45, direction=direction
+        )
+
+    def test_the_reversal_is_allowed_through(self):
+        self.assertFalse(self._cooling(direction="CALL"))
+
+    def test_the_losing_idea_still_cools_off(self):
+        """Re-entering the trade that just failed is what the rule is for."""
+
+        self.assertTrue(self._cooling(direction="PUT"))
+
+    def test_callers_that_pass_no_direction_are_unchanged(self):
+        self.assertTrue(self._cooling())
+
+    def test_the_blanket_block_is_one_env_var_away(self):
+        with patch.dict(
+            os.environ, {"AUTO_PAPER_COOLDOWN_DIRECTIONAL": "false"}, clear=False
+        ):
+            self.assertTrue(self._cooling(direction="CALL"))
+
+    def test_a_cooldown_that_has_expired_blocks_nothing(self):
+        from app.gates.entry_gate import is_symbol_in_cooldown
+
+        later = pd.Timestamp("2026-08-21 11:00:00").to_pydatetime()
+
+        self.assertFalse(
+            is_symbol_in_cooldown("PLTR", self.CLOSED_PUT, later, 45, direction="PUT")
+        )
+
+    def test_the_entry_path_passes_the_direction_through(self):
+        """The wiring: a directional helper nothing hands a direction to is inert."""
+
+        import inspect
+
+        from app.runtime import paper_automation_support
+
+        source = inspect.getsource(paper_automation_support._auto_paper_entry_reason)
+
+        self.assertIn("direction=direction", source)
+
+
+class PullbackThresholdTests(unittest.TestCase):
+    """One rule, one number.
+
+    `entry_diagnostics` hardcoded ATR*0.25 while the engine applied ATR*0.40, so
+    the waterfall told an operator a candidate was "not close enough to EMA9"
+    against a threshold 37% tighter than the one that actually decided.
+    """
+
+    def test_the_dashboard_reports_the_threshold_the_engine_applies(self):
+        from app.diagnostics import entry_diagnostics
+        from app.strategies import entry_engine
+
+        self.assertEqual(
+            entry_diagnostics.EMA_PULLBACK_ATR_MULTIPLE,
+            entry_engine.EMA_PULLBACK_ATR_MULTIPLE,
+        )
+
+    def test_the_engine_reads_the_named_constant(self):
+        import inspect
+
+        from app.strategies import entry_engine
+
+        source = inspect.getsource(entry_engine.detect_entry)
+
+        self.assertIn("EMA_PULLBACK_ATR_MULTIPLE", source)
+        # The literal is what drifted last time. If it reappears, one of the two
+        # sites has stopped reading the shared constant again.
+        self.assertNotIn("0.40", source)
+        self.assertNotIn("0.25", source)
+

@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from app.strategies.entry_engine import EMA_PULLBACK_ATR_MULTIPLE
+
 
 @dataclass
 class EntryConditionDiagnostic:
@@ -291,7 +293,7 @@ def _evaluate_setups(df, analysis):
             [
                 _condition("BULLISH_SIGNAL", bullish_signal, analysis.get("signal"), "BULLISH or HIGH CONVICTION BULLISH"),
                 _condition("CLOSE_ABOVE_EMA9", close is not None and ema9 is not None and close > ema9, close, f"> EMA9 {ema9}"),
-                _condition("PULLBACK_TO_EMA9", low is not None and ema9 is not None and abs(low - ema9) <= atr * 0.25, low, f"within ATR*0.25 of EMA9 {ema9}"),
+                _condition("PULLBACK_TO_EMA9", low is not None and ema9 is not None and abs(low - ema9) <= atr * EMA_PULLBACK_ATR_MULTIPLE, low, f"within ATR*{EMA_PULLBACK_ATR_MULTIPLE} of EMA9 {ema9}"),
                 _condition("EMA_ALIGNMENT", ema9 is not None and ema20 is not None and ema9 > ema20, ema9, f"> EMA20 {ema20}"),
                 _condition("VWAP", close is not None and vwap is not None and close > vwap, close, f"> VWAP {vwap}"),
             ],

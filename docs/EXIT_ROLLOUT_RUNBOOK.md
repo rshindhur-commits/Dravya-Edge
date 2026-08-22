@@ -51,6 +51,47 @@ the merge is already six.
 
 Order is by strength of evidence, not by expected size.
 
+### State as of 2026-08-22 — read this before following the order below
+
+The order was written when **nothing recorded which exit levers were live**. Every
+scan captured 23 config values and not one of them governed a sell, so an
+archived day could not answer "was the ladder on?". That gap cost an hour on
+2026-08-22 and is now closed — `config_snapshot` records all thirteen exit
+levers per run, which is what makes a multi-switch day reconstructable and
+weakens the case for strict serialisation.
+
+| switch | state | note |
+|---|---|---|
+| Profit ladder + trail arm | **on** | enabled 2026-08-21, but **first live session is 2026-08-24** |
+| Structure trail | **on** | enabled 2026-08-22, deliberately *with* the ladder |
+| Target extension | **on** | enabled 2026-08-22 |
+| Soft-exit hold | **off** | the last one, and the one that needs its own week |
+
+**The ladder never ran in the three sessions after it was switched on.** Verified
+2026-08-22: of the 15 trades from 08-19 to 08-21, **0 moved a stop past
+breakeven**, while **6 peaked at or above the 1.0R first rung**. The +0.64R
+measurement in Session 1 below was taken retrospectively against those recorded
+trades — it is not evidence of the ladder running.
+
+**Structure trail moved up to join the ladder** rather than follow it. They are
+not independent: on AMZN #343 (08-19) the 15-minute ATR was 1.32–1.44 against a
+1R of 1.31, so the ATR trail sat a full R below the high and contributed nothing.
+Running the ladder behind a trail that cannot reach tests half the mechanism.
+
+**Target extension moved up because it is nearly inert.** 1 of those 15 trades
+ever reached 2R, and it measures itself: `final r_multiple - target_touch_r` is
+exactly what it won or lost, with no replay.
+
+**Soft-exit hold stays last on its merits, not its evidence.** It is 8 of 15
+exits — 53% — and the only switch here that changes *whether the trade is still
+open* rather than where its stop sits. It also compounds with the ladder:
+deferring a soft exit gives the ladder more bars to ratchet, so afterwards the
+two cannot be told apart.
+
+One thing to watch from 08-24: the EMA and MACD exits averaged peaks of **0.83R
+and 0.80R**, *below* the ladder's 1.0R first rung. The ladder cannot rescue those.
+If they keep bleeding, the answer is a lower first rung, not another switch.
+
 ### Session 1 — the profit ladder
 
 ```

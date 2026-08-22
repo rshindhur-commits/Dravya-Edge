@@ -9,6 +9,7 @@ from app.gates.entry_gate import (
 	is_symbol_in_cooldown,
 	price_geometry_error,
 	scanner_entry_gate_config,
+	symbol_daily_cap_is_directional,
 	symbol_trade_count_today,
 	validate_price_geometry
 )
@@ -25,6 +26,7 @@ __all__ = [
 	"is_symbol_in_cooldown",
 	"price_geometry_error",
 	"scanner_entry_gate_config",
+	"symbol_daily_cap_is_directional",
 	"symbol_trade_count_today",
 	"validate_price_geometry"
 ]
