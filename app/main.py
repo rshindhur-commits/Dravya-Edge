@@ -5927,6 +5927,12 @@ def _run_scanner_impl():
             option_rejection_evidence = None
             option_quote_status = None
             option_spread_pct = None
+            # REVIEW_TV_CHART has three producers -- delayed market data, a row
+            # downgraded by the scanner entry gate, and a tolerated spread -- and
+            # only the third carries a contract anyone should act on. Initialised
+            # here so the row always has an answer, because the auto-paper path
+            # keys on it to tell them apart.
+            option_spread_tolerated = False
             option_mid_price = None
             option_bundle = None
             option_liquidity_attempts = []
@@ -6033,6 +6039,7 @@ def _run_scanner_impl():
                 if option_recommendation and spread_tolerated:
 
                     option_direction_match = True
+                    option_spread_tolerated = True
                     option_quote_status = "WIDE_SPREAD"
                     option_mid_price = option_recommendation.get(
                         "mid_price"
@@ -7042,6 +7049,8 @@ def _run_scanner_impl():
                 ),
 
                 "Option Spread %": option_spread_pct,
+
+                "Option Spread Tolerated": option_spread_tolerated,
 
                 "Option Volume": (
                     option_recommendation.get("volume")

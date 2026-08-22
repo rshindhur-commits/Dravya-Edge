@@ -303,6 +303,35 @@ def _allow_review_tv_chart_auto_paper():
     return _env_bool("ALLOW_REVIEW_TV_CHART_AUTO_PAPER", False)
 
 
+def _is_spread_tolerated_review(row):
+    """Whether a REVIEW_TV_CHART row is the kind that may be booked.
+
+    Three different things produce REVIEW_TV_CHART and only one of them is a
+    tradeable signal:
+
+      1. `realtime_confirmation_needed` -- Polygon data is delayed. There is no
+         confirmed live price behind it.
+      2. `_align_action_status_with_entry_gate` -- the scanner gate refused the
+         row (RR, setup, quality) and downgraded it. `Realtime Ready` is set
+         False here, and the review path is exactly the branch that stops
+         checking `Realtime Ready`.
+      3. A tolerated spread -- a fully qualified signal whose only failing was
+         that no contract quoted tightly enough. This one carries a real
+         contract with a live bid and ask.
+
+    `ALLOW_REVIEW_TV_CHART_AUTO_PAPER` was a single switch over all three. Turning
+    it on to book spread-tolerated signals would also have booked candidates on
+    delayed data and candidates the scanner gate had just refused -- including the
+    1.8-2.0 RR band, which the paper gate's own floor still admits and which
+    measures badly. That is not the experiment being run.
+
+    Keys on the column rather than on the reason text: `Option Spread Tolerated`
+    is set at exactly one place in app/main.py, beside the contract it describes.
+    """
+
+    return _boolish(row.get("Option Spread Tolerated"))
+
+
 def _ignore_affordability_for_paper_validation():
 
     return _env_bool("PAPER_IGNORE_AFFORDABILITY", True)
@@ -474,8 +503,13 @@ def _paper_candidate_filter_reason(row):
     status = str(row.get("Action Status") or "").upper()
     if status not in {"ENTER", "ENTER_PAPER", "REVIEW_TV_CHART"}:
         return "NOT_ACTIONABLE_STATUS"
-    if status == "REVIEW_TV_CHART" and not _allow_review_tv_chart_auto_paper():
-        return "REVIEW_VALIDATION_DISABLED"
+    if status == "REVIEW_TV_CHART":
+        if not _allow_review_tv_chart_auto_paper():
+            return "REVIEW_VALIDATION_DISABLED"
+        # Delayed data and gate-downgraded rows also arrive as REVIEW_TV_CHART.
+        # See _is_spread_tolerated_review.
+        if not _is_spread_tolerated_review(row):
+            return "REVIEW_NOT_SPREAD_TOLERATED"
     if not _boolish(row.get("Setup Valid")):
         return "SETUP_INVALID"
     if row.get("Candidate Direction") not in {"CALL", "PUT"}:
@@ -496,7 +530,11 @@ def _paper_candidate_filter_reason(row):
         return "NO_ENTRY_SETUP_DETECTED"
     if not _ignore_affordability_for_paper_validation() and not _boolish(row.get("Affordable")):
         return "PAPER_AFFORDABILITY_REJECTED"
-    review_ready = status == "REVIEW_TV_CHART" and _allow_review_tv_chart_auto_paper()
+    review_ready = (
+        status == "REVIEW_TV_CHART"
+        and _allow_review_tv_chart_auto_paper()
+        and _is_spread_tolerated_review(row)
+    )
     if not review_ready and not _boolish(row.get("Realtime Ready")):
         return row.get("Realtime Block Reason") or "REALTIME_NOT_READY"
     return None
@@ -1059,7 +1097,11 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         return False, session_block
     action_status = str(row.get("Action Status")).strip().upper()
     realtime_ready = str(row.get("Realtime Ready")).strip().lower() in ["true", "1", "yes"]
-    review_validation_candidate = action_status == "REVIEW_TV_CHART" and _allow_review_tv_chart_auto_paper()
+    review_validation_candidate = (
+        action_status == "REVIEW_TV_CHART"
+        and _allow_review_tv_chart_auto_paper()
+        and _is_spread_tolerated_review(row)
+    )
     top_candidate = row.get("Top Candidate")
     candidate_rank = _safe_float(row.get("Candidate Rank"), None)
     rank_eligible = (
