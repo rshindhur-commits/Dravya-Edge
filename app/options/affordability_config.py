@@ -37,6 +37,30 @@ def per_symbol_cost_caps():
     Read live rather than frozen at import, so the operator can withdraw it
     without a deploy. Anything unparseable is skipped rather than raising: a
     malformed override must not take the option path down mid-session.
+
+    ## Reviewed 2026-08-22 -- AVGO and SMH narrowed 2500 -> 1500
+
+    The admission argument above is about the *signal*. What the headroom bought
+    is a separate question, and the traded record answers it:
+
+        AVGO 08-04  $1,115  +2.35R  +$195   <- the only winner
+        AVGO 08-19  $1,938  -0.17R
+        AVGO 08-20  $2,408  -1.00R
+        AVGO 08-21  $2,200  -0.61R
+        SMH  08-19  $2,245  -0.16R
+
+    Every trade that actually needed the $2,500 band lost -- 4 of 4, -1.94R --
+    and the single winner sat at $1,115, inside even the old $1,000 global cap.
+    Four trades is not enough to withdraw an exception measured over 21 sessions,
+    which is why this narrows the band instead of removing it.
+
+    MSFT joined at 1500 on the same test the original three had to pass, run by
+    `tools/cost_blocked_signal_quality.py`: median best +0.68R against a +0.41R
+    baseline and median close +0.16R against -0.13R, over 18 candidates at a
+    $1,235 median. Its interval on the close is [-0.02, +0.47] and touches zero,
+    so it is a trial rather than a verdict -- unlike AVGO and SMH, whose blocked
+    candidates now measure -0.51R and +0.43R with the top five removed leaving
+    +0.01R. Raising *those* two further would buy nothing.
     """
 
     raw = os.getenv("OPTION_MAX_CONTRACT_COST_BY_SYMBOL", "") or ""
