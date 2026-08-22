@@ -1040,7 +1040,14 @@ def main():
     # again whenever the session window opens or closes, because those are the
     # two moments an operator wants confirmation without reading twenty lines.
     heartbeat_every = max(1, 300 // wait)
+    # Outside the session there is nothing to report, but "alive and idle" and
+    # "died overnight" must not look the same -- that ambiguity is the whole
+    # reason this process publishes at all. Hourly rather than every pass
+    # because Neon bills a 300s wake for each row written, which is the same
+    # trade-off the scan loop makes in its own idle branch.
+    idle_heartbeat_every = max(1, 3600 // wait)
     passes = 0
+    idle_passes = 0
     was_in_session = None
 
     while not _stopping:
@@ -1092,6 +1099,15 @@ def main():
                 # a provider hiccup; the scan cycle is still running the full
                 # engine underneath either way.
                 _log(f"[POSITION MONITOR ERROR] pass failed: {exc}")
+
+        else:
+
+            idle_passes += 1
+
+            if idle_passes % idle_heartbeat_every == 1 or idle_heartbeat_every == 1:
+                _publish_heartbeat(
+                    "SLEEPING_CLOSED", scans=passes, interval_seconds=wait
+                )
 
         for _ in range(wait):
             if _stopping:
