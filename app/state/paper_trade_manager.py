@@ -1495,6 +1495,29 @@ def close_paper_trade(
 
         _record_adjustment_reason(trade, exit_state.get("adjustment_reason"))
 
+        # Frozen at the moment of the exit, and the whole point is that it is
+        # frozen. `trend_health_score` on this row is refreshed on every holding
+        # scan -- and is sourced from `execution_metrics`, the V2 shadow, not the
+        # engine that decided this exit -- so the reading the decision was made
+        # on is unrecoverable afterwards. That is why nothing has ever been able
+        # to answer whether trend health separates the soft exits that should
+        # have held from the ones that should have fired.
+        #
+        # `resolve_soft_exit_hold` gates on this number at >= 70. Until there are
+        # enough of these to check it against outcomes, that threshold is a
+        # judgement, which is why the hold ships off.
+        #
+        # Null for stop exits taken by the position monitor: `evaluate_price_exits`
+        # has no bars and computes no trend health. Soft exits all come through
+        # the scan loop, and those are the ones this exists to measure.
+        for source, field in (
+            ("trend_health_score", "trend_health_at_exit"),
+            ("exit_confidence_score", "exit_confidence_at_exit"),
+            ("rr_progress", "rr_progress_at_exit"),
+        ):
+            if exit_state.get(source) is not None:
+                trade[field] = exit_state.get(source)
+
     closed_dt = _now_et()
 
     trade["status"] = "CLOSED"
