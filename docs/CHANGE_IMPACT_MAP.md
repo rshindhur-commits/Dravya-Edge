@@ -515,6 +515,7 @@ which is why `maybe_freeze_regression_baselines` runs nightly.
 | `SESSION_INTERVALS` | scan cadence **and the Neon bill** | scan-count comparisons across days | idle windows halved 2026-08-13; REGULAR left alone deliberately |
 | `SCAN_PREMARKET_FROM` | **whether 04:00-09:00 is scanned at all**, so premarket rows stop existing | premarket funnel counts and any per-day scan-count comparison across the switch | 09:00 from 2026-08-22. 155 premarket scans over 08-10..21 passed 0 of 3,859 Decision rows; costs 1.20 CU-h/day, 97% autosuspend timer. Cannot touch entries — they open at 09:45 |
 | `SCAN_IDLE_DB_INTERVAL_SECONDS` | how often an **idle** pass talks to Postgres; **not** scan cadence | nothing measured — idle passes scan nothing | 3600 from 2026-08-21; batch jobs keep their own once-per-date gates |
+| `POSITION_MONITOR_ENABLED` / `POSITION_MONITOR_DB_SYNC_SECONDS` | **whether the monitor sees anything at all.** It read the book from a local state file it does not have; fixed 2026-08-22 to read Postgres | every claim that the monitor was or was not helping before 08-22 — it had closed 0 of 65 trades | the EOD guard is the value (SMCI: INTRADAY held 9 days), not faster exits, which remain unmeasured |
 | `POSITION_MONITOR_MOMENTUM_ENABLED` | **when** EMA/VWAP/MACD/failed-breakout/time are asked, never what they may answer; adds a Polygon 1m call per held symbol per minute | exit-mix and time-to-exit comparisons across the switch | committed off, unmeasured |
 
 `POSITION_MONITOR_MOMENTUM_ENABLED` deserves the same warning as any exit lever.

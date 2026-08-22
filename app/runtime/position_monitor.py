@@ -53,6 +53,29 @@ ET = ZoneInfo("America/New_York")
 
 DEFAULT_INTERVAL_SECONDS = 20
 
+# How often to re-read the open book from Postgres.
+#
+# This process does not open positions and never has. It read them from
+# `app/state/paper_trade_state.json`, which is a file on the local container --
+# and this runs as its own Render service, so that file is the *scanner's* file
+# on the *scanner's* disk. It is also in .gitignore, so it never shipped: the
+# monitor has been reading a path that does not exist, getting `{}`, and finding
+# nothing to watch on every 20-second pass since it was deployed.
+#
+# The evidence, 2026-08-22: of 65 closed trades not one carries the
+# "(position monitor)" exit reason this module writes, and all 23 closes in the
+# five sessions to 08-21 landed inside a scan's execution window. A 20s loop
+# beside a 300s scan loses a stop race only when the breach falls in the final
+# ~20s, so losing all 18 observed stop hits has probability ~7e-22. It was not
+# losing races. It was watching an empty book.
+#
+# 60s rather than every pass: the scanner opens positions on its own clock, and a
+# minute is well inside the window where a 20s exit still beats a 300s one. Neon
+# is awake through the session anyway -- scans run every 300s against a 300s
+# autosuspend -- so these reads add no compute wake, and `fetch_open` returns one
+# row per open position.
+DEFAULT_DB_SYNC_SECONDS = 60
+
 # Only inside the entry-to-close window. Positions cannot open before 09:45 and
 # the scan cycle's own end-of-day force close owns everything after the bell.
 FIRST_MINUTE = 9 * 60 + 30
@@ -226,6 +249,154 @@ def _in_session(now=None):
     minutes = now.hour * 60 + now.minute
 
     return FIRST_MINUTE <= minutes < LAST_MINUTE
+
+
+def db_sync_seconds():
+    try:
+        return max(5, int(os.getenv("POSITION_MONITOR_DB_SYNC_SECONDS", "")))
+    except ValueError:
+        return DEFAULT_DB_SYNC_SECONDS
+
+
+_last_db_sync_at = None
+
+# Trades this process has written to. Their local copy is ahead of Postgres until
+# the queued upsert lands, so a refresh must not overwrite them -- that would
+# revert a stop this monitor had just trailed, and the ratchet with it.
+_locally_written = set()
+
+
+def note_local_write(trade_key):
+    if trade_key:
+        _locally_written.add(str(trade_key))
+
+
+def sync_open_positions(now=None, force=False):
+    """Make the local book match Postgres. Returns the keys now being watched.
+
+    Postgres is the only thing both workers can see. The scanner opens positions
+    and writes them there; this process reads them back and never opens anything
+    itself. See DEFAULT_DB_SYNC_SECONDS for why that was not happening at all.
+
+    Three rules, each protecting against a way this can close a trade twice:
+
+    * A failed read is not an empty book. `fetch_open` returns None when it could
+      not answer, and treating that as "nothing is open" would drop every
+      position this process is watching and stop protecting them.
+    * Local knowledge wins over the database. A trade this process has just
+      closed is still OPEN in Postgres until the queued upsert lands, so
+      re-adopting it from the read would evaluate -- and close -- it again.
+    * A position Postgres no longer calls open is dropped, but only if the local
+      copy still calls it OPEN. That is the scanner having closed it, and
+      evaluating it here would be the same double close from the other side.
+    """
+
+    global _last_db_sync_at
+
+    now = now or datetime.now(ET)
+
+    if (
+        not force
+        and _last_db_sync_at is not None
+        and (now - _last_db_sync_at).total_seconds() < db_sync_seconds()
+    ):
+        return None
+
+    from app.state.paper_trade_manager import load_paper_trades, save_paper_trades
+
+    try:
+        from app.db.paper_trade_repository import PaperTradeRepository
+
+        open_rows = PaperTradeRepository().fetch_open()
+    except Exception as exc:
+        _log(f"[POSITION MONITOR WARNING] could not read the book: {exc}")
+        return None
+
+    if open_rows is None:
+        _log(
+            "[POSITION MONITOR WARNING] the book could not be read; keeping the "
+            "current view rather than acting on a failed read."
+        )
+        return None
+
+    _last_db_sync_at = now
+
+    state = load_paper_trades()
+    before = {
+        key for key, trade in state.items()
+        if str(trade.get("status") or "").upper() == "OPEN"
+    }
+    open_keys = set()
+
+    for row in open_rows:
+        trade_key = row.get("trade_key")
+        payload = row.get("payload") or {}
+
+        if not trade_key or not payload.get("symbol"):
+            continue
+
+        open_keys.add(trade_key)
+
+        local = state.get(trade_key)
+
+        # Refresh from the database, except where the local copy is ahead of it.
+        # Two ways that happens, and the first is structural rather than
+        # bookkeeping on purpose: a trade this process has closed reads CLOSED
+        # here while Postgres still says OPEN until the queued upsert lands, and
+        # overwriting it would put the position straight back under evaluation.
+        # Relying only on `_locally_written` would make that safety depend on a
+        # bookkeeping call the close path could one day stop making.
+        if local is not None and (
+            str(local.get("status") or "").upper() != "OPEN"
+            or trade_key in _locally_written
+        ):
+            continue
+
+        payload.setdefault("trade_key", trade_key)
+        state[trade_key] = payload
+
+    for trade_key in list(state):
+        if trade_key in open_keys:
+            continue
+        if str(state[trade_key].get("status") or "").upper() == "OPEN":
+            del state[trade_key]
+            _locally_written.discard(trade_key)
+
+    save_paper_trades(state)
+
+    adopted, released = open_keys - before, before - open_keys
+
+    if adopted or released:
+        _log(
+            f"[POSITION MONITOR] book synced; watching {len(open_keys)} "
+            f"position(s)"
+            + (f", adopted {sorted(adopted)}" if adopted else "")
+            + (f", released {sorted(released)}" if released else "")
+        )
+
+    return open_keys
+
+
+def _publish_heartbeat(status, **fields):
+    """Say this process is alive, where something other than a log tail can see.
+
+    The monitor wrote nothing to any table. It has no row, no counter and no
+    timestamp anywhere, so a monitor that had never watched a single position
+    looked exactly like one doing its job quietly -- which is how it ran that way
+    unnoticed. `scan_engine_heartbeat` keys on `instance_id`, and `build_heartbeat`
+    sets that from `owner`, so publishing as "position_monitor" takes its own row
+    beside the scanner's rather than overwriting it.
+
+    Best effort, like the scanner's: a failed heartbeat must never stop the loop
+    that protects open money.
+    """
+
+    try:
+        from app.runtime.scan_engine_heartbeat import record_heartbeat
+
+        record_heartbeat(status, owner="position_monitor", **fields)
+    except Exception as exc:
+        _log(f"[POSITION MONITOR WARNING] heartbeat failed: {exc}")
 
 
 def _open_positions():
@@ -498,6 +669,10 @@ def check_once():
     """One pass over every open position. Returns what it decided, for tests."""
 
     from app.exit.exit_engine import evaluate_price_exits
+
+    # Before reading the book, not after: the scanner opens positions in another
+    # process and this one learns about them no other way.
+    sync_open_positions()
 
     positions = _open_positions()
 
@@ -810,6 +985,7 @@ def _act_on(trade, symbol, price, verdict):
                 ),
                 notify_exit=True,
             )
+            note_local_write(trade.get("trade_key"))
             _log(f"[POSITION MONITOR] CLOSED {symbol} at {fill or price}")
         except Exception as exc:
             _log(f"[POSITION MONITOR ERROR] close failed for {symbol}: {exc}")
@@ -827,6 +1003,7 @@ def _act_on(trade, symbol, price, verdict):
             updated_stop=updated_stop,
             current_price=price,
         )
+        note_local_write(trade.get("trade_key"))
         _log(
             f"[POSITION MONITOR] {symbol} stop "
             f"{trade.get('stop_loss')} -> {updated_stop}"
@@ -844,10 +1021,18 @@ def main():
             "[POSITION MONITOR] POSITION_MONITOR_ENABLED is not set; exiting. "
             "The scan cycle continues to own exits."
         )
+        # Published even on the way out. "Disabled" and "crashed on boot" are the
+        # same silence otherwise, and this process has already spent weeks being
+        # unable to tell an operator which one it was.
+        _publish_heartbeat("STOPPED", last_error="POSITION_MONITOR_ENABLED is not set")
         return
 
     wait = interval_seconds()
     _log(f"[POSITION MONITOR] started; checking open positions every {wait}s.")
+
+    # Adopt the book before the first pass rather than a minute into it.
+    sync_open_positions(force=True)
+    _publish_heartbeat("STARTED", interval_seconds=wait)
 
     # A silent process and a dead one look identical in a dashboard. This one is
     # silent by design -- it prints only when a rule fires, which on a day with
@@ -890,6 +1075,15 @@ def main():
                     f"{len(held)} open position(s)"
                     + (f": {', '.join(str(h) for h in held)}" if held else "")
                 )
+                # `scans` carries the pass count and `payload` the symbols, so
+                # the row answers "is it alive" and "is it actually watching
+                # anything" -- the second being the question that went unasked.
+                _publish_heartbeat(
+                    "WATCHING",
+                    scans=passes,
+                    interval_seconds=wait,
+                    payload={"open_positions": [str(h) for h in held]},
+                )
 
             try:
                 check_once()
@@ -904,6 +1098,7 @@ def main():
                 break
             time.sleep(1)
 
+    _publish_heartbeat("STOPPED", scans=passes)
     _log("[POSITION MONITOR] stopped.")
 
 

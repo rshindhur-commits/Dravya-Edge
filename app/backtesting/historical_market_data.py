@@ -271,13 +271,32 @@ def fetch_bars(
 
     if use_cache and cache_file.exists():
 
-        cached = pd.read_parquet(cache_file)
+        # A half-written file poisons this path forever: every later run reads
+        # the same corrupt bytes and dies, and the only symptom is an ArrowInvalid
+        # from deep inside a thread pool. A replay killed mid-write left exactly
+        # one such file on 2026-08-22 and it took down a five-day run on its
+        # fourth day. Re-fetching is always correct here -- the cache is a copy
+        # of data Polygon still has, never the only record of anything.
+        try:
+            cached = pd.read_parquet(cache_file)
 
-        if not cached.empty:
+            if not cached.empty:
 
-            cached.index = pd.to_datetime(cached.index, utc=True)
+                cached.index = pd.to_datetime(cached.index, utc=True)
 
-        return cached
+            return cached
+
+        except Exception as exc:
+
+            print(
+                f"[BACKTEST CACHE] discarding unreadable {cache_file.name}: "
+                f"{type(exc).__name__}; re-fetching."
+            )
+
+            try:
+                cache_file.unlink()
+            except OSError:
+                pass
 
     url = (
         f"{POLYGON_BASE_URL}/v2/aggs/ticker/{ticker}"
@@ -345,7 +364,24 @@ def fetch_bars(
     if use_cache and not _covers_today(end_day):
 
         cache_file.parent.mkdir(parents=True, exist_ok=True)
-        frame.to_parquet(cache_file)
+
+        # Write beside the target and rename, so an interrupted run leaves either
+        # the previous file or nothing -- never a truncated one. os.replace is
+        # atomic within a filesystem on both POSIX and Windows.
+        staging = cache_file.with_suffix(".parquet.partial")
+
+        try:
+            frame.to_parquet(staging)
+            os.replace(staging, cache_file)
+
+        except Exception:
+
+            try:
+                staging.unlink()
+            except OSError:
+                pass
+
+            raise
 
     return frame
 

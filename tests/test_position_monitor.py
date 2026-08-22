@@ -34,6 +34,7 @@ def _clean_env(monkeypatch):
     for key in (
         "POSITION_MONITOR_ENABLED",
         "POSITION_MONITOR_INTERVAL_SECONDS",
+        "POSITION_MONITOR_DB_SYNC_SECONDS",
         "EXIT_BREAKEVEN_TRIGGER_R",
         "EXIT_BREAKEVEN_ON_PEAK",
     ):
@@ -684,3 +685,184 @@ def test_the_two_price_calls_do_not_share_a_cache():
 
         assert polygon_client.get_live_price("SPCX") == 137.76
         assert polygon_client.get_last_price("SPCX") == 143.34
+
+
+# --------------------------------------------------------------------------
+# Reading the book. The defect that made every test above moot in production:
+# this process read open positions from a local JSON file, while running as its
+# own Render service where that file is the scanner's, on the scanner's disk,
+# and gitignored so it never shipped. It watched `{}` for weeks.
+# --------------------------------------------------------------------------
+
+
+class _Book:
+    """Stands in for PaperTradeRepository.fetch_open()."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetch_open(self):
+        return self.rows
+
+
+@pytest.fixture
+def book(monkeypatch, tmp_path):
+    """Isolate the state file and the database read."""
+
+    state = {}
+
+    monkeypatch.setattr(pm, "_last_db_sync_at", None)
+    monkeypatch.setattr(pm, "_locally_written", set())
+    monkeypatch.setattr(
+        "app.state.paper_trade_manager.load_paper_trades", lambda: dict(state)
+    )
+    monkeypatch.setattr(
+        "app.state.paper_trade_manager.save_paper_trades",
+        lambda new: (state.clear(), state.update(new)),
+    )
+    return state
+
+
+def _row(key, symbol, status="OPEN", **extra):
+    payload = {"symbol": symbol, "trade_key": key, "status": status}
+    payload.update(extra)
+    return {"trade_key": key, "payload": payload}
+
+
+def _patch_book(monkeypatch, rows):
+    monkeypatch.setattr(
+        "app.db.paper_trade_repository.PaperTradeRepository",
+        lambda: _Book(rows),
+    )
+
+
+def test_positions_opened_by_the_scanner_are_adopted(monkeypatch, book):
+    _patch_book(monkeypatch, [_row("k1", "TSLA"), _row("k2", "NVDA")])
+
+    watched = pm.sync_open_positions(force=True)
+
+    assert watched == {"k1", "k2"}
+    assert {t["symbol"] for t in book.values()} == {"TSLA", "NVDA"}
+
+
+def test_a_failed_read_is_not_an_empty_book(monkeypatch, book):
+    """`fetch_open` returns None when it could not answer.
+
+    Treating that as "nothing is open" would drop every position this process is
+    protecting, silently, on one bad query.
+    """
+
+    book["k1"] = {"symbol": "TSLA", "status": "OPEN", "trade_key": "k1"}
+    _patch_book(monkeypatch, None)
+
+    assert pm.sync_open_positions(force=True) is None
+    assert "k1" in book
+
+
+def test_a_raising_read_also_leaves_the_book_alone(monkeypatch, book):
+    book["k1"] = {"symbol": "TSLA", "status": "OPEN", "trade_key": "k1"}
+
+    def boom():
+        raise RuntimeError("neon is asleep")
+
+    monkeypatch.setattr(
+        "app.db.paper_trade_repository.PaperTradeRepository",
+        lambda: type("R", (), {"fetch_open": staticmethod(boom)})(),
+    )
+
+    assert pm.sync_open_positions(force=True) is None
+    assert "k1" in book
+
+
+def test_a_position_the_scanner_closed_is_released(monkeypatch, book):
+    """Otherwise this process closes a trade the scan cycle already closed."""
+
+    book["k1"] = {"symbol": "TSLA", "status": "OPEN", "trade_key": "k1"}
+    _patch_book(monkeypatch, [])
+
+    assert pm.sync_open_positions(force=True) == set()
+    assert "k1" not in book
+
+
+def test_a_trade_this_process_just_closed_is_not_resurrected(monkeypatch, book):
+    """The upsert is queued, so Postgres still calls it OPEN for a moment.
+
+    Re-adopting it from that read would evaluate -- and close -- it twice.
+    """
+
+    book["k1"] = {"symbol": "TSLA", "status": "CLOSED", "trade_key": "k1"}
+    _patch_book(monkeypatch, [_row("k1", "TSLA")])
+
+    pm.sync_open_positions(force=True)
+
+    assert book["k1"]["status"] == "CLOSED"
+
+
+def test_a_stop_this_process_moved_survives_the_next_refresh(monkeypatch, book):
+    """The local copy is ahead of Postgres until the queued upsert lands."""
+
+    book["k1"] = {"symbol": "TSLA", "status": "OPEN", "trade_key": "k1",
+                  "stop_loss": 350.0}
+    pm.note_local_write("k1")
+    _patch_book(monkeypatch, [_row("k1", "TSLA", stop_loss=340.0)])
+
+    pm.sync_open_positions(force=True)
+
+    assert book["k1"]["stop_loss"] == 350.0
+
+
+def test_a_position_this_process_has_not_touched_is_refreshed(monkeypatch, book):
+    """The scanner trails stops too, and its value is the newer one."""
+
+    book["k1"] = {"symbol": "TSLA", "status": "OPEN", "trade_key": "k1",
+                  "stop_loss": 350.0}
+    _patch_book(monkeypatch, [_row("k1", "TSLA", stop_loss=352.0)])
+
+    pm.sync_open_positions(force=True)
+
+    assert book["k1"]["stop_loss"] == 352.0
+
+
+def test_the_read_is_throttled_between_passes(monkeypatch, book):
+    """20s passes must not mean 20s round trips to Neon."""
+
+    calls = []
+
+    class Counting(_Book):
+        def fetch_open(self):
+            calls.append(1)
+            return []
+
+    monkeypatch.setattr(
+        "app.db.paper_trade_repository.PaperTradeRepository", lambda: Counting([])
+    )
+    monkeypatch.setenv("POSITION_MONITOR_DB_SYNC_SECONDS", "60")
+
+    now = datetime(2026, 8, 21, 10, 0, 0, tzinfo=ET)
+    pm.sync_open_positions(now=now)
+    pm.sync_open_positions(now=now.replace(second=20))
+    pm.sync_open_positions(now=now.replace(second=40))
+
+    assert len(calls) == 1
+
+    pm.sync_open_positions(now=now.replace(minute=1, second=1))
+
+    assert len(calls) == 2
+
+
+def test_rows_without_a_symbol_are_ignored(monkeypatch, book):
+    _patch_book(monkeypatch, [{"trade_key": "k1", "payload": {}}, _row("k2", "NVDA")])
+
+    assert pm.sync_open_positions(force=True) == {"k2"}
+
+
+def test_check_once_reads_the_book_before_evaluating(monkeypatch, book):
+    """The wiring, not just the function: a sync that is never called fixes nothing."""
+
+    import inspect
+
+    source = inspect.getsource(pm.check_once)
+
+    assert "sync_open_positions()" in source
+    assert source.index("sync_open_positions()") < source.index("_open_positions()")
+

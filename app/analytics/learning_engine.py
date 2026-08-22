@@ -217,7 +217,9 @@ def _blocking_rule_counts(waterfalls):
     return {str(rule): int(count) for rule, count in counts.items()}
 
 
-def build_daily_learning_summary(trading_day, v2_learning, comparisons, exits, waterfalls):
+def build_daily_learning_summary(
+    trading_day, v2_learning, comparisons, exits, waterfalls, closed_trades=None
+):
     v2_learning = v2_learning if v2_learning is not None else pd.DataFrame()
     if (
         not v2_learning.empty
@@ -230,8 +232,22 @@ def build_daily_learning_summary(trading_day, v2_learning, comparisons, exits, w
     comparisons = comparisons if comparisons is not None else pd.DataFrame()
     exits = exits if exits is not None else pd.DataFrame()
     waterfalls = waterfalls if waterfalls is not None else pd.DataFrame()
+    closed_trades = closed_trades if closed_trades is not None else pd.DataFrame()
     stages = _counts(waterfalls, "stage")
-    confidence = _number_mean(waterfalls, "v2_exit_confidence_score")
+    # From the closed trades, not the waterfall. This asked the waterfall frame
+    # for `v2_exit_confidence_score`, a column `decision_waterfall` does not have
+    # and never had -- the argument was switched to the waterfall source to give
+    # `blocking_stages` a `stage` column, and the confidence went with it. So
+    # `daily_engine_summary.avg_exit_confidence` has been NULL on every row it has
+    # ever written, which OPTIONS_QUALITY_PLAN logged on 07-31 as "looks stopped
+    # rather than starved, cause unverified". This is the cause.
+    #
+    # `last_exit_confidence_score` is the live exit engine's own score, refreshed
+    # on every exit evaluation, so on a closed trade it is the last reading before
+    # the close. That makes this the confidence behind the exits actually taken
+    # rather than the V2 shadow's -- a different number from the one originally
+    # intended, and the only one the app durably records.
+    confidence = _number_mean(closed_trades, "last_exit_confidence_score")
     # `Trend Health Score` is the 0-12 analytics scorer, not the 0-100 live one.
     # This compared it against 80, so `premature` has reported zero since the
     # metric was added -- twelve is the highest the column can hold.
@@ -355,6 +371,10 @@ def write_daily_learning_summary(trading_day):
             return pd.DataFrame()
     comparisons = read("engine_trade_comparisons.csv")
     paper_events = read("paper_trade_events.csv")
+    # Hoisted above the summary because `avg_exit_confidence` reads off it. One
+    # fetch, used twice -- it also backs `performance` and `spread_calibration`
+    # below, and this runs once per scan.
+    closed_today = _closed_trades_for(trading_day, paper_events)
     summary = build_daily_learning_summary(
         trading_day,
         read("v2_learning_dataset.csv"),
@@ -364,6 +384,7 @@ def write_daily_learning_summary(trading_day):
         # `blocking` flag, so `blocking_stages` was always {} and
         # `rule_performance` had never received a single row.
         _waterfalls_for(trading_day, read("decision_waterfall.csv")),
+        closed_today,
     )
     try:
         evidence = read("candidate_evidence.csv")
@@ -378,7 +399,6 @@ def write_daily_learning_summary(trading_day):
         evidence, refresh, completed_trades=int(len(read("trend_capture_analysis.csv")))
     )
     summary["aggregate_statistics"] = build_aggregate_statistics(evidence)
-    closed_today = _closed_trades_for(trading_day, paper_events)
     summary["performance"] = build_performance_statistics(closed_today)
     # Open question from 2026-08-01: does option_quality_score predict the round
     # trip actually paid? Accumulated daily so it is answered by data rather than

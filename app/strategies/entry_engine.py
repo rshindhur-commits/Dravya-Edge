@@ -1,4 +1,4 @@
-from app.config.settings import get_float_env
+from app.config.settings import get_bool_env, get_float_env
 from app.utils.runtime_logging import debug_print
 
 import pandas as pd
@@ -67,6 +67,31 @@ def max_ema_distance_pct():
     return get_float_env(
         "AVOID_CHASING_MAX_EMA_DISTANCE_PCT", DEFAULT_MAX_EMA_DISTANCE_PCT
     )
+
+
+def require_ema_alignment():
+    """Whether EMA9 must have crossed EMA20 before a pullback or rejection counts.
+
+    Both setups already require price to have done the thing: EMA_PULLBACK needs
+    Close above EMA9 with the bar's Low touching it, EMA_REJECTION_SHORT needs
+    Close below EMA9 after a recent touch from above, and both sit behind a
+    directional signal and a VWAP side check. The EMA9/EMA20 cross on top of that
+    is a moving average confirming what price has already printed, and averages
+    confirm late by construction.
+
+    Measured on NVDA 2026-08-21, which is one instance of a pattern that holds on
+    all 32 trades opened between 08-10 and 08-21: at 09:37 the short was complete
+    -- bearish signal, close below EMA9, rejection off 218.74, below VWAP -- and
+    this condition alone held it out. EMA9 was 217.85 against EMA20 217.73. The
+    app looked again at 09:39, 09:41, 09:43 and 09:45 and refused each time. It
+    entered at 09:55 once the cross completed, by which point NVDA had fallen from
+    217.42 to 216.52 and the put had gone from 7.85 to 8.53. Same exit either way:
+    +14.6% against the +5.6% actually booked.
+
+    Default True, so nothing moves until a replay says it should.
+    """
+
+    return get_bool_env("ENTRY_REQUIRE_EMA_ALIGNMENT", True)
 
 
 def _normalized_market_regime(value):
@@ -330,7 +355,10 @@ def detect_entry(df, analysis, symbol=None):
 
         latest["Close"] > latest["EMA9"]
         and ema_pullback_low_distance <= ema_pullback_threshold
-        and latest["EMA9"] > latest["EMA20"]
+        and (
+            latest["EMA9"] > latest["EMA20"]
+            or not require_ema_alignment()
+        )
 
     ):
 
@@ -377,7 +405,10 @@ def detect_entry(df, analysis, symbol=None):
 
         latest["Close"] < latest["EMA9"]
         and recent_ema9_touch
-        and latest["EMA9"] < latest["EMA20"]
+        and (
+            latest["EMA9"] < latest["EMA20"]
+            or not require_ema_alignment()
+        )
 
     ):
         

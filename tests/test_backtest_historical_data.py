@@ -233,3 +233,82 @@ def test_entry_price_equals_decision_candle_close(live_trades):
             f"{trade['symbol']} {trade['scan_id']}: entry {trade['entry_price']} "
             f"!= decision candle close {candle_close}"
         )
+
+
+# ---------------------------------------------------------------------------
+# The parquet cache. A run killed mid-write on 2026-08-22 left one truncated
+# file, and every later run read the same bytes and died -- on its fourth day,
+# from an ArrowInvalid raised inside a thread pool, having spent 25 minutes.
+# ---------------------------------------------------------------------------
+
+
+def test_an_unreadable_cache_file_is_discarded_and_refetched(monkeypatch, tmp_path):
+    """Re-fetching is always safe: the cache copies data Polygon still holds."""
+
+    monkeypatch.setattr(hmd, "_CACHE_ROOT", tmp_path)
+
+    corrupt = hmd._cache_path("ZZTEST", 5, "minute", "2026-08-17", "2026-08-21")
+    corrupt.parent.mkdir(parents=True, exist_ok=True)
+    corrupt.write_bytes(b"not a parquet file")
+
+    fetched = []
+
+    class _Response:
+        def json(self):
+            fetched.append(1)
+            return {"results": []}
+
+    monkeypatch.setattr(hmd, "request_with_retry", lambda *a, **k: _Response())
+
+    frame = hmd.fetch_bars("ZZTEST", "2026-08-17", "2026-08-21", 5, "minute")
+
+    assert isinstance(frame, pd.DataFrame)
+    assert fetched, "a corrupt cache must fall through to the network"
+
+
+def test_a_readable_cache_file_is_still_used(monkeypatch, tmp_path):
+    """The guard must not turn the cache off -- that is the whole point of it."""
+
+    monkeypatch.setattr(hmd, "_CACHE_ROOT", tmp_path)
+
+    path = hmd._cache_path("ZZTEST", 5, "minute", "2026-08-17", "2026-08-21")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    frame = pd.DataFrame(
+        {"Open": [1.0], "High": [2.0], "Low": [0.5], "Close": [1.5], "Volume": [10]},
+        index=pd.DatetimeIndex(["2026-08-17T14:00:00Z"], name="Datetime"),
+    )
+    frame.to_parquet(path)
+
+    def _no_network(*_args, **_kwargs):
+        raise AssertionError("a valid cache must not hit the network")
+
+    monkeypatch.setattr(hmd, "request_with_retry", _no_network)
+
+    assert len(hmd.fetch_bars("ZZTEST", "2026-08-17", "2026-08-21", 5, "minute")) == 1
+
+
+def test_an_interrupted_write_cannot_leave_a_partial_file(monkeypatch, tmp_path):
+    """Staged then renamed, so a kill leaves the old file or none -- never half."""
+
+    monkeypatch.setattr(hmd, "_CACHE_ROOT", tmp_path)
+
+    class _Response:
+        def json(self):
+            return {"results": [
+                {"t": 1755439200000, "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 10}
+            ]}
+
+    monkeypatch.setattr(hmd, "request_with_retry", lambda *a, **k: _Response())
+
+    def _die(*_args, **_kwargs):
+        raise KeyboardInterrupt("killed mid-write")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _die)
+
+    with pytest.raises(KeyboardInterrupt):
+        hmd.fetch_bars("ZZTEST", "2026-08-17", "2026-08-21", 5, "minute")
+
+    assert not list(tmp_path.glob("*.partial"))
+    assert not list(tmp_path.glob("*.parquet"))
+

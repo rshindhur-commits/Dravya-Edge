@@ -106,3 +106,81 @@ class WaterfallAggregationTests(unittest.TestCase):
         self.assertIn("group by stage, rule_name, blocking", source)
         self.assertNotIn("select symbol, stage", source)
 
+
+class ExitConfidenceTests(unittest.TestCase):
+    """`avg_exit_confidence` read a column its frame never carried.
+
+    It asked the waterfall frame for `v2_exit_confidence_score`. That column
+    belongs to `entry_exit_v2_shadow.csv`; the argument was switched to the
+    decision-waterfall source to give `blocking_stages` a `stage` column, and the
+    confidence silently went NULL on every row `daily_engine_summary` has written
+    since.
+    """
+
+    def test_confidence_comes_from_the_closed_trades(self):
+        summary = build_daily_learning_summary(
+            "2026-08-21",
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame([
+                {"last_exit_confidence_score": 40},
+                {"last_exit_confidence_score": 60},
+            ]),
+        )
+
+        self.assertEqual(summary["avg_exit_confidence"], 50.0)
+
+    def test_trades_missing_the_score_are_skipped_not_counted_as_zero(self):
+        # 44 of 65 closed trades carry it. Averaging the gaps in as zeros would
+        # halve the number and look like a real decline in exit confidence.
+        summary = build_daily_learning_summary(
+            "2026-08-21",
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame([
+                {"last_exit_confidence_score": 40},
+                {"last_exit_confidence_score": None},
+                {"symbol": "NVDA"},
+            ]),
+        )
+
+        self.assertEqual(summary["avg_exit_confidence"], 40.0)
+
+    def test_no_closed_trades_reports_nothing_rather_than_crashing(self):
+        for empty in (None, pd.DataFrame()):
+            summary = build_daily_learning_summary(
+                "2026-08-21", pd.DataFrame(), pd.DataFrame(),
+                pd.DataFrame(), pd.DataFrame(), empty,
+            )
+            self.assertIsNone(summary["avg_exit_confidence"])
+
+    def test_the_waterfall_can_no_longer_supply_it(self):
+        """The regression: a waterfall column must not resurrect the dead read."""
+
+        summary = build_daily_learning_summary(
+            "2026-08-21",
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame([{"stage": "Risk", "v2_exit_confidence_score": 72}]),
+            pd.DataFrame(),
+        )
+
+        self.assertIsNone(summary["avg_exit_confidence"])
+
+    def test_the_repository_lifts_the_score_out_of_the_payload(self):
+        """Without the lift the frame has no such column and this is NULL again."""
+
+        from app.db.paper_trade_repository import PaperTradeRepository
+
+        lifted = PaperTradeRepository()._flatten_closed([
+            {"symbol": "TSLA", "status": "CLOSED",
+             "payload": {"last_exit_confidence_score": 55}},
+        ])
+
+        self.assertEqual(lifted[0]["last_exit_confidence_score"], 55)
+
