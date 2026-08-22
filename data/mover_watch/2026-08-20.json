@@ -1,0 +1,74 @@
+{
+  "day": "2026-08-20",
+  "generated_at": "2026-08-20T16:45:42",
+  "filter": {
+    "min_move_pct": 4.0,
+    "price": [
+      15.0,
+      600.0
+    ],
+    "min_dollar_volume_m": 200.0
+  },
+  "movers": [
+    {
+      "symbol": "AAP",
+      "change_pct": -24.722143111427552,
+      "price": 42.39,
+      "dollar_volume_m": 705.7227510900001
+    },
+    {
+      "symbol": "MRNA",
+      "change_pct": -24.446610849868105,
+      "price": 133.32,
+      "dollar_volume_m": 13207.82548536
+    },
+    {
+      "symbol": "ETHU",
+      "change_pct": 20.687885010266946,
+      "price": 23.61,
+      "dollar_volume_m": 379.22769203999997
+    },
+    {
+      "symbol": "BITX",
+      "change_pct": 12.73792093704246,
+      "price": 15.36,
+      "dollar_volume_m": 358.36084224
+    },
+    {
+      "symbol": "WOLF",
+      "change_pct": -10.48470264695772,
+      "price": 26.35,
+      "dollar_volume_m": 256.4715064
+    }
+  ],
+  "results": {
+    "AAP": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "MRNA": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "ETHU": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "BITX": {
+      "verdict": "CHAIN TOO WIDE",
+      "signals": 6,
+      "bought": 0,
+      "best_spread": 5.08,
+      "best_cost": 197,
+      "needs_ceiling": 6.0
+    },
+    "WOLF": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    }
+  }
+}
