@@ -257,6 +257,44 @@ def _migrate_legacy_scanner_trade(symbol, paper_state):
     return trade
 
 
+MAX_ADJUSTMENT_REASONS = 40
+
+
+def _record_adjustment_reason(trade, reason):
+    """Keep what the exit engine decided, not just that it decided something.
+
+    `evaluate_exit` has always returned `adjustment_reason` -- "Profit ladder:
+    1.00R locked", "Structure trailing stop active", "Soft exit held: ..." --
+    and nothing ever wrote it to the trade. So the entire staged exit rollout
+    was unverifiable from the archive: the runbook's check for sessions 1-3 was
+    to read a field that did not exist, and on 2026-08-21 not one of the 15
+    closed trades in the book could say whether a rule had fired on it.
+
+    Kept as a deduplicated history rather than a single latest value. A trade
+    that locks 0.25R and later 0.75R has two facts worth keeping, and the ladder
+    is measured by how far up the rungs it walked. Consecutive repeats collapse,
+    so a reason that holds for twenty scans records once.
+    """
+
+    text = str(reason).strip() if reason is not None else ""
+
+    trade["adjustment_reason"] = text or None
+
+    if not text:
+        return
+
+    history = trade.get("adjustment_reasons")
+
+    if not isinstance(history, list):
+        history = []
+
+    if history and history[-1].get("reason") == text:
+        return
+
+    history.append({"at": _now_et().isoformat(), "reason": text})
+    trade["adjustment_reasons"] = history[-MAX_ADJUSTMENT_REASONS:]
+
+
 def update_paper_trade(
     symbol,
     highest_price,
@@ -361,6 +399,13 @@ def update_paper_trade(
         # whether the switch is on or off.
         if exit_state.get("target_touch_r") is not None and trade.get("target_touch_r") is None:
             trade["target_touch_r"] = exit_state.get("target_touch_r")
+        # The soft-exit confirmation streak has to survive the scan that
+        # suppressed the exit, or a rule can never reach its second sighting and
+        # the confirmation can never fire. This branch runs on every holding
+        # scan, which is the only reason the round trip closes.
+        for field in ("soft_exit_streak", "soft_exit_streak_code"):
+            trade[field] = exit_state.get(field)
+        _record_adjustment_reason(trade, exit_state.get("adjustment_reason"))
 
     state[trade_key] = trade
     save_paper_trades(state)
@@ -1370,7 +1415,24 @@ def close_paper_trade(
     exit_reason="Manual paper exit",
     scanner_context=None,
     notify_exit=True,
+    exit_state=None,
 ):
+    """Close the position and keep what the closing evaluation knew.
+
+    `exit_state` is the `evaluate_exit` result for the scan that decided the
+    close. Without it the closing verdict's own measurements are discarded, and
+    two of them exist only on that scan:
+
+    `target_touch_r` is computed the moment price reaches the target. With
+    extension off the target is taken immediately, so that scan closes the trade
+    and never reaches `update_paper_trade` -- which meant the column could only
+    ever be written when `EXIT_TARGET_EXTEND_ENABLED` was already on. The
+    instrument built to decide the switch required the switch. TSLA #443 hit its
+    target at +2.14R on 2026-08-21 and recorded nothing.
+
+    The same is true of the final `adjustment_reason`: the ladder rung or trail
+    that was governing when the trade closed is otherwise lost.
+    """
 
     state = load_paper_trades()
 
@@ -1422,6 +1484,16 @@ def close_paper_trade(
         ):
             if scanner_context.get(source) is not None:
                 trade[field] = scanner_context.get(source)
+
+    if exit_state:
+
+        # First touch wins here too: a trade that touched its target on an
+        # earlier scan, declined it under extension, and closed later must keep
+        # the R the target was first worth.
+        if exit_state.get("target_touch_r") is not None and trade.get("target_touch_r") is None:
+            trade["target_touch_r"] = exit_state.get("target_touch_r")
+
+        _record_adjustment_reason(trade, exit_state.get("adjustment_reason"))
 
     closed_dt = _now_et()
 

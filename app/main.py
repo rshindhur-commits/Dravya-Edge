@@ -5426,6 +5426,10 @@ def _run_scanner_impl():
                             "Exit Risk Per Share": exit_setup.get("risk_per_share"),
                         },
                         notify_exit=False,
+                        # The closing verdict carries `target_touch_r` and the
+                        # governing `adjustment_reason`, and this scan is the
+                        # only one that ever sees them on a target exit.
+                        exit_state=exit_setup,
                     )
 
                     trade_management["trade_action"] = "EXIT"

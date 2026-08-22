@@ -64,10 +64,23 @@ against the same 2.03R peak, cutting the give-back from 1.43R to 0.65R. The trai
 arming moves with it: on its own it changed only the exit *label*, because the
 ATR trail lands where the EMA9 touch would have.
 
-**What to check:** `Profit ladder: X.XXR locked` in the adjustment reasons. Count
-how many trades reach a rung at all. On 2026-08-19's five trades, two would have
-(TSLA peaked 1.18R, PLTR 1.24R) — so expect this to fire rarely and matter a lot
-when it does.
+**Enabled 2026-08-21**, together with the trail arm at 1.0.
+
+**What to check:** `adjustment_reason` and the `adjustment_reasons` history on
+the trade row — `Profit ladder: X.XXR locked`. Until 2026-08-21 neither field was
+ever written, so this instruction pointed at nothing; see §5.
+
+```sql
+select symbol, payload->>'adjustment_reason',
+       jsonb_array_length(coalesce(payload->'adjustment_reasons','[]'::jsonb))
+from paper_trades where opened_at::date = current_date;
+```
+
+Measured before enabling, on the ten trades of 08-20 and 08-21: **+0.64R and
++$55**, turning −$35 into +$20, firing on three of ten. Six rung sets were tested
+and all six were positive, which is what made the on/off call safe — the
+best-scoring set was fitted to three firing trades and was deliberately not
+taken.
 
 **Back out if:** trades that previously ran to target start stopping out at a
 rung. That is the ladder locking too close to the peak, and the rungs are one env
@@ -101,6 +114,33 @@ against a 1R of 1.31, so the ATR arm sat a full R below the high and did nothing
 `EXIT_STRUCTURE_TRAIL_LOOKBACK` (5) and `EXIT_STRUCTURE_TRAIL_BUFFER_PCT` (0.05)
 are the knobs before the off switch.
 
+### Session 3b — soft-exit confirmation (built, off, do not enable yet)
+
+```
+SOFT_EXIT_CONFIRM_BARS=0        # 1 would require a second sighting
+```
+
+Added 2026-08-21 after the passive replay showed the soft exits are the largest
+single leak in the book: with the original stop and target and **every** soft
+exit removed, the same ten trades book **+0.22R / +$128** against −1.11R / −$35
+as booked. Doing nothing beat the exit engine.
+
+**It ships off because the obvious fix does not survive its own measurement.**
+Deferring each soft exit by one scan cycle — the worst case, where the rule
+re-fires immediately — is **−0.51R / −$80**. The two results point opposite ways
+because the gain lives in trades that ran for hours afterwards, not in a
+five-minute delay.
+
+What decides it is how often a soft rule fires once and never again, and the
+archive could not say. So `soft_exit_streak` is now counted and persisted **even
+at 0**. Two weeks of it answers the question with data instead of a judgement.
+
+**Why the existing guards do not already cover this.** All three of the
+five-minute exits fired at `bars_in_trade = 0`.
+`_should_guard_early_exit` returns False once `abs(rr_progress) >= 0.25`, so a
+trade half an R underwater falls straight through it, and
+`resolve_soft_exit_hold` requires profit, which none of them had.
+
 ### Session 4 — the entry slip refusal
 
 ```
@@ -129,6 +169,30 @@ Turn it on only when you want to settle the question, and settle it with
 `target_touch_r`: it is recorded on every trade regardless of the switch, so
 `final r_multiple − target_touch_r` is exactly what extending won or lost. That
 is a query, not an analysis.
+
+## 5. Two instruments that recorded nothing, fixed 2026-08-21
+
+Both shipped on 08-19 as part of this work and neither ever wrote a row.
+
+**`adjustment_reason`** was returned by `evaluate_exit` on every call and no
+write path stored it. Every "what to check" above was unrunnable. Now persisted
+by `update_paper_trade` as a deduplicated `adjustment_reasons` history plus the
+latest value, and by `close_paper_trade` for the closing verdict.
+
+**`target_touch_r`** could only ever be written when `EXIT_TARGET_EXTEND_ENABLED`
+was already on: with extension off the target is taken on the scan that reaches
+it, and that scan closes through `close_paper_trade`, which never received
+`exit_state`. The instrument built to decide the switch required the switch.
+`close_paper_trade` now takes `exit_state` and both call sites pass it.
+
+Check both are alive before trusting any session above:
+
+```sql
+select count(*) filter (where payload->>'adjustment_reason' is not null) reasons,
+       count(*) filter (where payload->>'target_touch_r' is not null) touches,
+       count(*) filter (where payload->>'soft_exit_streak' is not null) streaks
+from paper_trades where opened_at::date >= current_date - 3;
+```
 
 ## 3. The rule for all of them
 
