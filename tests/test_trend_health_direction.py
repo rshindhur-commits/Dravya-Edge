@@ -103,3 +103,51 @@ def test_archived_flat_snapshots_still_resolve():
     }
 
     assert evaluate_trend_health(legacy)["score"] == 12
+
+
+class TestTheTwoScalesDoNotCross:
+    """Two scorers write a column called `trend_health_score`.
+
+    `app/analytics/trend_health.py` runs 0-12 and feeds `trade_exit_analysis`.
+    `app/exit/trend_health_engine.py` runs 0-100 and drives the live exit rules.
+    The names are identical and the scales are not, which has already cost one
+    silently dead metric.
+    """
+
+    def test_the_maximum_is_twelve_not_a_hundred(self):
+
+        from app.analytics.trend_health import TREND_HEALTH_MAX, evaluate_trend_health
+
+        assert TREND_HEALTH_MAX == 12
+
+        perfect = evaluate_trend_health({
+            "ema_alignment": True, "price_above_ema9": True, "price_above_vwap": True,
+            "higher_high": True, "higher_low": True, "macd_bullish": True,
+            "rsi": 99, "relative_volume": 9,
+        })
+        assert perfect["score"] == TREND_HEALTH_MAX
+
+    def test_a_perfect_score_clears_an_eighty_percent_bar(self):
+        """The regression: `score >= 80` on a 0-12 column is never true."""
+
+        from app.analytics.trend_health import TREND_HEALTH_MAX, trend_health_percent
+
+        assert trend_health_percent(TREND_HEALTH_MAX) >= 80
+        assert TREND_HEALTH_MAX < 80, "which is why the raw comparison could not fire"
+
+    def test_the_live_scorer_is_on_the_other_scale(self):
+        """Pinned so a future edit cannot quietly align them and break the gates.
+
+        `resolve_soft_exit_hold` gates at >= 70 against this one. If it ever
+        received the 0-12 score instead, the hold could never fire.
+        """
+
+        from app.exit.trend_health_engine import evaluate_live_trend_health
+
+        perfect = evaluate_live_trend_health(
+            {"Close": 105, "EMA9": 102, "EMA20": 100, "VWAP": 101,
+             "MACD": 1, "MACD_SIGNAL": 0, "RSI": 70, "REL_VOLUME": 2,
+             "HIGHER_HIGH": True, "HIGHER_LOW": True},
+            "CALL",
+        )
+        assert perfect["score"] == 100

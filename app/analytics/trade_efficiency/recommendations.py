@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+from app.analytics.trend_health import trend_health_percent
 
 
 def _num(series, default=0):
@@ -32,7 +33,9 @@ def calculate_trade_efficiency_score(df):
         return None
 
     capture = _mean(df, "Trend Capture %") or 0
-    trend_health = (_mean(df, "Trend Health Score") or 0) / 12 * 100
+    # Same column, same normalisation, one constant. The literal 12 here and the
+    # literal 80 in learning_engine were the two halves of the same confusion.
+    trend_health = trend_health_percent(_mean(df, "Trend Health Score")) or 0
     opportunity_cost = 100
 
     if "Available Move" in df.columns and "Left On Table" in df.columns:

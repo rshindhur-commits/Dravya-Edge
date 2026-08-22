@@ -12,6 +12,28 @@ TREND_HEALTH_WEIGHTS = {
     "relative_volume": 1,
 }
 
+# This scorer runs 0-12. `app/exit/trend_health_engine.py` scores the same idea
+# 0-100 and both write a column called `trend_health_score`, which has already
+# cost one silently dead metric: `learning_engine` tested `Trend Health Score >=
+# 80` against these twelfths, so `premature` exits could never be anything but
+# zero, while `trade_efficiency/recommendations` divided the same column by 12.
+#
+# Anything comparing this score against a percentage must go through
+# `trend_health_percent` rather than carry its own divisor.
+TREND_HEALTH_MAX = sum(TREND_HEALTH_WEIGHTS.values())
+
+
+def trend_health_percent(score):
+    """This scorer's 0-12 reading as a 0-100 percentage."""
+
+    value = _float(score, None) if score is not None else None
+
+    if value is None:
+
+        return None
+
+    return round(value / TREND_HEALTH_MAX * 100, 1)
+
 
 def _truthy(value):
 

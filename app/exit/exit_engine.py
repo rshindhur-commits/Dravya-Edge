@@ -1098,7 +1098,39 @@ def _should_guard_early_exit(df, exit_reason, bars_in_trade, rr_progress, is_sho
 
         return False
 
-    if abs(rr_progress) >= 0.25:
+    # The two directions are not the same question, and reading them through one
+    # `abs()` is what stopped this rule doing its job.
+    #
+    # Above entry, a trade that has genuinely moved is no longer noise, and a soft
+    # rule firing there may be a real reversal -- so the bail stays.
+    #
+    # Below entry it was measuring "has it moved" against 0.25R while the stop
+    # sits at 1R, so a trade a quarter of the way to being wrong fell straight
+    # through the guard written to protect exactly that window. On 2026-08-20 and
+    # 08-21 that is every one of the three soft exits taken on the first
+    # evaluation after entry: TSLA #373 on VWAP at -0.49R, NVDA #375 on MACD at
+    # -0.71R, PLTR #429 on EMA at -0.55R. None was near its stop. Two went on to
+    # +3.06R and +1.43R.
+    #
+    # **The stop is what decides a trade is wrong.** Below entry the guard now
+    # runs until the stop, and `trend_still_valid` -- the real test, which the
+    # 0.25R bail was short-circuiting -- decides. Exposure is bounded either way
+    # by EARLY_EXIT_GUARD_MAX_BARS above: this defers within the entry's own 15m
+    # bar and nothing beyond it.
+    #
+    # Guarding those four on the recorded book is **+0.86R**. The premium effect
+    # could not be measured: three of the four contracts had not printed for
+    # minutes at the relevant moments, so the cash deltas sit inside the staleness
+    # of their own quotes. R alone has flattered this book before, so that is a
+    # reason to watch it, not a reason to trust it.
+    #
+    # Setting EARLY_EXIT_GUARD_MAX_ADVERSE_R to 0.25 restores the old symmetric
+    # behaviour exactly.
+    if rr_progress >= _env_float("EARLY_EXIT_GUARD_MAX_FAVOURABLE_R", 0.25):
+
+        return False
+
+    if rr_progress <= -abs(_env_float("EARLY_EXIT_GUARD_MAX_ADVERSE_R", 1.0)):
 
         return False
 
