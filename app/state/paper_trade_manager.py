@@ -1553,10 +1553,33 @@ def close_paper_trade(
     if realised_r is not None:
         trade["mfe_r"] = max(_safe_float(trade.get("mfe_r")) or 0.0, realised_r)
 
+
     # Underlying P&L above is not what the account earns: the position is an
     # option. Record the exit premium and both the mid-to-mid and the realistic
     # ask-to-bid return, so the spread cost is visible instead of silent.
     trade.update(_option_trade_result(trade))
+    # And a contract cannot close above its own peak either.
+    #
+    # `mfe_r` got this ratchet after the identical bug and `option_peak_mid` was
+    # missed, so the same failure ran on the premium side unnoticed. TSLA on
+    # 2026-08-21 recorded a peak of 8.62 and **sold at 9.60** -- a peak below the
+    # exit price, which is arithmetically impossible and is what makes this
+    # detectable without a replay.
+    #
+    # The underlying cause is sampling: the peak was only read on the scan cycle,
+    # so a twenty-minute trade was priced about four times while the contract ran
+    # from 7.70 to 11.05. The position monitor now samples it every pass, and this
+    # is the floor under that -- whatever else was missed, the exit price itself
+    # is a price the contract demonstrably reached.
+    #
+    # It matters because `_option_giveback_exit` divides this number in half. A
+    # peak 30% too low does not merely under-report; it puts the protective floor
+    # at the wrong price, and no arming threshold can correct for that.
+    exit_mid = _safe_float(trade.get("option_close_mid"))
+
+    if exit_mid is not None:
+        peak = _safe_float(trade.get("option_peak_mid"))
+        trade["option_peak_mid"] = exit_mid if peak is None else max(peak, exit_mid)
 
     if not trade_key:
 
