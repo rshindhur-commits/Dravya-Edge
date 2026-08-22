@@ -46,6 +46,7 @@ import time
 from datetime import datetime, time as dt_time
 from zoneinfo import ZoneInfo
 
+from app.config.settings import get_bool_env
 from app.runtime import position_stream
 
 ET = ZoneInfo("America/New_York")
@@ -253,6 +254,55 @@ def _risk_setup(trade):
         ),
         "take_profit": trade.get("take_profit"),
     }
+
+
+def _live_option_mid(trade):
+    """A fresh mid for the held contract, or the stored one if unavailable.
+
+    The peak this feeds was sampled only on the scan cycle, so a contract was
+    priced roughly every five minutes. TSLA on 2026-08-21 was open for twenty
+    minutes -- about four samples -- and recorded a peak of **8.62** against an
+    entry of 7.70 while the contract actually traded to **11.05**. The recorded
+    peak was below the 9.60 it sold at, which is impossible for a peak and is the
+    tell.
+
+    That number is the input to the give-back floor, so the one exit rule the
+    archive says protects gains has been reading a peak roughly 30% too low.
+    Arming it lower does not help: half of a peak the app cannot see is still the
+    wrong price.
+
+    One quote per held position per pass. Positions are few and
+    `POLYGON_RATE_LIMIT_PER_MINUTE` is 1200, so this is small next to the scan's
+    own chain pulls. `POSITION_MONITOR_OPTION_QUOTES=false` turns it off and
+    restores the stored value.
+    """
+
+    stored = trade.get("option_current_mid")
+
+    if not get_bool_env("POSITION_MONITOR_OPTION_QUOTES", True):
+        return stored, False
+
+    ticker = trade.get("option_ticker")
+
+    if not ticker:
+        return stored, False
+
+    try:
+        from app.options.live_options_chain import fetch_latest_option_quote
+
+        quote = fetch_latest_option_quote(ticker)
+    except Exception as exc:
+        _log(f"[POSITION MONITOR] option quote failed for {ticker}: {exc}")
+        return stored, False
+
+    mid = (quote or {}).get("mid_price")
+
+    # A quote that cannot be priced is not an update. Falling back to the stored
+    # value keeps the give-back floor reading the last true mid rather than None.
+    if mid is None:
+        return stored, False
+
+    return float(mid), True
 
 
 def _trade_state(trade):
@@ -473,11 +523,23 @@ def check_once():
         if not price:
             continue
 
+        option_mid, option_fresh = _live_option_mid(trade)
+
+        # Ratchet before the rules read it. `evaluate_price_exits` is stateless
+        # and takes the peak from the trade it is handed, so a peak made between
+        # scans is only ever seen if it is folded in here first.
+        if option_fresh and option_mid is not None:
+            peak = trade.get("option_peak_mid")
+            trade["option_peak_mid"] = (
+                option_mid if peak is None else max(float(peak), option_mid)
+            )
+            trade["option_current_mid"] = option_mid
+
         verdict = evaluate_price_exits(
             _risk_setup(trade),
             _trade_state(trade),
             price,
-            option_mid=trade.get("option_current_mid"),
+            option_mid=option_mid,
         )
 
         if verdict is not None:

@@ -90,6 +90,72 @@ def shadow_entry_allowed(opened_at):
     return bucket in SHADOW_ENTRY_BUCKETS
 
 
+def _mirror_to_db(trade):
+    """Queue a durable copy. Best effort -- the file stays the source of truth.
+
+    Without this the shadow lived only in this module's JSON file, which does not
+    survive a container restart. `daily_engine_summary` recorded 2 shadow trades
+    across 23 days and zero on each of the last 14, so every V1-vs-V2 comparison
+    the shadow exists to produce was empty while shadow entries were firing
+    normally.
+    """
+
+    try:
+        from app.db.persistence import upsert_shadow_trade
+        from app.runtime import RuntimeJob, get_runtime_scheduler
+
+        get_runtime_scheduler().submit_normal(RuntimeJob(
+            name="upsert_shadow_trade_db",
+            priority=3,
+            func=upsert_shadow_trade,
+            args=(dict(trade),),
+            cancelable=False,
+        ))
+    except Exception as exc:
+        print(f"[V2 SHADOW DB MIRROR WARNING] {exc}")
+
+
+def restore_open_shadow_trades():
+    """Re-adopt open shadow positions the state file lost to a restart.
+
+    The same gap `restore_open_trades_from_db` closes for paper trades, and for
+    the same reason. The file wins for keys it already has: the database copy is
+    a queued best-effort mirror and can lag.
+    """
+
+    try:
+        from sqlalchemy import text
+
+        from app.db.connection import get_engine
+
+        with get_engine().connect() as conn:
+            rows = list(conn.execute(text(
+                "select symbol, payload from shadow_trades where status = 'OPEN'"
+            )))
+    except Exception as exc:
+        print(f"[V2 SHADOW RESTORE WARNING] {exc}")
+        return None
+
+    state = load_shadow_trades()
+    restored = []
+
+    for row in rows:
+        payload = row.payload or {}
+        symbol = payload.get("symbol") or row.symbol
+
+        if not symbol or symbol in state:
+            continue
+
+        state[symbol] = payload
+        restored.append(symbol)
+
+    if restored:
+        save_shadow_trades(state)
+        print(f"[V2 SHADOW RESTORE] re-adopted {len(restored)}: {', '.join(restored)}")
+
+    return restored
+
+
 def load_shadow_trades():
     return load_json_file(str(SHADOW_STATE_FILE), {})
 
@@ -178,6 +244,7 @@ def open_shadow_trade(symbol, entry_setup, risk_setup, opened_at):
         "grace_zone_active": False,
     }
     save_shadow_trades(state)
+    _mirror_to_db(state[symbol])
     return state[symbol]
 
 
@@ -225,6 +292,7 @@ def update_shadow_trade(symbol, exit_setup):
     )
     state[symbol] = trade
     save_shadow_trades(state)
+    _mirror_to_db(trade)
     return trade
 
 
@@ -270,4 +338,8 @@ def close_shadow_trade(symbol, exit_setup, closed_at, close_price):
         "grace_zone_active": exit_setup.get("grace_zone_eligible"),
     })
     save_shadow_trades(state)
+    # The close is the only write that ever produced a final R, and it is the
+    # one the file could never keep: `state.pop` removes the trade, so if this
+    # process dies before the mirror lands the result is gone entirely.
+    _mirror_to_db(trade)
     return trade

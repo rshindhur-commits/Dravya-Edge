@@ -47,6 +47,16 @@ TABLES = (
      "did afterwards. Exists so questions about the book are a GROUP BY rather "
      "than another throwaway script; the two derivations it replaced were both "
      "wrong the first time."),
+    ("shadow_trades", "Trades", "one per V2 shadow position",
+     "The V2 shadow engine's book, so a restart cannot erase it. The shadow "
+     "exists to A/B the V2 entry and exit engines against the live ones and had "
+     "recorded 2 trades across 23 days -- zero on each of the last 14 -- while "
+     "shadow entries were firing normally. State lived only in "
+     "`app/state/entry_exit_v2_shadow_state.json`, which does not survive a "
+     "container restart, and `close_shadow_trade` pops the trade out of it, so a "
+     "process dying between the open and the close lost the result entirely. "
+     "`r_multiple` holds `net_final_r`, after the option friction V1 pays -- "
+     "`final_r` is the raw underlying move and is not comparable to a V1 result."),
     ("candidate_price_log", "Scanning", "one per candidate per 20s poll",
      "Sub-scan prices for symbols forming a setup that have not entered. The "
      "rest of the archive is 5-minute snapshots, so the movement *inside* a "

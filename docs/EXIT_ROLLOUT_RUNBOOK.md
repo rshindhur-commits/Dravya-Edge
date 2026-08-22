@@ -64,10 +64,23 @@ against the same 2.03R peak, cutting the give-back from 1.43R to 0.65R. The trai
 arming moves with it: on its own it changed only the exit *label*, because the
 ATR trail lands where the EMA9 touch would have.
 
-**What to check:** `Profit ladder: X.XXR locked` in the adjustment reasons. Count
-how many trades reach a rung at all. On 2026-08-19's five trades, two would have
-(TSLA peaked 1.18R, PLTR 1.24R) — so expect this to fire rarely and matter a lot
-when it does.
+**Enabled 2026-08-21**, together with the trail arm at 1.0.
+
+**What to check:** `adjustment_reason` and the `adjustment_reasons` history on
+the trade row — `Profit ladder: X.XXR locked`. Until 2026-08-21 neither field was
+ever written, so this instruction pointed at nothing; see §5.
+
+```sql
+select symbol, payload->>'adjustment_reason',
+       jsonb_array_length(coalesce(payload->'adjustment_reasons','[]'::jsonb))
+from paper_trades where opened_at::date = current_date;
+```
+
+Measured before enabling, on the ten trades of 08-20 and 08-21: **+0.64R and
++$55**, turning −$35 into +$20, firing on three of ten. Six rung sets were tested
+and all six were positive, which is what made the on/off call safe — the
+best-scoring set was fitted to three firing trades and was deliberately not
+taken.
 
 **Back out if:** trades that previously ran to target start stopping out at a
 rung. That is the ladder locking too close to the peak, and the rungs are one env
@@ -101,6 +114,63 @@ against a 1R of 1.31, so the ATR arm sat a full R below the high and did nothing
 `EXIT_STRUCTURE_TRAIL_LOOKBACK` (5) and `EXIT_STRUCTURE_TRAIL_BUFFER_PCT` (0.05)
 are the knobs before the off switch.
 
+### Session 3b — REMOVED, and what replaced it
+
+`SOFT_EXIT_CONFIRM_BARS` was added and removed on 2026-08-21. It duplicated
+`EXIT_EMA_CONFIRM_BARS`, which was already in CHANGE_IMPACT_MAP §6's knob table
+and is better designed — it confirms by looking *backwards* at whether the
+invalidation held on the previous n bars, so it acts immediately rather than
+deferring. Its premise was also the hold-to-stop-or-target counterfactual, which
+§1.6 settled on 291 trades.
+
+**The existing knob is now measured** — `tools/exit_trend_vs_pnl.py`, 62 live
+trades, trend read on the underlying, hard stop on every arm:
+
+| arm | mean | −top5 | total | round-trip | kept ≥25% |
+|---|---|---|---|---|---|
+| ACTUAL (live rules) | +0.78% | −0.98% | +48.3% | 47% | 13% |
+| ema9 now (confirm 0) | +0.10% | −1.83% | +6.4% | 53% | 7% |
+| **ema9 confirm 1** | **+0.55%** | −1.92% | +34.2% | 47% | 20% |
+| ema9 confirm 2 | +0.26% | −2.56% | +15.8% | 43% | 27% |
+| ema9 confirm 3 | −0.08% | −3.43% | −4.7% | 47% | 27% |
+
+One bar of confirmation is the best of the EMA arms and **no arm beats the live
+rule set**. Every `−top5` is negative, so nothing here survives the outlier
+strip. Direction is positive, magnitude is unproven; the knob is
+`EXIT_EMA_CONFIRM_BARS`, currently 0.
+
+### Session 3c — the give-back floor, and why it has never fired
+
+`EXIT_OPTION_GIVEBACK_ARM_PCT=25`, `EXIT_OPTION_GIVEBACK_KEEP=0.5`. The rule has
+not fired once in 65 closed trades. Two reasons, and only one is now fixed: the
+option peak was never persisted until 2026-08-19, so the floor could not run at
+all; and the arm sits at +25% while the six trades with a recorded peak top out
+at **+13.7%**.
+
+`tools/exit_trail_tuning.py`, 62 single-day trades with option bars:
+
+| rule | mean | total | round-trip | capture | big win kept |
+|---|---|---|---|---|---|
+| ACTUAL (app) | +0.78% | +48.3% | 47% | 12% | 13% |
+| **giveback_50 @10** | **+1.20%** | **+74.4%** | **3%** | 23% | 27% |
+| giveback_50 @25 *(shipped)* | +0.86% | +53.2% | 23% | 25% | **53%** |
+| giveback_50 @40 | +0.58% | +35.9% | 27% | 24% | 60% |
+| giveback_33 @25 | +0.71% | +43.8% | 23% | 25% | 47% |
+| trail 1.5 ATR | −1.87% | −116.0% | 37% | 17% | 20% |
+| hold to close | +0.24% | +15.2% | 30% | 23% | 67% |
+
+The trade-off is the operator's requirement stated in the tool itself: **do not
+cap the winner, but do signal when profit is being lost.** Arming at 10% is best
+on mean, total and round-trip and keeps only 27% of the trades that reached +25%.
+Arming at 25% — what ships — keeps 53% of them and still cuts round-trips from
+47% to 23%.
+
+Worth noting against the "give-back caps winners" objection: the **live rules cap
+winners hardest of all**, keeping 13%.
+
+This is an operator decision, not a measurement gap. Both arms are defensible and
+the numbers above are the whole of it.
+
 ### Session 4 — the entry slip refusal
 
 ```
@@ -129,6 +199,30 @@ Turn it on only when you want to settle the question, and settle it with
 `target_touch_r`: it is recorded on every trade regardless of the switch, so
 `final r_multiple − target_touch_r` is exactly what extending won or lost. That
 is a query, not an analysis.
+
+## 5. Two instruments that recorded nothing, fixed 2026-08-21
+
+Both shipped on 08-19 as part of this work and neither ever wrote a row.
+
+**`adjustment_reason`** was returned by `evaluate_exit` on every call and no
+write path stored it. Every "what to check" above was unrunnable. Now persisted
+by `update_paper_trade` as a deduplicated `adjustment_reasons` history plus the
+latest value, and by `close_paper_trade` for the closing verdict.
+
+**`target_touch_r`** could only ever be written when `EXIT_TARGET_EXTEND_ENABLED`
+was already on: with extension off the target is taken on the scan that reaches
+it, and that scan closes through `close_paper_trade`, which never received
+`exit_state`. The instrument built to decide the switch required the switch.
+`close_paper_trade` now takes `exit_state` and both call sites pass it.
+
+Check both are alive before trusting any session above:
+
+```sql
+select count(*) filter (where payload->>'adjustment_reason' is not null) reasons,
+       count(*) filter (where payload->>'target_touch_r' is not null) touches,
+       count(*) filter (where payload->>'soft_exit_streak' is not null) streaks
+from paper_trades where opened_at::date >= current_date - 3;
+```
 
 ## 3. The rule for all of them
 

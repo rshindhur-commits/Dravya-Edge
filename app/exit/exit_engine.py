@@ -1017,7 +1017,25 @@ def _should_guard_early_exit(df, exit_reason, bars_in_trade, rr_progress, is_sho
 
         return False
 
-    if abs(rr_progress) >= 0.25:
+    # Split in two so each side is tunable, but **both default to 0.25**, which
+    # is the behaviour this rule has always run and the behaviour every archived
+    # measurement was taken under.
+    #
+    # Widening the adverse side to the stop was tried on 2026-08-21 and reverted
+    # the same day. It looked worth +0.86R on the four eligible trades in the
+    # recent archive, with a premium effect that could not be measured because
+    # three of the four contracts had not printed for minutes. Against that,
+    # TRADE_QUALITY_PLAN §1.6 measured the whole question on **291 trades**:
+    # momentum exits are loss-limiters, and a dead trade allowed to run to its
+    # hard stop loses **12.31%** instead of **7.41%**. Holding losers longer is
+    # the expensive mistake, and four trades do not overturn 291.
+    #
+    # The knobs stay so the question can be A/B'd properly rather than argued.
+    if rr_progress >= _env_float("EARLY_EXIT_GUARD_MAX_FAVOURABLE_R", 0.25):
+
+        return False
+
+    if rr_progress <= -abs(_env_float("EARLY_EXIT_GUARD_MAX_ADVERSE_R", 0.25)):
 
         return False
 

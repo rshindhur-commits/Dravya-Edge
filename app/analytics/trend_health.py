@@ -12,6 +12,28 @@ TREND_HEALTH_WEIGHTS = {
     "relative_volume": 1,
 }
 
+# This scorer runs 0-12. `app/exit/trend_health_engine.py` scores the same idea
+# 0-100 and both write a column called `trend_health_score`, which has already
+# cost one silently dead metric: `learning_engine` tested `Trend Health Score >=
+# 80` against these twelfths, so `premature` exits could never be anything but
+# zero, while `trade_efficiency/recommendations` divided the same column by 12.
+#
+# Anything comparing this score against a percentage must go through
+# `trend_health_percent` rather than carry its own divisor.
+TREND_HEALTH_MAX = sum(TREND_HEALTH_WEIGHTS.values())
+
+
+def trend_health_percent(score):
+    """This scorer's 0-12 reading as a 0-100 percentage."""
+
+    value = _float(score, None) if score is not None else None
+
+    if value is None:
+
+        return None
+
+    return round(value / TREND_HEALTH_MAX * 100, 1)
+
 
 def _truthy(value):
 
@@ -55,8 +77,19 @@ def trend_health_state(score):
 
 
 def evaluate_trend_health(snapshot):
+    """Score a trend out of 12 from the eight checks above.
 
-    snapshot = snapshot or {}
+    Reads `snapshot["trend_inputs"]` when present. Those are the same readings
+    oriented to the trade's own direction by `build_trade_snapshot`, and without
+    them every check here is a bullish one: `price_above_vwap` scores a point of
+    health for a PUT whose short is failing. Ten of the fifteen trades closed
+    between 2026-08-19 and 08-21 were PUTs and all ten were scored that way.
+
+    Falls back to the flat snapshot so callers that pass raw readings -- and the
+    archived rows already written that way -- still resolve.
+    """
+
+    snapshot = (snapshot or {}).get("trend_inputs") or snapshot or {}
     checks = {
         "ema_alignment": _truthy(snapshot.get("ema_alignment")),
         "price_above_ema9": _truthy(snapshot.get("price_above_ema9")),

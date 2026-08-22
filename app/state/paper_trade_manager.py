@@ -257,6 +257,44 @@ def _migrate_legacy_scanner_trade(symbol, paper_state):
     return trade
 
 
+MAX_ADJUSTMENT_REASONS = 40
+
+
+def _record_adjustment_reason(trade, reason):
+    """Keep what the exit engine decided, not just that it decided something.
+
+    `evaluate_exit` has always returned `adjustment_reason` -- "Profit ladder:
+    1.00R locked", "Structure trailing stop active", "Soft exit held: ..." --
+    and nothing ever wrote it to the trade. So the entire staged exit rollout
+    was unverifiable from the archive: the runbook's check for sessions 1-3 was
+    to read a field that did not exist, and on 2026-08-21 not one of the 15
+    closed trades in the book could say whether a rule had fired on it.
+
+    Kept as a deduplicated history rather than a single latest value. A trade
+    that locks 0.25R and later 0.75R has two facts worth keeping, and the ladder
+    is measured by how far up the rungs it walked. Consecutive repeats collapse,
+    so a reason that holds for twenty scans records once.
+    """
+
+    text = str(reason).strip() if reason is not None else ""
+
+    trade["adjustment_reason"] = text or None
+
+    if not text:
+        return
+
+    history = trade.get("adjustment_reasons")
+
+    if not isinstance(history, list):
+        history = []
+
+    if history and history[-1].get("reason") == text:
+        return
+
+    history.append({"at": _now_et().isoformat(), "reason": text})
+    trade["adjustment_reasons"] = history[-MAX_ADJUSTMENT_REASONS:]
+
+
 def update_paper_trade(
     symbol,
     highest_price,
@@ -361,6 +399,7 @@ def update_paper_trade(
         # whether the switch is on or off.
         if exit_state.get("target_touch_r") is not None and trade.get("target_touch_r") is None:
             trade["target_touch_r"] = exit_state.get("target_touch_r")
+        _record_adjustment_reason(trade, exit_state.get("adjustment_reason"))
 
     state[trade_key] = trade
     save_paper_trades(state)
@@ -1370,7 +1409,24 @@ def close_paper_trade(
     exit_reason="Manual paper exit",
     scanner_context=None,
     notify_exit=True,
+    exit_state=None,
 ):
+    """Close the position and keep what the closing evaluation knew.
+
+    `exit_state` is the `evaluate_exit` result for the scan that decided the
+    close. Without it the closing verdict's own measurements are discarded, and
+    two of them exist only on that scan:
+
+    `target_touch_r` is computed the moment price reaches the target. With
+    extension off the target is taken immediately, so that scan closes the trade
+    and never reaches `update_paper_trade` -- which meant the column could only
+    ever be written when `EXIT_TARGET_EXTEND_ENABLED` was already on. The
+    instrument built to decide the switch required the switch. TSLA #443 hit its
+    target at +2.14R on 2026-08-21 and recorded nothing.
+
+    The same is true of the final `adjustment_reason`: the ladder rung or trail
+    that was governing when the trade closed is otherwise lost.
+    """
 
     state = load_paper_trades()
 
@@ -1423,6 +1479,39 @@ def close_paper_trade(
             if scanner_context.get(source) is not None:
                 trade[field] = scanner_context.get(source)
 
+    if exit_state:
+
+        # First touch wins here too: a trade that touched its target on an
+        # earlier scan, declined it under extension, and closed later must keep
+        # the R the target was first worth.
+        if exit_state.get("target_touch_r") is not None and trade.get("target_touch_r") is None:
+            trade["target_touch_r"] = exit_state.get("target_touch_r")
+
+        _record_adjustment_reason(trade, exit_state.get("adjustment_reason"))
+
+        # Frozen at the moment of the exit, and the whole point is that it is
+        # frozen. `trend_health_score` on this row is refreshed on every holding
+        # scan -- and is sourced from `execution_metrics`, the V2 shadow, not the
+        # engine that decided this exit -- so the reading the decision was made
+        # on is unrecoverable afterwards. That is why nothing has ever been able
+        # to answer whether trend health separates the soft exits that should
+        # have held from the ones that should have fired.
+        #
+        # `resolve_soft_exit_hold` gates on this number at >= 70. Until there are
+        # enough of these to check it against outcomes, that threshold is a
+        # judgement, which is why the hold ships off.
+        #
+        # Null for stop exits taken by the position monitor: `evaluate_price_exits`
+        # has no bars and computes no trend health. Soft exits all come through
+        # the scan loop, and those are the ones this exists to measure.
+        for source, field in (
+            ("trend_health_score", "trend_health_at_exit"),
+            ("exit_confidence_score", "exit_confidence_at_exit"),
+            ("rr_progress", "rr_progress_at_exit"),
+        ):
+            if exit_state.get(source) is not None:
+                trade[field] = exit_state.get(source)
+
     closed_dt = _now_et()
 
     trade["status"] = "CLOSED"
@@ -1464,10 +1553,33 @@ def close_paper_trade(
     if realised_r is not None:
         trade["mfe_r"] = max(_safe_float(trade.get("mfe_r")) or 0.0, realised_r)
 
+
     # Underlying P&L above is not what the account earns: the position is an
     # option. Record the exit premium and both the mid-to-mid and the realistic
     # ask-to-bid return, so the spread cost is visible instead of silent.
     trade.update(_option_trade_result(trade))
+    # And a contract cannot close above its own peak either.
+    #
+    # `mfe_r` got this ratchet after the identical bug and `option_peak_mid` was
+    # missed, so the same failure ran on the premium side unnoticed. TSLA on
+    # 2026-08-21 recorded a peak of 8.62 and **sold at 9.60** -- a peak below the
+    # exit price, which is arithmetically impossible and is what makes this
+    # detectable without a replay.
+    #
+    # The underlying cause is sampling: the peak was only read on the scan cycle,
+    # so a twenty-minute trade was priced about four times while the contract ran
+    # from 7.70 to 11.05. The position monitor now samples it every pass, and this
+    # is the floor under that -- whatever else was missed, the exit price itself
+    # is a price the contract demonstrably reached.
+    #
+    # It matters because `_option_giveback_exit` divides this number in half. A
+    # peak 30% too low does not merely under-report; it puts the protective floor
+    # at the wrong price, and no arming threshold can correct for that.
+    exit_mid = _safe_float(trade.get("option_close_mid"))
+
+    if exit_mid is not None:
+        peak = _safe_float(trade.get("option_peak_mid"))
+        trade["option_peak_mid"] = exit_mid if peak is None else max(peak, exit_mid)
 
     if not trade_key:
 

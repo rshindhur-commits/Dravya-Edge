@@ -1,0 +1,74 @@
+{
+  "day": "2026-08-19",
+  "generated_at": "2026-08-19T19:37:56",
+  "filter": {
+    "min_move_pct": 4.0,
+    "price": [
+      15.0,
+      600.0
+    ],
+    "min_dollar_volume_m": 200.0
+  },
+  "movers": [
+    {
+      "symbol": "MRNX",
+      "change_pct": 352.09064794127033,
+      "price": 141.64,
+      "dollar_volume_m": 416.91068291999994
+    },
+    {
+      "symbol": "MRNA",
+      "change_pct": 164.07830368487927,
+      "price": 174.38,
+      "dollar_volume_m": 34755.64240086
+    },
+    {
+      "symbol": "GDXU",
+      "change_pct": 27.75227510670854,
+      "price": 158.63,
+      "dollar_volume_m": 453.48795414
+    },
+    {
+      "symbol": "TEM",
+      "change_pct": 23.581847649918963,
+      "price": 61.25,
+      "dollar_volume_m": 1380.79825625
+    },
+    {
+      "symbol": "MVLL",
+      "change_pct": 23.26388888888888,
+      "price": 30.95,
+      "dollar_volume_m": 356.23508805
+    }
+  ],
+  "results": {
+    "MRNX": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "MRNA": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "GDXU": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "TEM": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "MVLL": {
+      "verdict": "CHAIN TOO WIDE",
+      "signals": 1,
+      "bought": 0,
+      "best_spread": 12.5,
+      "best_cost": 640,
+      "needs_ceiling": 15.0
+    }
+  }
+}

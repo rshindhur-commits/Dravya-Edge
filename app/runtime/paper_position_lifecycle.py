@@ -132,6 +132,17 @@ def _restore_lost_positions_once():
 
         return []
 
+    # The V2 shadow book has the same gap and until 2026-08-21 had no durable
+    # copy at all, so its positions vanished on every restart and it recorded 2
+    # closed trades across 23 days. Restored on the same latch: a shadow failure
+    # must never stop the live book being restored, so it is caught separately.
+    try:
+        from app.state.entry_exit_v2_shadow_state import restore_open_shadow_trades
+
+        restore_open_shadow_trades()
+    except Exception as exc:
+        print(f"[V2 SHADOW RESTORE WARNING] {exc}")
+
     _positions_restored = True
 
     return restored

@@ -1,0 +1,72 @@
+{
+  "day": "2026-08-21",
+  "generated_at": "2026-08-21T20:40:42",
+  "filter": {
+    "min_move_pct": 4.0,
+    "price": [
+      15.0,
+      600.0
+    ],
+    "min_dollar_volume_m": 200.0
+  },
+  "movers": [
+    {
+      "symbol": "ASST",
+      "change_pct": 15.468691878487295,
+      "price": 18.22,
+      "dollar_volume_m": 272.90240315999995
+    },
+    {
+      "symbol": "SLS",
+      "change_pct": 15.298507462686558,
+      "price": 15.46,
+      "dollar_volume_m": 235.64176834
+    },
+    {
+      "symbol": "HOOD",
+      "change_pct": 14.114721345951637,
+      "price": 108.13,
+      "dollar_volume_m": 5456.05846599
+    },
+    {
+      "symbol": "AAOI",
+      "change_pct": -13.013168086754453,
+      "price": 124.82,
+      "dollar_volume_m": 1216.7693254399999
+    },
+    {
+      "symbol": "USAR",
+      "change_pct": 12.741087083576854,
+      "price": 19.26,
+      "dollar_volume_m": 415.76511924
+    }
+  ],
+  "results": {
+    "ASST": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "SLS": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "HOOD": {
+      "verdict": "TRADED",
+      "signals": 4,
+      "bought": 1,
+      "mean_pct": 3.31
+    },
+    "AAOI": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    },
+    "USAR": {
+      "verdict": "NO SETUP",
+      "signals": 0,
+      "bought": 0
+    }
+  }
+}

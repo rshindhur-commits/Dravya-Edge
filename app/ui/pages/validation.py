@@ -41,6 +41,17 @@ def render(df):
 
     st.subheader("Validation")
 
+    # Per-trade audit first, aggregates after. The roll-ups below answer "how is
+    # the book doing"; this answers "what happened on that one trade, and can I
+    # check it" -- which is the question the aggregates cannot be interrogated
+    # for, and the one that surfaced three separate recording faults on
+    # 2026-08-21.
+    with st.expander("Trade lifecycle — one trade, every gate", expanded=False):
+
+        from app.ui.pages.trade_lifecycle import render as render_lifecycle
+
+        render_lifecycle()
+
     days = st.radio(
         "Window",
         WINDOW_OPTIONS,

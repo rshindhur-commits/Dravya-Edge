@@ -4,6 +4,8 @@ import json
 
 import pandas as pd
 
+from app.analytics.trend_health import TREND_HEALTH_MAX
+
 from app.storage.daily_paths import daily_path, live_path
 from app.promotion.promotion_rules import evaluate_promotion
 from app.analytics.market_regime import evaluate_market_regime
@@ -207,7 +209,12 @@ def build_daily_learning_summary(trading_day, v2_learning, comparisons, exits, w
     waterfalls = waterfalls if waterfalls is not None else pd.DataFrame()
     stages = waterfalls.get("stage", pd.Series(dtype=object)).value_counts()
     confidence = _number_mean(waterfalls, "v2_exit_confidence_score")
-    high_health = pd.to_numeric(exits.get("Trend Health Score", pd.Series(dtype=float)), errors="coerce") >= 80
+    # `Trend Health Score` is the 0-12 analytics scorer, not the 0-100 live one.
+    # This compared it against 80, so `premature` has reported zero since the
+    # metric was added -- twelve is the highest the column can hold.
+    high_health = pd.to_numeric(
+        exits.get("Trend Health Score", pd.Series(dtype=float)), errors="coerce"
+    ) / TREND_HEALTH_MAX * 100 >= 80
     early = exits.get("Exit Verdict", pd.Series(dtype=object)).astype(str).eq("EXIT_TOO_EARLY")
     premature = int((high_health & early).sum())
     profit_1 = pd.to_numeric(exits.get("Profit +1 Bar", pd.Series(dtype=float)), errors="coerce")

@@ -569,3 +569,85 @@ def record_gate_decisions(rows, run_id=None):
         )
 
     return 0
+
+def upsert_shadow_trade(trade):
+    """Mirror a V2 shadow position to Postgres.
+
+    Same shape and the same terminal-close rule as `upsert_paper_trade`, for the
+    same reason: these are queued jobs carrying a snapshot taken when they were
+    queued, and nothing orders them, so an OPEN snapshot can otherwise land after
+    the close and revert the row.
+
+    Without this the shadow existed only in
+    `app/state/entry_exit_v2_shadow_state.json`. On Render's ephemeral filesystem
+    that file does not survive a restart, so an open shadow trade could never
+    reach `close_shadow_trade` and `daily_engine_summary` recorded **2 shadow
+    trades across 23 days** -- every V1-vs-V2 comparison the shadow exists to
+    produce was empty.
+    """
+
+    trade = trade or {}
+    statement = _payload_param(text("""
+        INSERT INTO shadow_trades (
+            trade_key, symbol, direction, entry_type, status, trading_day,
+            entry_price, stop_loss, take_profit, close_price, r_multiple,
+            exit_reason, payload, opened_at, closed_at, updated_at
+        ) VALUES (
+            :trade_key, :symbol, :direction, :entry_type, :status, :trading_day,
+            :entry_price, :stop_loss, :take_profit, :close_price, :r_multiple,
+            :exit_reason, :payload, :opened_at, :closed_at, now()
+        )
+        ON CONFLICT (trade_key) DO UPDATE SET
+            symbol = EXCLUDED.symbol,
+            direction = EXCLUDED.direction,
+            entry_type = EXCLUDED.entry_type,
+            status = EXCLUDED.status,
+            trading_day = EXCLUDED.trading_day,
+            entry_price = EXCLUDED.entry_price,
+            stop_loss = EXCLUDED.stop_loss,
+            take_profit = EXCLUDED.take_profit,
+            close_price = EXCLUDED.close_price,
+            r_multiple = EXCLUDED.r_multiple,
+            exit_reason = EXCLUDED.exit_reason,
+            payload = EXCLUDED.payload,
+            opened_at = EXCLUDED.opened_at,
+            closed_at = EXCLUDED.closed_at,
+            updated_at = now()
+        WHERE shadow_trades.status IS DISTINCT FROM 'CLOSED'
+           OR EXCLUDED.status = 'CLOSED'
+    """))
+
+    params = {
+        # The state file is keyed by symbol, so a second trade on the same
+        # symbol would otherwise overwrite the first. The open timestamp makes
+        # each shadow position its own row, matching how `paper_trades` builds
+        # its key.
+        "trade_key": trade.get("trade_key") or (
+            f"{trade.get('symbol')}|{trade.get('opened_at')}"
+        ),
+        "symbol": trade.get("symbol"),
+        "direction": trade.get("direction"),
+        "entry_type": trade.get("entry_type"),
+        "status": trade.get("status") or "OPEN",
+        "trading_day": trade.get("trading_day"),
+        "entry_price": trade.get("entry_price"),
+        "stop_loss": trade.get("stop_loss"),
+        "take_profit": trade.get("take_profit"),
+        "close_price": trade.get("close_price"),
+        # net_final_r is the one comparable to a V1 result: final_r is the
+        # underlying move before the option friction V1 actually pays.
+        "r_multiple": (
+            trade.get("net_final_r")
+            if trade.get("net_final_r") is not None
+            else trade.get("final_r")
+        ),
+        "exit_reason": trade.get("exit_phase") or trade.get("exit_reason"),
+        "payload": _json_safe(trade),
+        "opened_at": _timestamp_text(trade.get("opened_at")),
+        "closed_at": _timestamp_text(trade.get("closed_at")),
+    }
+
+    if not params["symbol"]:
+        return False
+
+    return _safe_execute(statement, params)

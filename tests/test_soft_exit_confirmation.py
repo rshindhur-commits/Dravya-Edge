@@ -11,7 +11,9 @@ against a still-forming bar. Two protections existed and neither reached them:
     side of VWAP -- the exact condition a VWAP exit disproves. Unreachable.
 """
 
+import os
 import unittest
+from unittest import mock
 
 import pandas as pd
 
@@ -143,3 +145,69 @@ class EarlyExitGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EarlyExitGuardAsymmetryTests(unittest.TestCase):
+    """The two directions are separately tunable, and both default to 0.25.
+
+    They were split on 2026-08-21 while widening the adverse side to the stop,
+    which was reverted the same day against TRADE_QUALITY_PLAN §1.6. The split
+    is kept because it makes the question A/B-able; the defaults are the
+    behaviour every archived measurement was taken under.
+    """
+
+    def _guard(self, rr, is_short=False):
+        # A frame whose trend is intact apart from the rule that fired.
+        frame = _frame(close=105, vwap=101, ema9=103, ema20=100, rsi=62) if not is_short \
+            else _frame(close=95, vwap=99, ema9=97, ema20=100, rsi=38)
+        return _should_guard_early_exit(
+            frame, "VWAP invalidation", 1, rr, is_short
+        )
+
+    def test_a_trade_past_the_bail_is_not_guarded(self):
+        """Both sides default to 0.25, which is what §1.6 was measured under.
+
+        Widening the adverse side to the stop was tried on 2026-08-21 and
+        reverted the same day: it holds losing trades longer, and §1.6 measured
+        a dead trade running to its hard stop at -12.31% against -7.41%.
+        """
+
+        self.assertFalse(self._guard(-0.49))
+        self.assertFalse(self._guard(-0.71))
+        self.assertTrue(self._guard(-0.1), "inside the noise window it still guards")
+
+    def test_the_guard_never_holds_through_the_stop(self):
+        """True at any adverse setting, including the widened one."""
+
+        for ceiling in ("0.25", "1.0"):
+            with mock.patch.dict(os.environ, {"EARLY_EXIT_GUARD_MAX_ADVERSE_R": ceiling}):
+                self.assertFalse(self._guard(-1.0))
+                self.assertFalse(self._guard(-1.4))
+
+    def test_above_entry_the_old_bail_is_unchanged(self):
+        """A trade that genuinely moved up is not noise; the soft rule may be real."""
+
+        self.assertFalse(self._guard(0.25))
+        self.assertFalse(self._guard(0.9))
+        self.assertTrue(self._guard(0.1), "barely above entry is still the noise window")
+
+    def test_widening_the_adverse_side_is_one_env_var(self):
+        """Kept tunable so the question can be A/B'd rather than argued."""
+
+        with mock.patch.dict(os.environ, {"EARLY_EXIT_GUARD_MAX_ADVERSE_R": "1.0"}):
+            self.assertTrue(self._guard(-0.49))
+            self.assertTrue(self._guard(-0.71))
+            self.assertFalse(self._guard(-1.0), "never past the stop")
+
+    def test_shorts_are_symmetric(self):
+
+        self.assertTrue(self._guard(-0.1, is_short=True))
+        self.assertFalse(self._guard(-0.5, is_short=True))
+
+    def test_the_bar_ceiling_still_wins(self):
+        """Guarding is bounded to the entry's own bar however far underwater."""
+
+        frame = _frame(close=105, vwap=101, ema9=103, ema20=100, rsi=62)
+        self.assertFalse(
+            _should_guard_early_exit(frame, "VWAP invalidation", 2, -0.5, False)
+        )
