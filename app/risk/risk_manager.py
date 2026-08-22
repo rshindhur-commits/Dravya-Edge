@@ -546,6 +546,44 @@ def calculate_risk(df, analysis, entry_setup, stop_anchor="SWING", htf=None):
         else get_float_env("MIN_STOP_DISTANCE_PCT", 0.50)
     )
     price_floor_distance = entry_price * (minimum_stop_pct / 100.0)
+
+    # ...but bounded in ATR, because a fraction of *price* is a proxy for a cost
+    # that lives in the *option's spread*, and the proxy breaks on a
+    # low-volatility underlying.
+    #
+    # `stop_viability` says so directly: "a 0.50% stop is ample on a penny-wide
+    # contract and still unwinnable on one quoted 8% wide, and a single
+    # price-term floor cannot tell those apart." It has enforced the real term --
+    # the specific contract's round-trip spread, at MIN_STOP_SPREAD_MULTIPLE --
+    # since 2026-07-31. The economic floor is handled per contract; this one is
+    # the crude stand-in that predates it.
+    #
+    # Where the stand-in goes wrong, measured over 09:30-15:59 on 2026-08-19..21,
+    # as the 0.50% floor expressed in ATR:
+    #
+    #     SPY   4.08     QQQ   2.31        <- never traded, 0 of 817 Risk passes
+    #     GOOGL 1.73     AAPL  1.51
+    #     NFLX  1.43     AMZN  1.39        <- the widest the app actually trades
+    #     PLTR  0.78     SPCX  0.59
+    #
+    # SPY and QQQ produced 3,300+ entry signals each over ten days and passed the
+    # Risk stage **zero** times: 958 RR readings apiece, maxima of 0.81 and 1.64
+    # against a 2.0 gate. Not a close call -- an arithmetic impossibility fixed
+    # before the market opened, because reward is pinned to ATR while this floor
+    # is pinned to price.
+    #
+    # 2.0 sits above every symbol the app currently trades, so this cannot loosen
+    # a stop on any trade being taken today; it only releases the instruments the
+    # floor had made unreachable. A stop two ATR from entry is wide by any
+    # standard, so the cap is defensible on its own terms rather than only as the
+    # number that separates these two groups. 0 disables it and restores the
+    # unbounded price floor exactly.
+    atr_cap_multiple = get_float_env("MIN_STOP_DISTANCE_ATR_CAP", 2.0)
+
+    if atr_cap_multiple > 0 and atr and atr == atr and atr > 0:
+
+        price_floor_distance = min(price_floor_distance, atr * atr_cap_multiple)
+
     minimum_stop_distance = max(
         minimum_stop_distance,
         price_floor_distance
