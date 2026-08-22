@@ -211,6 +211,12 @@ class PaperTradeRepository(BestEffortRepository):
                 # Written at open, and until now never read anywhere. See
                 # build_performance_statistics().
                 "include_in_strategy_stats",
+                # The exit engine's own confidence, refreshed on every exit
+                # evaluation, so on a closed trade it holds the last score before
+                # the close. `daily_engine_summary.avg_exit_confidence` reported
+                # NULL every day it has ever run because it was reading this off
+                # a frame that never carried it; see build_daily_learning_summary.
+                "last_exit_confidence_score",
             ):
                 if record.get(key) is None:
                     record[key] = payload.get(key)
