@@ -114,44 +114,62 @@ against a 1R of 1.31, so the ATR arm sat a full R below the high and did nothing
 `EXIT_STRUCTURE_TRAIL_LOOKBACK` (5) and `EXIT_STRUCTURE_TRAIL_BUFFER_PCT` (0.05)
 are the knobs before the off switch.
 
-### Session 3b — soft-exit confirmation (built, off, do not enable yet)
+### Session 3b — REMOVED, and what replaced it
 
-```
-SOFT_EXIT_CONFIRM_BARS=0        # 1 would require a second sighting
-```
+`SOFT_EXIT_CONFIRM_BARS` was added and removed on 2026-08-21. It duplicated
+`EXIT_EMA_CONFIRM_BARS`, which was already in CHANGE_IMPACT_MAP §6's knob table
+and is better designed — it confirms by looking *backwards* at whether the
+invalidation held on the previous n bars, so it acts immediately rather than
+deferring. Its premise was also the hold-to-stop-or-target counterfactual, which
+§1.6 settled on 291 trades.
 
-**RETRACTED 2026-08-21, same day it was written.** This section originally
-justified itself with a replay showing that holding to stop and target with every
-soft exit removed booked +0.22R / +$128 against −1.11R / −$35 as booked, and
-concluded "doing nothing beat the exit engine."
+**The existing knob is now measured** — `tools/exit_trend_vs_pnl.py`, 62 live
+trades, trend read on the underlying, hard stop on every arm:
 
-That is the **hold-to-stop-or-target counterfactual**, which
-`docs/CHANGE_IMPACT_MAP.md` §6 has already measured on a far larger sample at
-**−18.6R (bull) / −23.8R (bear)** and marks *"Settled, and do not re-open:
-momentum exits are loss-limiters, not profit cutters."* The same document records
-that this exact method is what made the regression harness report +3.22R for a
-day the book took −0.65R, and it was repaired on 2026-08-14 for that reason.
+| arm | mean | −top5 | total | round-trip | kept ≥25% |
+|---|---|---|---|---|---|
+| ACTUAL (live rules) | +0.78% | −0.98% | +48.3% | 47% | 13% |
+| ema9 now (confirm 0) | +0.10% | −1.83% | +6.4% | 53% | 7% |
+| **ema9 confirm 1** | **+0.55%** | −1.92% | +34.2% | 47% | 20% |
+| ema9 confirm 2 | +0.26% | −2.56% | +15.8% | 43% | 27% |
+| ema9 confirm 3 | −0.08% | −3.43% | −4.7% | 47% | 27% |
 
-Ten trades do not overturn it. The number was arithmetically right and the
-inference from it was wrong, and it should never have gone into this file — the
-standing rule in CHANGE_IMPACT_MAP §9 is to read that file before proposing a
-lever, and it was not read.
+One bar of confirmation is the best of the EMA arms and **no arm beats the live
+rule set**. Every `−top5` is negative, so nothing here survives the outlier
+strip. Direction is positive, magnitude is unproven; the knob is
+`EXIT_EMA_CONFIRM_BARS`, currently 0.
 
-What survives: the **one-scan-deferral** measurement, which was **−0.51R / −$80**
-and is unaffected, because it is a deferral rather than a removal. That number
-argues against enabling this, and it is why the switch ships at 0.
+### Session 3c — the give-back floor, and why it has never fired
 
-**Also: this may be redundant.** `EXIT_EMA_CONFIRM_BARS` already exists, is listed
-in CHANGE_IMPACT_MAP §6's knob table, and requires the invalidation to have held
-on the previous n bars — acting immediately rather than deferring. That is the
-better design and it has never been measured. `tools/exit_trend_vs_pnl.py` exists
-to measure it. Do that before considering this switch again.
+`EXIT_OPTION_GIVEBACK_ARM_PCT=25`, `EXIT_OPTION_GIVEBACK_KEEP=0.5`. The rule has
+not fired once in 65 closed trades. Two reasons, and only one is now fixed: the
+option peak was never persisted until 2026-08-19, so the floor could not run at
+all; and the arm sits at +25% while the six trades with a recorded peak top out
+at **+13.7%**.
 
-**Why the existing guards do not already cover this.** All three of the
-five-minute exits fired at `bars_in_trade = 0`.
-`_should_guard_early_exit` returns False once `abs(rr_progress) >= 0.25`, so a
-trade half an R underwater falls straight through it, and
-`resolve_soft_exit_hold` requires profit, which none of them had.
+`tools/exit_trail_tuning.py`, 62 single-day trades with option bars:
+
+| rule | mean | total | round-trip | capture | big win kept |
+|---|---|---|---|---|---|
+| ACTUAL (app) | +0.78% | +48.3% | 47% | 12% | 13% |
+| **giveback_50 @10** | **+1.20%** | **+74.4%** | **3%** | 23% | 27% |
+| giveback_50 @25 *(shipped)* | +0.86% | +53.2% | 23% | 25% | **53%** |
+| giveback_50 @40 | +0.58% | +35.9% | 27% | 24% | 60% |
+| giveback_33 @25 | +0.71% | +43.8% | 23% | 25% | 47% |
+| trail 1.5 ATR | −1.87% | −116.0% | 37% | 17% | 20% |
+| hold to close | +0.24% | +15.2% | 30% | 23% | 67% |
+
+The trade-off is the operator's requirement stated in the tool itself: **do not
+cap the winner, but do signal when profit is being lost.** Arming at 10% is best
+on mean, total and round-trip and keeps only 27% of the trades that reached +25%.
+Arming at 25% — what ships — keeps 53% of them and still cuts round-trips from
+47% to 23%.
+
+Worth noting against the "give-back caps winners" objection: the **live rules cap
+winners hardest of all**, keeping 13%.
+
+This is an operator decision, not a measurement gap. Both arms are defensible and
+the numbers above are the whole of it.
 
 ### Session 4 — the entry slip refusal
 

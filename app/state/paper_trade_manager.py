@@ -399,12 +399,6 @@ def update_paper_trade(
         # whether the switch is on or off.
         if exit_state.get("target_touch_r") is not None and trade.get("target_touch_r") is None:
             trade["target_touch_r"] = exit_state.get("target_touch_r")
-        # The soft-exit confirmation streak has to survive the scan that
-        # suppressed the exit, or a rule can never reach its second sighting and
-        # the confirmation can never fire. This branch runs on every holding
-        # scan, which is the only reason the round trip closes.
-        for field in ("soft_exit_streak", "soft_exit_streak_code"):
-            trade[field] = exit_state.get(field)
         _record_adjustment_reason(trade, exit_state.get("adjustment_reason"))
 
     state[trade_key] = trade

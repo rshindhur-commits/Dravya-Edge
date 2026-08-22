@@ -478,11 +478,6 @@ def _manage_trade(trade, moment, df_5m, df_15m, analysis_15m, config):
     trade.state["bars_in_trade"] = verdict["bars_in_trade"]
     trade.state["partial_profit_taken"] = verdict["partial_profit_taken"]
     trade.state["v1_ema_grace_pending"] = verdict.get("v1_ema_grace_pending")
-    # Same round trip the live path makes in update_paper_trade. Without it a
-    # replay resets the streak every step and SOFT_EXIT_CONFIRM_BARS measures
-    # nothing, which is the failure mode the stop_moved_at note above records.
-    trade.state["soft_exit_streak"] = verdict.get("soft_exit_streak")
-    trade.state["soft_exit_streak_code"] = verdict.get("soft_exit_streak_code")
 
     for key in ("profit_protection_active", "profit_lock_stop", "profit_giveback_r"):
 

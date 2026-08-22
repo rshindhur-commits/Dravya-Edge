@@ -596,87 +596,6 @@ def structure_trail_stop(df, is_short, lookback=None):
 SOFT_EXIT_RULES = {"EMA", "VWAP", "MACD"}
 
 
-def soft_exit_confirm_bars():
-    """How many further sightings a soft rule needs before it may close a trade.
-
-    **Ships at 0, which is the behaviour that has always run.** Set to 1 to
-    require a rule to fire on two consecutive evaluations.
-
-    ## The measurement behind it
-
-    Replaying 2026-08-19 to 08-21 with the original stop and target and *every*
-    soft exit removed books **+0.22R / +$128** on the ten trades from the two
-    clean sessions, against **-1.11R / -$35** as booked. Doing nothing beat the
-    exit engine. Across all 15 trades it is +6.79R against +0.55R, though that
-    span includes the retroactive-stop day and overstates it.
-
-    Going fully passive is not the answer -- it takes six full -1R stops on those
-    ten trades and cannot be judged on so few. Requiring the rule to be seen
-    twice is the middle path.
-
-    ## Why the guards already in place do not cover this
-
-    Three trades were closed at `bars_in_trade = 0`, the first evaluation after
-    entry: TSLA #373 on VWAP at -0.49R, NVDA #375 on MACD at -0.71R, PLTR #429
-    on EMA at -0.55R. Two of the three went on to +3.06R and +1.43R.
-
-    `_should_guard_early_exit` should be the rule that catches those and does
-    not, because it returns False at `abs(rr_progress) >= 0.25`. It was scoped to
-    noise immediately after entry and defines noise as barely having moved -- so
-    a trade half an R underwater four minutes in falls straight through it, which
-    is exactly the case where a soft rule is most likely to be early. The stop is
-    what decides a trade is wrong, and it had not been hit on any of the three.
-
-    `resolve_soft_exit_hold` cannot cover them either: it requires profit, and
-    all three were losing.
-
-    So this layer is deliberately unconditional on P&L and on trade age. It asks
-    only whether the signal persisted, which is the one thing first-touch rules
-    never establish.
-    """
-
-    return int(_env_float("SOFT_EXIT_CONFIRM_BARS", 0))
-
-
-def resolve_soft_exit_confirmation(exit_code, exit_signal, trade_state):
-    """Has this soft rule been seen often enough to act on?
-
-    Returns `(suppress, streak, streak_code, why)`. `suppress` true means drop
-    the soft exit for this pass and keep the position.
-
-    The streak counts *consecutive* sightings of the same rule. A different soft
-    rule firing restarts the count rather than inheriting it -- EMA breaking once
-    and VWAP breaking once is not the same evidence as EMA breaking twice.
-
-    `SOFT_EXIT_CONFIRM_BARS` is the number of *confirmations* required, so a
-    value of 1 means the rule must fire twice and the first sighting is
-    suppressed. At 0 nothing is ever suppressed and the streak is still counted,
-    which is what makes the switch measurable before it is turned on.
-    """
-
-    required = soft_exit_confirm_bars()
-
-    if not exit_signal or exit_code not in SOFT_EXIT_RULES:
-
-        return False, 0, None, None
-
-    prior_code = (trade_state or {}).get("soft_exit_streak_code")
-    prior = _float_or_none((trade_state or {}).get("soft_exit_streak")) or 0
-
-    streak = int(prior) + 1 if prior_code == exit_code else 1
-
-    if required <= 0 or streak > required:
-
-        return False, streak, exit_code, None
-
-    return (
-        True,
-        streak,
-        exit_code,
-        f"{exit_code} seen {streak}x, needs {required + 1}",
-    )
-
-
 def resolve_soft_exit_hold(exit_code, exit_signal, rr_progress, trend_health_score):
     """Is this soft exit a trend ending, or the trade wobbling inside one?
 
@@ -1098,39 +1017,25 @@ def _should_guard_early_exit(df, exit_reason, bars_in_trade, rr_progress, is_sho
 
         return False
 
-    # The two directions are not the same question, and reading them through one
-    # `abs()` is what stopped this rule doing its job.
+    # Split in two so each side is tunable, but **both default to 0.25**, which
+    # is the behaviour this rule has always run and the behaviour every archived
+    # measurement was taken under.
     #
-    # Above entry, a trade that has genuinely moved is no longer noise, and a soft
-    # rule firing there may be a real reversal -- so the bail stays.
+    # Widening the adverse side to the stop was tried on 2026-08-21 and reverted
+    # the same day. It looked worth +0.86R on the four eligible trades in the
+    # recent archive, with a premium effect that could not be measured because
+    # three of the four contracts had not printed for minutes. Against that,
+    # TRADE_QUALITY_PLAN §1.6 measured the whole question on **291 trades**:
+    # momentum exits are loss-limiters, and a dead trade allowed to run to its
+    # hard stop loses **12.31%** instead of **7.41%**. Holding losers longer is
+    # the expensive mistake, and four trades do not overturn 291.
     #
-    # Below entry it was measuring "has it moved" against 0.25R while the stop
-    # sits at 1R, so a trade a quarter of the way to being wrong fell straight
-    # through the guard written to protect exactly that window. On 2026-08-20 and
-    # 08-21 that is every one of the three soft exits taken on the first
-    # evaluation after entry: TSLA #373 on VWAP at -0.49R, NVDA #375 on MACD at
-    # -0.71R, PLTR #429 on EMA at -0.55R. None was near its stop. Two went on to
-    # +3.06R and +1.43R.
-    #
-    # **The stop is what decides a trade is wrong.** Below entry the guard now
-    # runs until the stop, and `trend_still_valid` -- the real test, which the
-    # 0.25R bail was short-circuiting -- decides. Exposure is bounded either way
-    # by EARLY_EXIT_GUARD_MAX_BARS above: this defers within the entry's own 15m
-    # bar and nothing beyond it.
-    #
-    # Guarding those four on the recorded book is **+0.86R**. The premium effect
-    # could not be measured: three of the four contracts had not printed for
-    # minutes at the relevant moments, so the cash deltas sit inside the staleness
-    # of their own quotes. R alone has flattered this book before, so that is a
-    # reason to watch it, not a reason to trust it.
-    #
-    # Setting EARLY_EXIT_GUARD_MAX_ADVERSE_R to 0.25 restores the old symmetric
-    # behaviour exactly.
+    # The knobs stay so the question can be A/B'd properly rather than argued.
     if rr_progress >= _env_float("EARLY_EXIT_GUARD_MAX_FAVOURABLE_R", 0.25):
 
         return False
 
-    if rr_progress <= -abs(_env_float("EARLY_EXIT_GUARD_MAX_ADVERSE_R", 1.0)):
+    if rr_progress <= -abs(_env_float("EARLY_EXIT_GUARD_MAX_ADVERSE_R", 0.25)):
 
         return False
 
@@ -1798,44 +1703,6 @@ def evaluate_exit(
         exit_reason = "Hold"
         adjustment_reason = "Early weak exit guarded; trend intact"
 
-    # Confirmation runs before the grace zone, and the two are not the same rule.
-    #
-    # The grace zone defers the *first* soft break once per trade, and only for a
-    # trade that is in profit or has run 1R with trend health >= 60. This asks a
-    # narrower question of every soft exit regardless of P&L or age: has the rule
-    # fired more than once? A trade that is eligible for both gets deferred by
-    # both, which is intended -- those are the trades with the most to lose.
-    #
-    # The streak is counted even when the switch is off, so the archive can
-    # answer "how often does a soft rule fire once and never again" before
-    # anyone turns it on.
-    soft_confirm_suppress, soft_streak, soft_streak_code, soft_confirm_why = (
-        resolve_soft_exit_confirmation(
-            (_select_primary_exit(exit_reasons) or {}).get("code") if exit_signal else None,
-            exit_signal,
-            trade_state,
-        )
-    )
-
-    if soft_confirm_suppress:
-
-        exit_reasons = [
-            reason for reason in exit_reasons
-            if reason.get("code") not in SOFT_EXIT_RULES
-        ]
-        remaining = _select_primary_exit(exit_reasons)
-
-        if remaining:
-            # A hard rule was firing alongside the soft one. Confirmation defers
-            # the soft signal, never a stop or a target.
-            exit_signal = True
-            exit_reason = remaining["reason"]
-        else:
-            exit_signal = False
-            exit_reason = "Hold"
-            trade_action = "HOLD"
-            adjustment_reason = f"Soft exit unconfirmed: {soft_confirm_why}"
-
     # The grace zone defers a lone momentum exit by one bar so a wick through the
     # level does not close the trade on a bar that closes back the right side.
     #
@@ -2044,11 +1911,6 @@ def evaluate_exit(
         # first-touch-wins, and it is the whole measurement for
         # EXIT_TARGET_EXTEND_ENABLED.
         "target_touch_r": target_touch_r,
-        # Persisted by update_paper_trade so a rule can reach its second
-        # sighting. Without the round trip the streak resets every scan and the
-        # confirmation could never fire.
-        "soft_exit_streak": soft_streak,
-        "soft_exit_streak_code": soft_streak_code,
         "lowest_price": _round_float(lowest_price),
         "bars_in_trade": int(bars_in_trade),
         "partial_profit_taken": partial_profit_taken,
