@@ -1,4 +1,6 @@
+import os
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -184,3 +186,78 @@ class MarketSessionDecisionTests(unittest.TestCase):
 if __name__ == "__main__":
 
     unittest.main()
+
+
+class SpreadBlockedSignalsStillReachSubscribersTests(unittest.TestCase):
+    """A signal refused only on contract spread must not be deleted.
+
+    Everything before that check has already passed -- direction, entry trigger,
+    risk geometry, RR, session window. What remains is a qualified signal for
+    which no contract quoted tightly enough. AVOID is never alertable, so the
+    subscriber was told nothing: AMD signalled 87 times over 2026-08-19..21 and
+    produced not one message, its best contract quoting 1.79%.
+
+    This is a signal product. The spread is a fact about the contract and the
+    subscriber can answer it -- another strike, another expiry, or skip.
+    """
+
+    OPEN_SESSION = {
+        "market_session": "REGULAR",
+        "delay_minutes": 0,
+        "is_market_open": True,
+    }
+
+    def _decide(self, rejection, enabled="true"):
+        with patch.dict(
+            os.environ, {"ALERT_SPREAD_BLOCKED_SIGNALS": enabled}, clear=False
+        ):
+            return scanner.build_action_decision(
+                final_signal="BULLISH",
+                entry_setup={"entry_type": "BREAKOUT"},
+                risk_setup={"trade_allowed": True, "risk_reward": 2.0, "reasons": []},
+                risk_passed_before_options=True,
+                projection=object(),
+                option_quote_status=None,
+                option_rejection_reason=rejection,
+                market_data_status=self.OPEN_SESSION,
+            )
+
+    def test_a_spread_refusal_becomes_reviewable_rather_than_avoid(self):
+        decision = self._decide("Wide bid/ask spread")
+
+        self.assertEqual(decision["action_status"], "REVIEW_TV_CHART")
+        self.assertEqual(decision["action_reason"], "Wide bid/ask spread")
+
+    def test_liquidity_refusals_are_untouched(self):
+        """Thin volume and absent interest say the contract cannot be bought.
+
+        An alert naming one of those is a promise that cannot be kept, so they
+        stay AVOID.
+        """
+
+        for reason in ("Low open interest", "Low option volume",
+                       "Missing bid/ask", "Option too expensive"):
+            self.assertEqual(
+                self._decide(reason)["action_status"], "AVOID", reason
+            )
+
+    def test_the_switch_restores_the_previous_silence(self):
+        self.assertEqual(
+            self._decide("Wide bid/ask spread", enabled="false")["action_status"],
+            "AVOID",
+        )
+
+    def test_it_cannot_send_anything_by_itself(self):
+        """Two existing switches still gate delivery and the paper book."""
+
+        from app.alerts import telegram_alerts
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TELEGRAM_REVIEW_ALERTS_ENABLED", None)
+            self.assertFalse(telegram_alerts._review_alerts_enabled())
+
+    def test_a_clean_candidate_is_unaffected(self):
+        self.assertIn(
+            self._decide(None)["action_status"], ("ENTER", "ENTER_PAPER")
+        )
+

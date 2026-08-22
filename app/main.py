@@ -30,6 +30,7 @@ from app.config.watchlist import (
     REFERENCE_FETCH_SYMBOLS
 )
 from app.config.settings import (
+    get_bool_env,
     get_float_env,
     get_secret_env,
     print_runtime_banner,
@@ -2382,6 +2383,25 @@ def build_status_result_row(
     }
 
 
+def _alert_spread_blocked_signals():
+    """Whether a signal refused only on contract spread still reaches subscribers.
+
+    On by default. This is a signal product: the spread is a fact about the
+    contract, and the subscriber can answer it themselves with a different
+    strike, a different expiry, or by skipping. Silently deleting the signal
+    decides that for them.
+
+    It cannot send anything on its own. The candidate becomes REVIEW_TV_CHART,
+    which `TELEGRAM_REVIEW_ALERTS_ENABLED` (off by default) gates, and
+    `ALLOW_REVIEW_TV_CHART_AUTO_PAPER` (off by default) keeps out of the paper
+    book -- so the book stays comparable to every prior week.
+
+    Set to false to restore AVOID and the previous silence.
+    """
+
+    return get_bool_env("ALERT_SPREAD_BLOCKED_SIGNALS", True)
+
+
 def build_action_decision(
     final_signal,
     entry_setup,
@@ -2561,6 +2581,43 @@ def build_action_decision(
         }
 
     if option_rejection_reason:
+
+        # A spread rejection is not the same kind of refusal as the others here.
+        #
+        # Everything above this line has already passed: direction, entry
+        # trigger, risk geometry, RR, and the session window. What is left is a
+        # fully qualified signal for which no contract quoted tightly enough.
+        # Stamping that AVOID deletes it -- AVOID is never alertable -- so the
+        # subscriber is told nothing. AMD signalled 87 times over 2026-08-19..21
+        # and produced not one message, because its best contract quoted 1.79%
+        # where the ceiling wanted less.
+        #
+        # This is a signal product. The spread is a fact about the contract, and
+        # a subscriber can answer it themselves -- a different strike, a
+        # different expiry, or skipping it. Deciding for them is the one thing
+        # this app was not asked to do.
+        #
+        # REVIEW_TV_CHART rather than a new status, because that path is already
+        # complete: message builder, once-per-symbol-per-day dedup, dispatch. Two
+        # existing switches keep the blast radius honest --
+        # TELEGRAM_REVIEW_ALERTS_ENABLED (off) decides whether it is sent at all,
+        # and ALLOW_REVIEW_TV_CHART_AUTO_PAPER (off) keeps it out of the paper
+        # book, so the book stays measurable against every prior week.
+        #
+        # Only the spread. Low open interest, thin volume and a missing quote are
+        # facts about whether the contract can be bought at all, and an alert
+        # naming one is a promise that cannot be kept.
+        if (
+            _alert_spread_blocked_signals()
+            and "spread" in str(option_rejection_reason).lower()
+        ):
+
+            return {
+                "action_status": "REVIEW_TV_CHART",
+                "action_reason": option_rejection_reason,
+                "realtime_confirmation_needed": realtime_confirmation_needed,
+                "tradingview_check_status": tradingview_check_status
+            }
 
         return {
             "action_status": "AVOID",
