@@ -506,7 +506,7 @@ which is why `maybe_freeze_regression_baselines` runs nightly.
 | `AUTO_PAPER_MIN_RR` | nothing, while below the scanner floor (trap 0.4) | — | — |
 | `ATR_DISTANCE_SCALE` | stop **and** target together; needs `MAX_STOP_DISTANCE_SCALE` too | all stop-distance and RR statistics | 4x buys 1.53x; the strong version lost to theta 7:1 |
 | `MIN_STOP_DISTANCE_PCT` | the price floor, and RR through it | trades whose stop was invented | floor binds on 178/310; per trade indistinguishable |
-| `TARGET_MIN_RR` | targets only, capped by `TARGET_MAX_REWARD_ATR` | RR distributions; risks making the RR gate a tautology | committed off, unmeasured |
+| `TARGET_MIN_RR` | targets only, capped by `TARGET_MAX_REWARD_ATR` | RR distributions; **makes the RR gate a tautology** | **ON at 2 in production, not off** — the A/B it was committed to await has never run. 7 of 33 trades 08-10..08-21 carry a target set to exactly 2x risk. PLTR 08-21 is one: reward 1.74 = 2 x 0.87 exactly, putting the target 0.68 **below a session low set 13 minutes earlier**. RR read 2.00 because the target had just been moved to make it. Setting it to 0 refuses that trade with no code change, because the extension only fires when structural reward is already under the floor |
 | `SETUP_GATE_ENABLED` | stage 5 refusal; ranking is unaffected | — | score is inverted; leave off |
 | `ENTRY_TIMING_GATE_ENABLED` | stage 5 refusal | — | score is inverted and survives controls, but 2-right-2-wrong on the one live day checked |
 | `EXIT_MOMENTUM_ENABLED` | all four momentum rules at once | every exit-mix comparison | removing them costs 18.6R/23.8R |
