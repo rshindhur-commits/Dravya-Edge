@@ -90,10 +90,20 @@ def _required_value(code):
     }.get(str(code or "").upper())
 
 
-def evaluate_option_liquidity(option_data):
-    """Liquidity verdict, with the contract and threshold behind it attached."""
+def evaluate_option_liquidity(option_data, ignore_spread=False):
+    """Liquidity verdict, with the contract and threshold behind it attached.
 
-    result = _evaluate_option_liquidity(option_data)
+    `ignore_spread` does not admit a wide contract -- the verdict still comes
+    back `liquid: False` with code `WIDE_SPREAD`. What it changes is that the
+    spread stops *short-circuiting* the gates below it, so a contract refused on
+    spread is also measured against 0DTE/1DTE policy, quality and the cost cap
+    before anything is claimed about it. A verdict carrying `spread_tolerated`
+    means exactly one thing failed and it was the spread; a caller may then use
+    the contract for a directional alert. Every other refusal is a fact about
+    whether the contract can be bought at all, and none of them are relaxed here.
+    """
+
+    result = _evaluate_option_liquidity(option_data, ignore_spread=ignore_spread)
 
     # Evidence is attached whatever the verdict. It used to be skipped for
     # passing contracts, which meant the spread of every contract the system
@@ -122,11 +132,13 @@ def evaluate_option_liquidity(option_data):
     return result
 
 
-def _evaluate_option_liquidity(option_data):
+def _evaluate_option_liquidity(option_data, ignore_spread=False):
 
     """
     Basic liquidity filter for options contracts
     """
+
+    spread_exceeded = False
 
     try:
 
@@ -383,18 +395,26 @@ def _evaluate_option_liquidity(option_data):
 
         if spread_pct > settings.option_max_spread_pct:
 
-            return {
+            if not ignore_spread:
 
-                "liquid": False,
+                return {
 
-                "code": "WIDE_SPREAD",
+                    "liquid": False,
 
-                "reason": "Wide bid/ask spread",
+                    "code": "WIDE_SPREAD",
 
-                "spread_pct": spread_pct,
+                    "reason": "Wide bid/ask spread",
 
-                "quality_score": option_quality_score
-            }
+                    "spread_pct": spread_pct,
+
+                    "quality_score": option_quality_score
+                }
+
+            # Carried to the bottom rather than returned here, so the gates
+            # below still run. Returning now is what makes a spread rejection
+            # unanswerable: it says nothing about whether the same contract
+            # would also have failed the cost cap or the quality floor.
+            spread_exceeded = True
 
         if expiration_bucket == "0DTE" and not settings.option_allow_0dte:
 
@@ -475,6 +495,34 @@ def _evaluate_option_liquidity(option_data):
 
                 "max_allowed_contract_cost": option_data.get(
                     "max_allowed_contract_cost"
+                )
+            }
+
+        if spread_exceeded:
+
+            # Still `liquid: False`. Nothing downstream that asks whether a
+            # contract passed liquidity may be made to answer yes by this --
+            # the flag is opt-in for the one caller that wants a directional
+            # alert on a wide contract, and invisible to everything else.
+            return {
+
+                "liquid": False,
+
+                "code": "WIDE_SPREAD",
+
+                "reason": "Wide bid/ask spread",
+
+                "spread_tolerated": True,
+
+                "spread_pct": round(
+                    spread_pct,
+                    2
+                ),
+
+                "quality_score": option_quality_score,
+
+                "liquidity_grade": option_data.get(
+                    "option_liquidity_grade"
                 )
             }
 

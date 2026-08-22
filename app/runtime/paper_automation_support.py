@@ -13,6 +13,7 @@ from app.gates import (
     evaluate_entry_gate,
     has_active_symbol_trade,
     is_symbol_in_cooldown,
+    symbol_daily_cap_is_directional,
     symbol_trade_count_today,
 )
 from app.gates.setup_quality import MIN_SETUP_BASE
@@ -888,11 +889,19 @@ def _closed_paper_trades(paper_trades):
     return [trade for trade in (paper_trades or {}).values() if trade.get("status") == "CLOSED"]
 
 
-def _auto_paper_trade_count_today(paper_trades, profile=None):
+def _auto_paper_trade_count_today(paper_trades, profile=None, review_validation=None):
     """Auto-paper entries opened today, optionally within one holding profile.
 
-    `profile=None` keeps the original whole-book count, which is what the shared
-    MAX_DAILY_ENTRIES cap still uses.
+    `profile=None` keeps the original whole-book count.
+
+    `review_validation` splits the count by entry source. Both kinds of entry
+    write notes beginning "Auto paper", so before this they shared one budget --
+    which would have let spread-tolerated validation entries consume
+    MAX_DAILY_ENTRIES and displace the very trades they are supposed to be
+    measured against. The comparison this exists to make -- 3% ceiling against no
+    ceiling, over 30 days -- needs the baseline book to be the same size it has
+    always been. See `include_in_strategy_stats`, which keeps them out of the
+    statistics for the same reason.
     """
 
     today = _current_et().date()
@@ -910,8 +919,24 @@ def _auto_paper_trade_count_today(paper_trades, profile=None):
             continue
         if profile and str(trade.get("holding_profile") or "INTRADAY").upper() != profile:
             continue
+        if review_validation is not None:
+            is_review = str(
+                trade.get("entry_source") or ""
+            ).upper() == "AUTO_PAPER_REVIEW_VALIDATION"
+            if is_review != bool(review_validation):
+                continue
         count += 1
     return count
+
+
+def max_daily_review_validation_entries():
+    """Spread-tolerated validation entries allowed per day.
+
+    Its own budget rather than a share of MAX_DAILY_ENTRIES, so turning the
+    experiment on cannot shrink the book it is being compared against.
+    """
+
+    return env_int("MAX_DAILY_REVIEW_VALIDATION_ENTRIES", 5)
 
 
 def _legacy_spread_to_risk_multiple():
@@ -1056,7 +1081,16 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
         direction=direction,
     ):
         return False, "SYMBOL_COOLDOWN_ACTIVE"
-    if symbol_trade_count_today(paper_trades, symbol, now_et) >= env_int("MAX_TRADES_PER_SYMBOL_PER_DAY", 1):
+    # Directional for the same reason the cooldown above is. Without it the
+    # cooldown fix is inert: it lets the reversal past, and this line -- one
+    # default of 1 later -- refuses it anyway because the symbol already traded.
+    symbol_daily_count = symbol_trade_count_today(
+        paper_trades,
+        symbol,
+        now_et,
+        direction=direction if symbol_daily_cap_is_directional() else None,
+    )
+    if symbol_daily_count >= env_int("MAX_TRADES_PER_SYMBOL_PER_DAY", 1):
         return False, "MAX_TRADES_PER_SYMBOL_PER_DAY_REACHED"
     open_trades = [trade for trade in paper_trades.values() if trade.get("status") == "OPEN"]
 
@@ -1085,7 +1119,22 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     if _active_profile_count(open_trades, profile) >= max_active_for_profile(profile):
         return False, f"MAX_ACTIVE_{profile}_TRADES_REACHED"
 
-    if _auto_paper_trade_count_today(paper_trades) >= controls["max_daily"]:
+    # Two budgets, not one. A validation entry is a spread-tolerated contract
+    # opened only so an exit can be sent and the 30-day comparison has something
+    # to measure; it is excluded from the strategy statistics, and it must be
+    # excluded from the cap for the same reason -- otherwise switching the
+    # experiment on silently halves the book it is the control for.
+    if review_validation_candidate:
+        if (
+            _auto_paper_trade_count_today(paper_trades, review_validation=True)
+            >= max_daily_review_validation_entries()
+        ):
+            return False, "DAILY_REVIEW_VALIDATION_LIMIT_REACHED"
+
+    elif (
+        _auto_paper_trade_count_today(paper_trades, review_validation=False)
+        >= controls["max_daily"]
+    ):
         return False, "DAILY_AUTO_PAPER_LIMIT_REACHED"
 
     if (

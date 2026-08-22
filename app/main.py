@@ -3372,6 +3372,10 @@ def _select_liquid_option_from_bundle(option_bundle, intended_option_direction):
 
     affordability_config = get_affordability_config()
     seen_tickers = set()
+    # Contracts refused only on spread, in bundle preference order. Kept so the
+    # fallback below can reach for the *best* of them rather than whichever one
+    # happened to be tried last.
+    spread_rejected = []
 
     for source, contract in _iter_option_bundle_candidates(option_bundle):
 
@@ -3455,10 +3459,72 @@ def _select_liquid_option_from_bundle(option_bundle, intended_option_direction):
             )
             return candidate, liquidity, attempts
 
+        if liquidity.get("code") == "WIDE_SPREAD":
+
+            spread_rejected.append((source, candidate))
+
         print(
             f"[LIQUIDITY FALLBACK] {source} liquidity failed: "
             f"{liquidity.get('reason')}"
         )
+
+    # Nothing quoted tightly enough. A spread rejection is the one refusal that
+    # still leaves a real, buyable contract on the table -- the quote is live,
+    # the bid and ask are both there, and open interest and volume already
+    # passed, because spread is evaluated after them. The others (missing quote,
+    # thin open interest, crossed market) are facts about whether the contract
+    # can be bought at all, and are never retried here.
+    #
+    # Re-evaluated rather than accepted on the stored verdict: the gates *below*
+    # spread -- 0DTE/1DTE policy, quality floor, and the per-symbol cost cap --
+    # never ran on these, so accepting the stored WIDE_SPREAD verdict would
+    # quietly admit a contract over its cost cap. `ignore_spread` runs them.
+    #
+    # The verdict stays `liquid: False`, so the caller keeps a rejected contract
+    # and a rejection reason. It reaches the alert; it does not reach the book
+    # as a normal entry.
+    if _alert_spread_blocked_signals():
+
+        for source, candidate in spread_rejected:
+
+            liquidity = evaluate_option_liquidity(candidate, ignore_spread=True)
+
+            if not liquidity.get("spread_tolerated"):
+
+                print(
+                    f"[LIQUIDITY FALLBACK] {source} spread-tolerant retry "
+                    f"still failed: {liquidity.get('reason')}"
+                )
+                continue
+
+            attempt = {
+                "source": source,
+                "ticker": candidate.get("ticker"),
+                "liquid": False,
+                "code": "WIDE_SPREAD",
+                "reason": liquidity.get("reason"),
+                "spread_pct": liquidity.get("spread_pct"),
+                "spread_tolerated": True,
+                "accepted": False,
+            }
+
+            for field in ATTEMPT_EVIDENCE_FIELDS:
+
+                value = liquidity.get(field)
+
+                if value is not None:
+
+                    attempt.setdefault(field, value)
+
+            attempts.append(attempt)
+            candidate["liquidity_attempts"] = list(attempts)
+            print(
+                f"[LIQUIDITY FALLBACK] Spread-tolerated {source} contract "
+                f"{candidate.get('ticker') or 'UNKNOWN'} at "
+                f"{liquidity.get('spread_pct')}% -- alert only"
+            )
+
+            return candidate, liquidity, attempts
 
     return None, None, attempts
 
@@ -5954,7 +6020,56 @@ def _run_scanner_impl():
                     )
                 )
 
-                if option_recommendation:
+                # A contract the selector tolerated on spread. It is real and
+                # priced -- every `Option *` column below fills from it, so the
+                # alert can name a strike, an expiry and a premium -- but it did
+                # not pass liquidity, so it takes the rejection path and lands
+                # as REVIEW_TV_CHART rather than ENTER_PAPER.
+                spread_tolerated = bool(
+                    option_liquidity
+                    and option_liquidity.get("spread_tolerated")
+                )
+
+                if option_recommendation and spread_tolerated:
+
+                    option_direction_match = True
+                    option_quote_status = "WIDE_SPREAD"
+                    option_mid_price = option_recommendation.get(
+                        "mid_price"
+                    ) or option_recommendation.get("quote_midpoint")
+                    option_spread_pct = option_liquidity.get("spread_pct")
+                    option_rejection_reason = (
+                        option_liquidity.get("reason")
+                        or "Wide bid/ask spread"
+                    )
+                    tolerated_attempt = (
+                        option_liquidity_attempts[-1]
+                        if option_liquidity_attempts
+                        else {}
+                    )
+                    option_rejection_evidence = json.dumps(
+                        {
+                            key: value
+                            for key, value in tolerated_attempt.items()
+                            if key not in {"liquid", "reason"}
+                        },
+                        default=str,
+                    )
+
+                    risk_setup["trade_allowed"] = False
+                    risk_setup.setdefault("reasons", [])
+                    risk_setup["reasons"].append(
+                        f"Liquidity failed: {option_rejection_reason}"
+                    )
+
+                    print(
+                        f"[LIQUIDITY] {symbol} "
+                        f"liquid=False spread_tolerated=True "
+                        f"code=WIDE_SPREAD "
+                        f"spread={option_spread_pct}"
+                    )
+
+                elif option_recommendation:
 
                     option_direction_match = True
                     option_quote_status = option_recommendation.get(

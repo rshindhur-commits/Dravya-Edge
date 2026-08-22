@@ -98,6 +98,28 @@ def config_snapshot():
         "auto_paper_min_rr": _safe(lambda: get_float_env("AUTO_PAPER_MIN_RR", 1.8)),
         "auto_paper_min_setup": _safe(lambda: get_float_env("AUTO_PAPER_MIN_SETUP", 62.0)),
         "max_daily_entries": _safe(lambda: get_float_env("MAX_DAILY_ENTRIES", 5.0)),
+        # The three levers that decide whether a second signal on a symbol, or a
+        # signal on a contract nobody quoted tightly, ever reaches the book. All
+        # added 2026-08-22; without them an archived day cannot say whether a
+        # reversal was refused by policy or never detected.
+        "max_trades_per_symbol_per_day": _safe(
+            lambda: get_float_env("MAX_TRADES_PER_SYMBOL_PER_DAY", 1.0)
+        ),
+        "symbol_daily_cap_directional": _safe(
+            lambda: get_bool_env("AUTO_PAPER_SYMBOL_DAILY_CAP_DIRECTIONAL", True)
+        ),
+        "cooldown_directional": _safe(
+            lambda: get_bool_env("AUTO_PAPER_COOLDOWN_DIRECTIONAL", True)
+        ),
+        "alert_spread_blocked_signals": _safe(
+            lambda: get_bool_env("ALERT_SPREAD_BLOCKED_SIGNALS", True)
+        ),
+        "allow_review_tv_chart_auto_paper": _safe(
+            lambda: get_bool_env("ALLOW_REVIEW_TV_CHART_AUTO_PAPER", False)
+        ),
+        "max_daily_review_validation_entries": _safe(
+            lambda: get_float_env("MAX_DAILY_REVIEW_VALIDATION_ENTRIES", 5.0)
+        ),
 
         # The exit levers. Every key above decides what may be *bought*; before
         # this, nothing recorded what governed the sell, so no archived day could

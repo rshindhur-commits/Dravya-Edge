@@ -370,14 +370,46 @@ def active_symbol_trade(state: dict, symbol: str):
     return None, None
 
 
-def symbol_trade_count_today(state: dict, symbol: str, now=None) -> int:
+def symbol_daily_cap_is_directional():
+    """Whether MAX_TRADES_PER_SYMBOL_PER_DAY counts each direction separately.
+
+    The pair to `cooldown_is_directional()`, and shipped without it, which made
+    that fix inert. The cooldown was taught to let a reversal through on
+    2026-08-22; six lines later `symbol_trade_count_today` counted every trade on
+    the symbol regardless of direction, and with MAX_TRADES_PER_SYMBOL_PER_DAY at
+    its default of 1 the reversal was refused anyway. The PLTR put at 10:01 on
+    2026-08-21 still blocks the call that ran +$8.83 -- one gate now says yes and
+    the next says no, for the same reason the first one was changed.
+
+    Same default, and the same argument: a put and a call on one symbol are two
+    trades, not one taken twice. What the cap is for -- not churning the same
+    setup all day -- is untouched, because a second entry in the *same* direction
+    is still refused.
+    """
+
+    from app.config.settings import get_bool_env
+
+    return get_bool_env("AUTO_PAPER_SYMBOL_DAILY_CAP_DIRECTIONAL", True)
+
+
+def symbol_trade_count_today(state: dict, symbol: str, now=None, direction=None) -> int:
+    """Trades opened on `symbol` today, optionally only in one direction.
+
+    `direction=None` keeps the whole-symbol count. Callers pass a direction only
+    when `symbol_daily_cap_is_directional()` is on.
+    """
 
     now = now or datetime.now()
+    direction = str(direction).upper() if direction else None
     count = 0
 
     for trade in (state or {}).values():
 
         if trade.get("symbol") != symbol:
+
+            continue
+
+        if direction and str(trade.get("direction") or "").upper() != direction:
 
             continue
 
