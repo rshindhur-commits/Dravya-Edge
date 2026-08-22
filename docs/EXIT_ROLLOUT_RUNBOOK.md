@@ -120,20 +120,32 @@ are the knobs before the off switch.
 SOFT_EXIT_CONFIRM_BARS=0        # 1 would require a second sighting
 ```
 
-Added 2026-08-21 after the passive replay showed the soft exits are the largest
-single leak in the book: with the original stop and target and **every** soft
-exit removed, the same ten trades book **+0.22R / +$128** against −1.11R / −$35
-as booked. Doing nothing beat the exit engine.
+**RETRACTED 2026-08-21, same day it was written.** This section originally
+justified itself with a replay showing that holding to stop and target with every
+soft exit removed booked +0.22R / +$128 against −1.11R / −$35 as booked, and
+concluded "doing nothing beat the exit engine."
 
-**It ships off because the obvious fix does not survive its own measurement.**
-Deferring each soft exit by one scan cycle — the worst case, where the rule
-re-fires immediately — is **−0.51R / −$80**. The two results point opposite ways
-because the gain lives in trades that ran for hours afterwards, not in a
-five-minute delay.
+That is the **hold-to-stop-or-target counterfactual**, which
+`docs/CHANGE_IMPACT_MAP.md` §6 has already measured on a far larger sample at
+**−18.6R (bull) / −23.8R (bear)** and marks *"Settled, and do not re-open:
+momentum exits are loss-limiters, not profit cutters."* The same document records
+that this exact method is what made the regression harness report +3.22R for a
+day the book took −0.65R, and it was repaired on 2026-08-14 for that reason.
 
-What decides it is how often a soft rule fires once and never again, and the
-archive could not say. So `soft_exit_streak` is now counted and persisted **even
-at 0**. Two weeks of it answers the question with data instead of a judgement.
+Ten trades do not overturn it. The number was arithmetically right and the
+inference from it was wrong, and it should never have gone into this file — the
+standing rule in CHANGE_IMPACT_MAP §9 is to read that file before proposing a
+lever, and it was not read.
+
+What survives: the **one-scan-deferral** measurement, which was **−0.51R / −$80**
+and is unaffected, because it is a deferral rather than a removal. That number
+argues against enabling this, and it is why the switch ships at 0.
+
+**Also: this may be redundant.** `EXIT_EMA_CONFIRM_BARS` already exists, is listed
+in CHANGE_IMPACT_MAP §6's knob table, and requires the invalidation to have held
+on the previous n bars — acting immediately rather than deferring. That is the
+better design and it has never been measured. `tools/exit_trend_vs_pnl.py` exists
+to measure it. Do that before considering this switch again.
 
 **Why the existing guards do not already cover this.** All three of the
 five-minute exits fired at `bars_in_trade = 0`.
