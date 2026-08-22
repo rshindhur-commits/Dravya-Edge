@@ -513,6 +513,8 @@ which is why `maybe_freeze_regression_baselines` runs nightly.
 | `MAX_TRADES_PER_SYMBOL_PER_DAY` | stage 6 only; rule 11 still blocks while holding | per-symbol frequency stats | earns its keep at 2 |
 | `AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES` | stage 6, **and the duplicate in `dashboard.py`** | re-entry timing | 60 default, unmeasured |
 | `SESSION_INTERVALS` | scan cadence **and the Neon bill** | scan-count comparisons across days | idle windows halved 2026-08-13; REGULAR left alone deliberately |
+| `SCAN_PREMARKET_FROM` | **whether 04:00-09:00 is scanned at all**, so premarket rows stop existing | premarket funnel counts and any per-day scan-count comparison across the switch | 09:00 from 2026-08-22. 155 premarket scans over 08-10..21 passed 0 of 3,859 Decision rows; costs 1.20 CU-h/day, 97% autosuspend timer. Cannot touch entries — they open at 09:45 |
+| `SCAN_IDLE_DB_INTERVAL_SECONDS` | how often an **idle** pass talks to Postgres; **not** scan cadence | nothing measured — idle passes scan nothing | 3600 from 2026-08-21; batch jobs keep their own once-per-date gates |
 | `POSITION_MONITOR_MOMENTUM_ENABLED` | **when** EMA/VWAP/MACD/failed-breakout/time are asked, never what they may answer; adds a Polygon 1m call per held symbol per minute | exit-mix and time-to-exit comparisons across the switch | committed off, unmeasured |
 
 `POSITION_MONITOR_MOMENTUM_ENABLED` deserves the same warning as any exit lever.

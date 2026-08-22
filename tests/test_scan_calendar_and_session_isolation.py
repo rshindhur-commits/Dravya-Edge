@@ -214,3 +214,83 @@ def test_both_engines_share_one_calendar():
 
     assert scan_supervisor._idle_reason is market_calendar.idle_reason
     assert scan_loop.idle_reason is market_calendar.idle_reason
+
+
+# ---------------------------------------------------------------------------
+# Premarket, which is the after-close tail at the other end of the day.
+#
+# Measured 2026-08-10..21 over 155 premarket scans: 0 of 3,859 rows passed the
+# Decision stage and `auto_paper_decision` recorded 12 SKIPPED and nothing else.
+# The cost is not the scanning -- 7.4s a scan -- but the 300s Neon autosuspend
+# timer each of the 14 daily wakes buys.
+# ---------------------------------------------------------------------------
+
+
+def test_early_premarket_idles():
+    assert _idle_reason("PREMARKET", _et("2026-08-19 04:05")) == "SLEEPING_PREMARKET"
+    assert _idle_reason("PREMARKET", _et("2026-08-19 08:59")) == "SLEEPING_PREMARKET"
+
+
+def test_premarket_resumes_before_the_open():
+    assert _idle_reason("PREMARKET", _et("2026-08-19 09:00")) is None
+    assert _idle_reason("PREMARKET", _et("2026-08-19 09:29")) is None
+
+
+def test_the_guard_is_premarket_only():
+    """OPENING_RANGE and REGULAR are untouched, whatever the clock says."""
+
+    assert _idle_reason("OPENING_RANGE", _et("2026-08-19 09:31")) is None
+    assert _idle_reason("REGULAR", _et("2026-08-19 10:00")) is None
+
+
+def test_scanning_resumes_before_any_entry_could_be_taken():
+    """The falsifying check: this may not cost a single entry.
+
+    Trades cannot open before 09:45, so a resume time at or after it would mean
+    the saving came out of the trading day. Pinned against the constant the
+    entry gate actually reads rather than a repeated literal.
+    """
+
+    from app.runtime.market_calendar import premarket_scan_from_minute
+    from app.runtime.paper_automation_support import AUTO_PAPER_ENTRY_START
+
+    entry_minute = AUTO_PAPER_ENTRY_START.hour * 60 + AUTO_PAPER_ENTRY_START.minute
+
+    assert premarket_scan_from_minute() < entry_minute
+
+
+def test_the_old_behaviour_is_one_env_var_away(monkeypatch):
+    monkeypatch.setenv("SCAN_PREMARKET_FROM", "04:00")
+
+    assert _idle_reason("PREMARKET", _et("2026-08-19 04:05")) is None
+    assert _idle_reason("PREMARKET", _et("2026-08-19 08:00")) is None
+
+
+def test_a_bad_or_out_of_range_value_falls_back_to_the_default(monkeypatch):
+    from app.runtime.market_calendar import (
+        DEFAULT_PREMARKET_SCAN_FROM,
+        premarket_scan_from_minute,
+    )
+
+    hour, _, minute = DEFAULT_PREMARKET_SCAN_FROM.partition(":")
+    default = int(hour) * 60 + int(minute)
+
+    for bad in ("half nine", "09:xx", "99:00", "-1:00"):
+        monkeypatch.setenv("SCAN_PREMARKET_FROM", bad)
+        assert premarket_scan_from_minute() == default, bad
+
+
+def test_premarket_scans_are_still_taken_before_the_bell():
+    """Not zero, deliberately. The pre-open watchlist survives.
+
+    A resume at 09:00 with PREMARKET's 1800s cadence leaves room for a scan
+    before OPENING_RANGE takes over at 09:30.
+    """
+
+    from app.runtime.market_calendar import premarket_scan_from_minute
+    from app.runtime.scan_loop import SESSION_INTERVALS
+
+    remaining = (9 * 60 + 30) - premarket_scan_from_minute()
+
+    assert remaining * 60 >= SESSION_INTERVALS["PREMARKET"]
+

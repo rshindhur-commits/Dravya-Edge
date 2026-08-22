@@ -21,6 +21,10 @@ ET = ZoneInfo("America/New_York")
 
 DEFAULT_AFTER_CLOSE_TAIL_MINUTES = 20.0
 
+# ET clock time before which the premarket session is not scanned, as "HH:MM".
+# PREMARKET runs 04:00-09:30, so this skips 04:00-09:00.
+DEFAULT_PREMARKET_SCAN_FROM = "09:00"
+
 
 def after_close_tail_minutes():
     """Minutes past 16:00 ET to keep scanning. Env-tunable; large values restore
@@ -36,6 +40,36 @@ def after_close_tail_minutes():
     except ValueError:
         print(f"[MARKET CALENDAR WARNING] bad SCAN_AFTER_CLOSE_MINUTES={raw!r}; using default.")
         return DEFAULT_AFTER_CLOSE_TAIL_MINUTES
+
+
+def premarket_scan_from_minute():
+    """Minutes past ET midnight before which premarket scanning is skipped.
+
+    Env-tunable through `SCAN_PREMARKET_FROM`; setting it to "04:00" restores the
+    previous behaviour of scanning the whole premarket session.
+    """
+
+    raw = os.getenv("SCAN_PREMARKET_FROM", "").strip() or DEFAULT_PREMARKET_SCAN_FROM
+
+    try:
+        hour, _, minute = raw.partition(":")
+        parsed = int(hour) * 60 + int(minute or 0)
+    except ValueError:
+        print(
+            f"[MARKET CALENDAR WARNING] bad SCAN_PREMARKET_FROM={raw!r}; using default."
+        )
+        hour, _, minute = DEFAULT_PREMARKET_SCAN_FROM.partition(":")
+        return int(hour) * 60 + int(minute)
+
+    if not 0 <= parsed <= 24 * 60:
+        print(
+            f"[MARKET CALENDAR WARNING] SCAN_PREMARKET_FROM={raw!r} is out of range; "
+            "using default."
+        )
+        hour, _, minute = DEFAULT_PREMARKET_SCAN_FROM.partition(":")
+        return int(hour) * 60 + int(minute)
+
+    return parsed
 
 
 def minutes_past_close(now):
@@ -131,6 +165,30 @@ def idle_reason(session, now):
 
     Intraday force-close is unaffected -- AUTO_PAPER_EOD_CLOSE fires at 15:55,
     before the bell, so it never depended on a post-close scan.
+
+    Premarket is the same case at the other end of the day. `evaluate_action`
+    returns PREMARKET_WATCH unconditionally for every candidate the premarket
+    session produces, and the entry window does not open until 09:45, so nothing
+    scanned before it can open a trade by construction either. Measured over
+    2026-08-10..21, 155 premarket scans: **0 of 3,859 rows passed the Decision
+    stage**, 0 passed Telegram, 1 of 50 passed Option, and `auto_paper_decision`
+    recorded 12 SKIPPED and nothing else. The 2026-08-11 measurement behind
+    PREMARKET's 600s -> 1800s cadence change said the same thing.
+
+    The premarket gap does not depend on these scans. `_calculate_premarket_gap_pct`
+    reads the current day's first Open against the previous day's last Close out
+    of the scan's own 5-minute frame, so a 10:00 scan computes the identical
+    value -- there is no premarket scan history to lose.
+
+    What this costs is wakes, not work. Those 14 daily scans average 7.4 seconds
+    each and 1.8 minutes of scanning in total, but each one buys a full 300s Neon
+    autosuspend timer: 1.20 compute-hours a day, ~10% of the bill, of which 97%
+    is the timer. Skipping them leaves the endpoint asleep through the window.
+
+    Deliberately not zero, for the same reason the after-close tail is not zero:
+    the default resumes at 09:00, which keeps a pre-open scan and a fresh
+    watchlist before the bell. `SCAN_PREMARKET_FROM=04:00` restores the old
+    behaviour exactly.
     """
 
     if now.weekday() >= 5:
@@ -144,5 +202,11 @@ def idle_reason(session, now):
 
     if minutes_past_close(now) > after_close_tail_minutes():
         return "SLEEPING_AFTER_CLOSE"
+
+    if (
+        str(session).upper() == "PREMARKET"
+        and now.hour * 60 + now.minute < premarket_scan_from_minute()
+    ):
+        return "SLEEPING_PREMARKET"
 
     return None
