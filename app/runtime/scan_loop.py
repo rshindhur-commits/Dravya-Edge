@@ -52,7 +52,14 @@ ET = ZoneInfo("America/New_York")
 # options do not trade before 09:30, and the entry window does not open until
 # 09:45, so nothing before it can produce an entry either. It was holding the
 # database awake roughly two hours a day to learn 1.7% of the day's evidence.
-# 1800 keeps ~11 premarket scans for context and gap detection.
+#
+# 1800 did not settle it. Re-measured 2026-08-10..21, the 14 remaining daily
+# scans still passed **0 of 3,859 rows** at the Decision stage and produced 12
+# SKIPPED decisions and nothing else, for 1.20 compute-hours a day -- of which 97%
+# is the 300s autosuspend timer rather than the 7.4s scan. Cadence was the wrong
+# lever: the cost is the number of wakes. `SCAN_PREMARKET_FROM` (default 09:00)
+# now idles the window instead, so this value only governs the one or two scans
+# between 09:00 and the bell. See `idle_reason` in market_calendar.py.
 #
 # REGULAR is deliberately left at 300. Moving it to 360 would suspend compute
 # every cycle and cut the session's DB cost by about 15%, but the scan cadence
