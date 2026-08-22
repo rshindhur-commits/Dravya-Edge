@@ -69,6 +69,15 @@ def max_ema_distance_pct():
     )
 
 
+# How close the bar's Low must come to EMA9 to count as a pullback, as a
+# multiple of ATR. Named because `entry_diagnostics` reports this rule to the
+# dashboard and had its own hardcoded 0.25 against the engine's 0.40 -- so the
+# waterfall told an operator a candidate was "not close enough to EMA9" using a
+# threshold 37% tighter than the one that actually decided. Two numbers for one
+# rule is how a diagnostic starts lying about the engine it describes.
+EMA_PULLBACK_ATR_MULTIPLE = 0.40
+
+
 def require_ema_alignment():
     """Whether EMA9 must have crossed EMA20 before a pullback or rejection counts.
 
@@ -331,7 +340,7 @@ def detect_entry(df, analysis, symbol=None):
     # EMA Pullback Continuation
     # =========================
 
-    ema_pullback_threshold = latest.get("ATR", 0) * 0.40
+    ema_pullback_threshold = latest.get("ATR", 0) * EMA_PULLBACK_ATR_MULTIPLE
     ema_pullback_low_distance = abs(
         latest["Low"] - latest["EMA9"]
     )

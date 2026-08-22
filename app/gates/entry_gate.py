@@ -390,18 +390,56 @@ def symbol_trade_count_today(state: dict, symbol: str, now=None) -> int:
     return count
 
 
+def cooldown_is_directional():
+    """Whether the cooldown only blocks the direction that just lost.
+
+    PLTR, 2026-08-21. A put opened at 10:01 at 173.61 -- twelve minutes after the
+    session low of 172.55 -- and closed at 10:05 for -0.55R. The cooldown then
+    locked the symbol until 10:50, and PLTR ran to 182.44 by 11:58: +$8.83, the
+    largest move on the board that day, with the app watching.
+
+    The put was wrong because the stock reversed. A cooldown that also blocks the
+    reversal makes the app punish itself for being wrong by refusing to be right,
+    and it does so for exactly the window in which the opposite trade is best.
+
+    Same direction still cools off, which is what the rule is for -- re-entering
+    the idea that just failed, at a worse price, is the behaviour worth stopping.
+
+    Set AUTO_PAPER_COOLDOWN_DIRECTIONAL=false to restore the blanket block.
+    """
+
+    from app.config.settings import get_bool_env
+
+    return get_bool_env("AUTO_PAPER_COOLDOWN_DIRECTIONAL", True)
+
+
 def is_symbol_in_cooldown(
     symbol,
     closed_trades,
     now,
-    cooldown_minutes
+    cooldown_minutes,
+    direction=None,
 ):
+    """Whether `symbol` closed a trade too recently to re-enter.
+
+    `direction` is the direction being considered now. Passing it lets a reversal
+    through while still cooling the losing idea; omitting it keeps the old
+    symbol-wide behaviour, so callers that do not care are unaffected.
+    """
 
     last_close_dt = None
+
+    directional = direction is not None and cooldown_is_directional()
 
     for trade in (closed_trades or []):
 
         if trade.get("symbol") != symbol:
+
+            continue
+
+        # Only the direction that just lost cools off. A put closing does not
+        # bar the call that its own reversal just created.
+        if directional and str(trade.get("direction") or "").upper() != str(direction).upper():
 
             continue
 

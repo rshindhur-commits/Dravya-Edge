@@ -1049,7 +1049,12 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     if has_active_symbol_trade(paper_trades, symbol):
         return False, "ALREADY_HOLDING_NO_ADDITIONAL_ENTRY"
     cooldown_minutes = env_int("AUTO_PAPER_SYMBOL_COOLDOWN_MINUTES", 60)
-    if is_symbol_in_cooldown(symbol, _closed_paper_trades(paper_trades), now_et, cooldown_minutes):
+    # `direction` so a reversal is not blocked by the trade its own reversal
+    # invalidated. See cooldown_is_directional().
+    if is_symbol_in_cooldown(
+        symbol, _closed_paper_trades(paper_trades), now_et, cooldown_minutes,
+        direction=direction,
+    ):
         return False, "SYMBOL_COOLDOWN_ACTIVE"
     if symbol_trade_count_today(paper_trades, symbol, now_et) >= env_int("MAX_TRADES_PER_SYMBOL_PER_DAY", 1):
         return False, "MAX_TRADES_PER_SYMBOL_PER_DAY_REACHED"
