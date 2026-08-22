@@ -69,11 +69,30 @@ class AutoPaperGateTests(unittest.TestCase):
         self.assertEqual(support.DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT, 6.0)
         self.assertEqual(support.DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY, 65.0)
 
-        # If these ever start reading the environment, OPTION_MAX_SPREAD_PCT
-        # would reach this gate directly and map section 0.3 becomes wrong.
+        # The quality bar is still unreachable from configuration.
         source = inspect.getsource(support._auto_paper_entry_reason)
-        self.assertIn("DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT", source)
         self.assertIn("DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY", source)
+
+    def test_the_spread_bar_moves_only_under_its_own_variable(self):
+        """Map 0.3, amended 2026-08-22.
+
+        The auto-paper spread ceiling became configurable. What must stay true is
+        that it did *not* become an alias for the scanner's: they answer different
+        questions -- what may be bought, and what the book will record -- and a
+        contract between them is alerted with no position watching it.
+        """
+
+        from app.runtime import paper_automation_support as support
+
+        source = inspect.getsource(support.auto_paper_max_spread_pct)
+
+        self.assertIn("AUTO_PAPER_MAX_SPREAD_PCT", source)
+        self.assertNotIn('"OPTION_MAX_SPREAD_PCT"', source)
+        self.assertEqual(
+            support.auto_paper_max_spread_pct(),
+            support.DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT,
+            "unset, it must still be the constant map 0.3 documents",
+        )
 
     def test_the_scanner_rr_bar_sits_above_the_auto_paper_one(self):
         """So raising AUTO_PAPER_MIN_RR alone changes nothing."""

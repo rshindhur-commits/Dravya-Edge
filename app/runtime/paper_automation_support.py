@@ -606,7 +606,7 @@ def _gate_counterfactuals(row, controls):
                     min_rr=min_rr,
                     min_setup_percent=min_setup,
                     min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY,
-                    max_spread_pct=DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT,
+                    max_spread_pct=auto_paper_max_spread_pct(),
                 ),
                 mode="paper",
             )
@@ -929,6 +929,33 @@ def _auto_paper_trade_count_today(paper_trades, profile=None, review_validation=
     return count
 
 
+def auto_paper_max_spread_pct():
+    """The paper gate's own spread ceiling, which is not the scanner's.
+
+    Hardcoded at 6.0 and unreachable from configuration, which makes it the
+    silent second half of the spread question. `OPTION_MAX_SPREAD_PCT` decides
+    what the scanner will buy; this decides what the paper book will record, and
+    a contract between the two is alerted and never booked -- so no exit is ever
+    sent for it.
+
+    That gap is the whole feature when validation entries are on. Over 21 days
+    1,942 spread rejections were recorded and 1,752 of them quoted above 6%, so
+    at this value nine in ten spread-tolerated alerts would go out with nothing
+    watching them. Raise it with MAX_DAILY_REVIEW_VALIDATION_ENTRIES, not before:
+    an entry price taken off a very wide quote is close to meaningless, and the
+    number it books is what the 30-day comparison will read.
+
+    Default unchanged, so nothing moves until it is set.
+    """
+
+    from app.config.settings import get_float_env
+
+    return get_float_env(
+        "AUTO_PAPER_MAX_SPREAD_PCT",
+        DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT,
+    )
+
+
 def max_daily_review_validation_entries():
     """Spread-tolerated validation entries allowed per day.
 
@@ -1051,7 +1078,7 @@ def _auto_paper_entry_reason(row, controls, paper_trades):
     if _safe_float(row.get("Setup %"), None) is None:
         row = row.copy()
         row["Setup %"] = _compute_setup_percent(row)
-    gate_allowed, gate_reason = evaluate_entry_gate(_paper_gate_row(row), EntryGateConfig(min_rr=controls["min_rr"], min_setup_percent=controls["min_setup"], min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY, max_spread_pct=DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT), mode="paper")
+    gate_allowed, gate_reason = evaluate_entry_gate(_paper_gate_row(row), EntryGateConfig(min_rr=controls["min_rr"], min_setup_percent=controls["min_setup"], min_option_quality=DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY, max_spread_pct=auto_paper_max_spread_pct()), mode="paper")
     if not gate_allowed:
         return False, gate_reason
     if not realtime_ready and not review_validation_candidate:

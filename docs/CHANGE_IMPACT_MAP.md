@@ -40,19 +40,29 @@ To ask what a rule really costs, re-test the recorded contracts jointly. Never
 read `CHAIN_BINDING_CODE` counts as cause.
 
 **0.3 — The auto-paper path does not use the scanner's gate config.**
-`app/runtime/paper_automation_support.py:984` builds its own `EntryGateConfig`
-with two **hardcoded module constants**:
+`app/runtime/paper_automation_support.py` builds its own `EntryGateConfig` from
+its own bars, which are **not** the scanner's:
 
 ```
-DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0   # line 65
-DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT     = 6.0    # line 66
+DEFAULT_AUTO_PAPER_MIN_OPTION_QUALITY = 65.0   # hardcoded, no env
+DEFAULT_AUTO_PAPER_MAX_SPREAD_PCT     = 6.0    # default for AUTO_PAPER_MAX_SPREAD_PCT
 ```
 
-Neither reads an environment variable. `OPTION_MAX_SPREAD_PCT` and
-`OPTION_MIN_QUALITY_SCORE` reach live trades **only through contract selection**
-(`options_filter`, which uses `settings.*`), not through this gate. Tightening
-them below 6.0/65 works — but via a different code path than the one the failure
-code names.
+`OPTION_MAX_SPREAD_PCT` and `OPTION_MIN_QUALITY_SCORE` reach live trades **only
+through contract selection** (`options_filter`, which uses `settings.*`), not
+through this gate. Tightening them below 6.0/65 works — but via a different code
+path than the one the failure code names.
+
+Since 2026-08-22 the spread half is reachable, under a **different variable**:
+`AUTO_PAPER_MAX_SPREAD_PCT` (`auto_paper_max_spread_pct()`), defaulting to the
+same 6.0 so nothing moved. It exists because it is the silent second half of the
+spread question — the scanner ceiling decides what may be *bought*, this decides
+what the paper book will *record*, and a contract between the two is alerted and
+never booked, so no exit is ever sent for it. Over the 21 days to 2026-08-22,
+1,942 spread rejections were logged and **1,752 of them quoted above 6%**. Set it
+alongside `ALLOW_REVIEW_TV_CHART_AUTO_PAPER`, never on its own.
+
+The quality bar is still hardcoded.
 
 **0.4 — Two RR bars exist and only the higher one binds.**
 `SCANNER_GATE_MIN_RR` defaults to **2.0** (`entry_gate.py:56`); `AUTO_PAPER_MIN_RR`
