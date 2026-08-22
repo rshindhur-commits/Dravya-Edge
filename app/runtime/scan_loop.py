@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.config.settings import get_float_env  # noqa: E402
 from app.runtime.market_calendar import idle_reason  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
@@ -209,6 +210,53 @@ def _bounded_wait(wait, interval_override=None):
         return max(5, wait)
 
     return max(5, seconds)
+
+
+# How often an *idle* pass may talk to Postgres. Nothing to do with scan cadence,
+# which is a trading decision and is untouched.
+#
+# The idle branch writes a heartbeat and then asks five batch jobs whether they
+# are due. Each `due()` reads its marker from Postgres before falling back to a
+# file, so a single idle pass wakes the compute six times over -- and Neon then
+# bills the full 300s autosuspend timer for it. Measured 2026-08-21: 12.4
+# CU-hours a day, against a database whose storage costs 33 cents a month.
+#
+# Weekdays take roughly 26 idle passes (premarket, after the bell, overnight) and
+# a weekend day takes 24, none of which scans anything. At 3600 the heartbeat and
+# the batch checks happen once an hour instead, and every other idle pass leaves
+# the endpoint suspended.
+#
+# The batch jobs keep their own once-per-ET-date gates, so throttling how often
+# they are *asked* cannot make one run twice or skip a day: they get 8-13
+# opportunities a day and need one.
+IDLE_DB_INTERVAL_SECONDS = 3600
+
+# When the idle branch last touched Postgres, and what it said. A changed reason
+# always publishes -- entering AFTERHOURS or the weekend is exactly the
+# transition an operator looks for -- so throttling never hides a state change.
+_last_idle_db_at = None
+_last_idle_reason = None
+
+
+def _idle_db_due(reason, now):
+    """Should this idle pass talk to Postgres at all?"""
+
+    global _last_idle_db_at, _last_idle_reason
+
+    interval = get_float_env("SCAN_IDLE_DB_INTERVAL_SECONDS", IDLE_DB_INTERVAL_SECONDS)
+
+    changed = reason != _last_idle_reason
+    stale = (
+        _last_idle_db_at is None
+        or (now - _last_idle_db_at).total_seconds() >= interval
+    )
+
+    if changed or stale:
+        _last_idle_db_at = now
+        _last_idle_reason = reason
+        return True
+
+    return False
 
 
 def _publish_heartbeat(status, **fields):
@@ -580,6 +628,16 @@ def run_scan_loop(interval_override=None, max_scans=None, skip_closed=True):
         if idle:
             interval = interval_for_session(session, interval_override)
             wait = _bounded_wait(interval)
+            # Every statement below this point reads or writes Postgres, and on
+            # Neon each one wakes the compute for the full autosuspend timer. An
+            # idle pass has nothing to say that the last one did not, so it only
+            # speaks once an hour or when the reason changes. See
+            # IDLE_DB_INTERVAL_SECONDS.
+            if not _idle_db_due(idle, datetime.now(ET)):
+                print(f"[SCAN LOOP] {idle}; sleeping {wait}s (database left asleep).")
+                _sleep(wait)
+                continue
+
             # Still report. A quiet engine and a dead one look identical from the
             # dashboard otherwise, and the reason is the answer to that question.
             _publish_heartbeat(
